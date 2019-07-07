@@ -71,9 +71,9 @@ mod ext2 {
         first_nonreserved_inode: u32,
         inode_struct_size: u16,
         superblock_block_group: u16,
-        opt_features_present_raw: u32,
-        req_features_present_raw: u32,
-        req_features_for_rw: u32,
+        opt_features_present: OptionalFeatureFlags,
+        req_features_present: RequiredFeatureFlags,
+        req_features_for_rw: RoFeatureFlags,
         fs_id: Uuid,
         vol_name: Option<CString>,
         last_mount_path: Option<CString>,
@@ -84,6 +84,131 @@ mod ext2 {
         journal_inode: u32,
         journal_device: u32,
         orphan_inode_head_list: u32,
+    }
+
+    #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+    pub struct OptionalFeatureFlags {
+        preallocate_dir_blocks: bool,
+        afs_server_inodes: bool,
+        has_journal: bool,
+        inode_extended_attributes: bool,
+        growable: bool,
+        dir_hash_index: bool
+    }
+    impl OptionalFeatureFlags {
+        pub const PREALLOCATE_DIR_BLOCKS_BIT: u32 = 0x0001;
+        pub const AFS_SERVER_INODES_BIT: u32 = 0x0002;
+        pub const HAS_JOURNAL_BIT: u32 = 0x0004;
+        pub const INODE_EXTENDED_ATTRIBUTES_BIT: u32 = 0x0008;
+        pub const GROWABLE_BIT: u32 = 0x0010;
+        pub const DIR_HASH_INDEX_BIT: u32 = 0x0020;
+
+        pub fn from_raw(raw: u32) -> Self {
+            Self {
+                preallocate_dir_blocks: raw & Self::PREALLOCATE_DIR_BLOCKS_BIT != 0,
+                afs_server_inodes: raw & Self::AFS_SERVER_INODES_BIT != 0,
+                has_journal: raw & Self::HAS_JOURNAL_BIT != 0,
+                inode_extended_attributes: raw & Self::INODE_EXTENDED_ATTRIBUTES_BIT != 0,
+                growable: raw & Self::GROWABLE_BIT != 0,
+                dir_hash_index: raw & Self::DIR_HASH_INDEX_BIT != 0,
+            }
+        }
+        pub fn _into_raw(self) -> u32 {
+            let mut raw = 0;
+            if self.preallocate_dir_blocks {
+                raw |= Self::PREALLOCATE_DIR_BLOCKS_BIT;
+            }
+            if self.afs_server_inodes {
+                raw |= Self::AFS_SERVER_INODES_BIT;
+            }
+            if self.has_journal {
+                raw |= Self::HAS_JOURNAL_BIT;
+            }
+            if self.inode_extended_attributes {
+                raw |= Self::INODE_EXTENDED_ATTRIBUTES_BIT;
+            }
+            if self.growable {
+                raw |= Self::GROWABLE_BIT;
+            }
+            if self.dir_hash_index {
+                raw |= Self::DIR_HASH_INDEX_BIT
+            }
+            raw
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct RequiredFeatureFlags {
+        compression: bool,
+        dir_type: bool,
+        replay_journal_mandatory: bool,
+        journal_device: bool,
+    }
+
+    impl RequiredFeatureFlags {
+        pub const COMPRESSION_BIT: u32 = 0x0001;
+        pub const DIR_TYPE_BIT: u32 = 0x0002;
+        pub const REPLAY_JOURNAL_MANDATORY_BIT: u32 = 0x0004;
+        pub const JOURNAL_DEVICE_BIT: u32 = 0x0008;
+
+        pub fn from_raw(raw: u32) -> Self {
+            Self {
+                compression: raw & Self::COMPRESSION_BIT != 0,
+                dir_type: raw & Self::DIR_TYPE_BIT != 0,
+                replay_journal_mandatory: raw & Self::REPLAY_JOURNAL_MANDATORY_BIT != 0,
+                journal_device: raw & Self::JOURNAL_DEVICE_BIT != 0,
+            }
+        }
+        pub fn _into_raw(self) -> u32 {
+            let mut raw = 0;
+            if self.compression {
+                raw |= Self::COMPRESSION_BIT;
+            }
+            if self.dir_type {
+                raw |= Self::DIR_TYPE_BIT;
+            }
+            if self.replay_journal_mandatory {
+                raw |= Self::REPLAY_JOURNAL_MANDATORY_BIT;
+            }
+            if self.journal_device {
+                raw |= Self::JOURNAL_DEVICE_BIT
+            }
+            raw
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct RoFeatureFlags {
+        sparse_super: bool,
+        extended_file_size: bool,
+        bst_dir_contents: bool,
+    }
+
+    impl RoFeatureFlags {
+        pub const SPARSE_SUPER_BIT: u32 = 0x0001;
+        pub const EXTENDED_FILE_SIZE_BIT: u32 = 0x0002;
+        pub const BST_DIR_CONTENTS_BIT: u32 = 0x0004;
+
+        pub fn from_raw(raw: u32) -> Self {
+            Self {
+                sparse_super: raw & Self::SPARSE_SUPER_BIT != 0,
+                extended_file_size: raw & Self::EXTENDED_FILE_SIZE_BIT != 0,
+                bst_dir_contents: raw & Self::BST_DIR_CONTENTS_BIT != 0,
+            }
+        }
+        pub fn _into_raw(self) -> u32 {
+            let mut raw = 0;
+            if self.sparse_super {
+                raw |= Self::SPARSE_SUPER_BIT;
+            }
+            if self.extended_file_size {
+                raw |= Self::EXTENDED_FILE_SIZE_BIT;
+            }
+            if self.bst_dir_contents {
+                raw |= Self::BST_DIR_CONTENTS_BIT
+            }
+            raw
+        }
     }
 
     impl Superblock {
@@ -123,9 +248,9 @@ mod ext2 {
                 let first_nonreserved_inode = read_u32(&mut device)?;
                 let inode_struct_size = read_u16(&mut device)?;
                 let superblock_block_group = read_u16(&mut device)?;
-                let opt_features_present_raw = read_u32(&mut device)?;
-                let req_features_present_raw = read_u32(&mut device)?;
-                let req_features_for_rw = read_u32(&mut device)?;
+                let opt_features_present = OptionalFeatureFlags::from_raw(read_u32(&mut device)?);
+                let req_features_present = RequiredFeatureFlags::from_raw(read_u32(&mut device)?);
+                let req_features_for_rw = RoFeatureFlags::from_raw(read_u32(&mut device)?);
                 let fs_id = read_uuid(&mut device)?;
 
                 let vol_name = {
@@ -169,8 +294,8 @@ mod ext2 {
                     first_nonreserved_inode,
                     inode_struct_size,
                     superblock_block_group,
-                    opt_features_present_raw,
-                    req_features_present_raw,
+                    opt_features_present,
+                    req_features_present,
                     req_features_for_rw,
                     fs_id,
                     vol_name,
