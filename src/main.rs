@@ -16,7 +16,7 @@ mod ext2 {
     use std::io::{self, prelude::*, SeekFrom};
 
     pub const SUPERBLOCK_OFFSET: u64 = 1024;
-    pub const FS_SIGNATURE: u16 = 0xEF53;
+    pub const SIGNATURE: u16 = 0xEF53;
 
     #[derive(Debug)]
     pub struct Superblock {
@@ -35,7 +35,6 @@ mod ext2 {
         last_write_time: u32,
         mounts_since_fsck: u16,
         mounts_left_before_fsck: u16,
-        signature: u16,
         fs_state: FilesystemState,
         error_handling: ErrorHandlingMethod,
         minor_version: u16,
@@ -50,36 +49,58 @@ mod ext2 {
         pub fn parse<R: Read + Seek>(mut device: R) -> io::Result<Self> {
             device.seek(SeekFrom::Start(SUPERBLOCK_OFFSET)).unwrap();
 
+            let inode_count = read_u32(&mut device)?;
+            let block_count = read_u32(&mut device)?;
+            let reserved_block_count = read_u32(&mut device)?;
+            let unalloc_block_count = read_u32(&mut device)?;
+            let unalloc_inode_count = read_u32(&mut device)?;
+            let superblock_block_num = read_u32(&mut device)?;
+            let block_size = 1024 << read_u32(&mut device)?;
+            let fragment_size = 1024 << read_u32(&mut device)?;
+            let blocks_per_group = read_u32(&mut device)?;
+            let fragments_per_group = read_u32(&mut device)?;
+            let inodes_per_group = read_u32(&mut device)?;
+            let last_mount_time = read_u32(&mut device)?;
+            let last_write_time = read_u32(&mut device)?;
+            let mounts_since_fsck = read_u16(&mut device)?;
+            let mounts_left_before_fsck = read_u16(&mut device)?;
+            let signature = read_u16(&mut device)?;
+            assert_eq!(signature, SIGNATURE);
+            let fs_state = FilesystemState::try_parse(read_u16(&mut device)?).unwrap();
+            let error_handling = ErrorHandlingMethod::try_parse(read_u16(&mut device)?).unwrap();
+            let minor_version = read_u16(&mut device)?;
+            let last_fsck_time = read_u32(&mut device)?;
+            let interval_between_forced_fscks = read_u32(&mut device)?;
+            let os_id = OsId::try_parse(read_u32(&mut device)?).unwrap();
+            let major_version = read_u32(&mut device)?;
+            let reserver_uid = read_u32(&mut device)?;
+            let reserver_gid = read_u32(&mut device)?;
+
             Ok(Superblock {
-                inode_count: read_u32(&mut device)?,
-                block_count: read_u32(&mut device)?,
-                reserved_block_count: read_u32(&mut device)?,
-                unalloc_block_count: read_u32(&mut device)?,
-                unalloc_inode_count: read_u32(&mut device)?,
-                superblock_block_num: read_u32(&mut device)?,
-                block_size: 1024 << read_u32(&mut device)?,
-                fragment_size: 1024 << read_u32(&mut device)?,
-                blocks_per_group: read_u32(&mut device)?,
-                fragments_per_group: read_u32(&mut device)?,
-                inodes_per_group: read_u32(&mut device)?,
-                last_mount_time: read_u32(&mut device)?,
-                last_write_time: read_u32(&mut device)?,
-                mounts_since_fsck: read_u16(&mut device)?,
-                mounts_left_before_fsck: read_u16(&mut device)?,
-                signature: {
-                    let signature = read_u16(&mut device)?;
-                    assert_eq!(signature, FS_SIGNATURE);
-                    signature
-                },
-                fs_state: FilesystemState::try_parse(read_u16(&mut device)?).unwrap(),
-                error_handling: ErrorHandlingMethod::try_parse(read_u16(&mut device)?).unwrap(),
-                minor_version: read_u16(&mut device)?,
-                last_fsck_time: read_u32(&mut device)?,
-                interval_between_forced_fscks: read_u32(&mut device)?,
-                os_id: OsId::try_parse(read_u32(&mut device)?).unwrap(),
-                major_version: read_u32(&mut device)?,
-                reserver_uid: read_u32(&mut device)?,
-                reserver_gid: read_u32(&mut device)?,
+                inode_count,
+                block_count,
+                reserved_block_count,
+                unalloc_block_count,
+                unalloc_inode_count,
+                superblock_block_num,
+                block_size,
+                fragment_size,
+                blocks_per_group,
+                fragments_per_group,
+                inodes_per_group,
+                last_mount_time,
+                last_write_time,
+                mounts_since_fsck,
+                mounts_left_before_fsck,
+                fs_state,
+                error_handling,
+                minor_version,
+                last_fsck_time,
+                interval_between_forced_fscks,
+                os_id,
+                major_version,
+                reserver_uid,
+                reserver_gid,
             })
         }
     }
