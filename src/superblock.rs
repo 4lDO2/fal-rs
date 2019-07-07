@@ -13,51 +13,51 @@ pub const SIGNATURE: u16 = 0xEF53;
 
 #[derive(Debug)]
 pub struct Superblock {
-    inode_count: u32,
-    block_count: u32,
-    reserved_block_count: u32,
-    unalloc_block_count: u32,
-    unalloc_inode_count: u32,
-    superblock_block_num: u32,
-    block_size: u64,
-    fragment_size: u64,
-    blocks_per_group: u32,
-    fragments_per_group: u32,
-    inodes_per_group: u32,
-    last_mount_time: u32,
-    last_write_time: u32,
-    mounts_since_fsck: u16,
-    mounts_left_before_fsck: u16,
-    fs_state: FilesystemState,
-    error_handling: ErrorHandlingMethod,
-    minor_version: u16,
-    last_fsck_time: u32,
-    interval_between_forced_fscks: u32,
-    os_id: OsId,
-    major_version: u32,
-    reserver_uid: u16,
-    reserver_gid: u16,
-    extended: Option<SuperblockExtension>,
+    pub inode_count: u32,
+    pub block_count: u32,
+    pub reserved_block_count: u32,
+    pub unalloc_block_count: u32,
+    pub unalloc_inode_count: u32,
+    pub superblock_block_num: u32,
+    pub block_size: u64,
+    pub fragment_size: u64,
+    pub blocks_per_group: u32,
+    pub fragments_per_group: u32,
+    pub inodes_per_group: u32,
+    pub last_mount_time: u32,
+    pub last_write_time: u32,
+    pub mounts_since_fsck: u16,
+    pub mounts_left_before_fsck: u16,
+    pub fs_state: FilesystemState,
+    pub error_handling: ErrorHandlingMethod,
+    pub minor_version: u16,
+    pub last_fsck_time: u32,
+    pub interval_between_forced_fscks: u32,
+    pub os_id: OsId,
+    pub major_version: u32,
+    pub reserver_uid: u16,
+    pub reserver_gid: u16,
+    pub extended: Option<SuperblockExtension>,
 }
 
 #[derive(Debug)]
 pub struct SuperblockExtension {
-    first_nonreserved_inode: u32,
-    inode_struct_size: u16,
-    superblock_block_group: u16,
-    opt_features_present: OptionalFeatureFlags,
-    req_features_present: RequiredFeatureFlags,
-    req_features_for_rw: RoFeatureFlags,
-    fs_id: Uuid,
-    vol_name: Option<CString>,
-    last_mount_path: Option<CString>,
-    compression_algorithms: u32,
-    file_prealloc_block_count: u8,
-    dir_prealloc_block_count: u8,
-    journal_id: Uuid,
-    journal_inode: u32,
-    journal_device: u32,
-    orphan_inode_head_list: u32,
+    pub first_nonreserved_inode: u32,
+    pub inode_struct_size: u16,
+    pub superblock_block_group: u16,
+    pub opt_features_present: OptionalFeatureFlags,
+    pub req_features_present: RequiredFeatureFlags,
+    pub req_features_for_rw: RoFeatureFlags,
+    pub fs_id: Uuid,
+    pub vol_name: Option<CString>,
+    pub last_mount_path: Option<CString>,
+    pub compression_algorithms: u32,
+    pub file_prealloc_block_count: u8,
+    pub dir_prealloc_block_count: u8,
+    pub journal_id: Uuid,
+    pub journal_inode: u32,
+    pub journal_device: u32,
+    pub orphan_inode_head_list: u32,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -189,47 +189,49 @@ impl Superblock {
     pub fn parse<R: Read + Seek>(mut device: R) -> io::Result<Self> {
         device.seek(SeekFrom::Start(SUPERBLOCK_OFFSET)).unwrap();
 
-        let inode_count = read_u32(&mut device)?;
-        let block_count = read_u32(&mut device)?;
-        let reserved_block_count = read_u32(&mut device)?;
-        let unalloc_block_count = read_u32(&mut device)?;
-        let unalloc_inode_count = read_u32(&mut device)?;
-        let superblock_block_num = read_u32(&mut device)?;
-        let block_size = 1024 << read_u32(&mut device)?;
-        let fragment_size = 1024 << read_u32(&mut device)?;
-        let blocks_per_group = read_u32(&mut device)?;
-        let fragments_per_group = read_u32(&mut device)?;
-        let inodes_per_group = read_u32(&mut device)?;
-        let last_mount_time = read_u32(&mut device)?;
-        let last_write_time = read_u32(&mut device)?;
-        let mounts_since_fsck = read_u16(&mut device)?;
-        let mounts_left_before_fsck = read_u16(&mut device)?;
-        let signature = read_u16(&mut device)?;
-        assert_eq!(signature, SIGNATURE);
-        let fs_state = FilesystemState::try_parse(read_u16(&mut device)?).unwrap();
-        let error_handling = ErrorHandlingMethod::try_parse(read_u16(&mut device)?).unwrap();
-        let minor_version = read_u16(&mut device)?;
-        let last_fsck_time = read_u32(&mut device)?;
-        let interval_between_forced_fscks = read_u32(&mut device)?;
-        let os_id = OsId::try_parse(read_u32(&mut device)?).unwrap();
-        let major_version = read_u32(&mut device)?;
-        let reserver_uid = read_u16(&mut device)?;
-        let reserver_gid = read_u16(&mut device)?;
+        let mut block_bytes = [0u8; 1024];
+        device.read_exact(&mut block_bytes)?;
 
-        assert_eq!(device.seek(SeekFrom::Current(0))? - SUPERBLOCK_OFFSET, BASE_SUPERBLOCK_LEN);
+        let inode_count = read_u32(&block_bytes, 0);
+        let block_count = read_u32(&block_bytes, 4);
+        let reserved_block_count = read_u32(&block_bytes, 8);
+        let unalloc_block_count = read_u32(&block_bytes, 12);
+        let unalloc_inode_count = read_u32(&block_bytes, 16);
+        let superblock_block_num = read_u32(&block_bytes, 20);
+        let block_size = 1024 << read_u32(&block_bytes, 24);
+        let fragment_size = 1024 << read_u32(&block_bytes, 28);
+        let blocks_per_group = read_u32(&block_bytes, 32);
+        let fragments_per_group = read_u32(&block_bytes, 36);
+        let inodes_per_group = read_u32(&block_bytes, 40);
+        let last_mount_time = read_u32(&block_bytes, 44);
+        let last_write_time = read_u32(&block_bytes, 48);
+        let mounts_since_fsck = read_u16(&block_bytes, 52);
+        let mounts_left_before_fsck = read_u16(&block_bytes, 54);
+        let signature = read_u16(&block_bytes, 56);
+        assert_eq!(signature, SIGNATURE);
+        let fs_state = FilesystemState::try_parse(read_u16(&block_bytes, 58)).unwrap();
+        let error_handling = ErrorHandlingMethod::try_parse(read_u16(&block_bytes, 60)).unwrap();
+        let minor_version = read_u16(&block_bytes, 62);
+        let last_fsck_time = read_u32(&block_bytes, 64);
+        let interval_between_forced_fscks = read_u32(&block_bytes, 68);
+        let os_id = OsId::try_parse(read_u32(&block_bytes, 72)).unwrap();
+        let major_version = read_u32(&block_bytes, 76);
+        let reserver_uid = read_u16(&block_bytes, 80);
+        let reserver_gid = read_u16(&block_bytes, 82);
 
         let extended = if major_version >= 1 {
-            let first_nonreserved_inode = read_u32(&mut device)?;
-            let inode_struct_size = read_u16(&mut device)?;
-            let superblock_block_group = read_u16(&mut device)?;
-            let opt_features_present = OptionalFeatureFlags::from_raw(read_u32(&mut device)?);
-            let req_features_present = RequiredFeatureFlags::from_raw(read_u32(&mut device)?);
-            let req_features_for_rw = RoFeatureFlags::from_raw(read_u32(&mut device)?);
-            let fs_id = read_uuid(&mut device)?;
+            let first_nonreserved_inode = read_u32(&block_bytes, 84);
+            let inode_struct_size = read_u16(&block_bytes, 88);
+            let superblock_block_group = read_u16(&block_bytes, 90);
+            let opt_features_present = OptionalFeatureFlags::from_raw(read_u32(&block_bytes, 92));
+            let req_features_present = RequiredFeatureFlags::from_raw(read_u32(&block_bytes, 96));
+
+            let req_features_for_rw = RoFeatureFlags::from_raw(read_u32(&block_bytes, 100));
+            let fs_id = read_uuid(&block_bytes, 104);
 
             let vol_name = {
                 let mut vol_name_raw = [0u8; 16];
-                device.read_exact(&mut vol_name_raw)?;
+                vol_name_raw.copy_from_slice(&block_bytes[120..136]);
 
                 let nul_position = vol_name_raw.iter().copied().position(|byte| byte == 0).unwrap_or(vol_name_raw.len());
                 if nul_position != 0 {
@@ -241,7 +243,7 @@ impl Superblock {
 
             let last_mount_path = {
                 let mut last_mount_path_raw = [0u8; 64];
-                device.read_exact(&mut last_mount_path_raw)?;
+                last_mount_path_raw.copy_from_slice(&block_bytes[136..200]);
 
                 let nul_position = last_mount_path_raw.iter().copied().position(|byte| byte == 0).unwrap_or(last_mount_path_raw.len());
                 if nul_position != 0 {
@@ -251,18 +253,14 @@ impl Superblock {
                 }
             };
 
-            let compression_algorithms = read_u32(&mut device)?;
-            let file_prealloc_block_count = read_u8(&mut device)?;
-            let dir_prealloc_block_count = read_u8(&mut device)?;
+            let compression_algorithms = read_u32(&block_bytes, 200);
+            let file_prealloc_block_count = read_u8(&block_bytes, 204);
+            let dir_prealloc_block_count = read_u8(&block_bytes, 205);
 
-            device.seek(SeekFrom::Current(2))?;
-
-            let journal_id = read_uuid(&mut device)?;
-            let journal_inode = read_u32(&mut device)?;
-            let journal_device = read_u32(&mut device)?;
-            let orphan_inode_head_list = read_u32(&mut device)?;
-
-            assert_eq!(device.seek(SeekFrom::Current(0))? - SUPERBLOCK_OFFSET, EXTENDED_SUPERBLOCK_LEN);
+            let journal_id = read_uuid(&block_bytes, 208);
+            let journal_inode = read_u32(&block_bytes, 224);
+            let journal_device = read_u32(&block_bytes, 228);
+            let orphan_inode_head_list = read_u32(&block_bytes, 232);
 
             Some(SuperblockExtension {
                 first_nonreserved_inode,
@@ -313,6 +311,24 @@ impl Superblock {
             reserver_gid,
             extended,
         })
+    }
+    pub fn block_group_count(&self) -> u32 {
+        let from_block_count = {
+            if self.block_count % self.blocks_per_group != 0 {
+                self.block_count / self.blocks_per_group + 1
+            } else {
+                self.block_count / self.blocks_per_group
+            }
+        };
+        let from_inode_count = {
+            if self.inode_count % self.inodes_per_group != 0 {
+                self.inode_count / self.inodes_per_group + 1
+            } else {
+                self.inode_count / self.inodes_per_group
+            }
+        };
+        assert_eq!(from_block_count, from_inode_count);
+        from_block_count
     }
 }
 #[derive(Debug)]
