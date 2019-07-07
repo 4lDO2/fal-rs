@@ -1,4 +1,4 @@
-use std::{env, fmt, fs, io::{self, prelude::*}, mem};
+use std::{env, fs, io::{self, prelude::*}, mem};
 
 use uuid::Uuid;
 
@@ -131,13 +131,25 @@ mod ext2 {
                 let vol_name = {
                     let mut vol_name_raw = [0u8; 16];
                     device.read_exact(&mut vol_name_raw)?;
-                    CString::new(&vol_name_raw[..]).ok()
+
+                    let nul_position = vol_name_raw.iter().copied().position(|byte| byte == 0).unwrap_or(vol_name_raw.len());
+                    if nul_position != 0 {
+                        CString::new(&vol_name_raw[..nul_position]).ok()
+                    } else {
+                        None
+                    }
                 };
 
                 let last_mount_path = {
                     let mut last_mount_path_raw = [0u8; 64];
                     device.read_exact(&mut last_mount_path_raw)?;
-                    CString::new(&last_mount_path_raw[..]).ok()
+
+                    let nul_position = last_mount_path_raw.iter().copied().position(|byte| byte == 0).unwrap_or(last_mount_path_raw.len());
+                    if nul_position != 0 {
+                        CString::new(&last_mount_path_raw[..nul_position]).ok()
+                    } else {
+                        None
+                    }
                 };
 
                 let compression_algorithms = read_u32(&mut device)?;
