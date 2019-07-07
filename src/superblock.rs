@@ -6,8 +6,7 @@ use std::{
 };
 
 pub const SUPERBLOCK_OFFSET: u64 = 1024;
-pub const BASE_SUPERBLOCK_LEN: u64 = 84;
-pub const EXTENDED_SUPERBLOCK_LEN: u64 = 236;
+pub const SUPERBLOCK_LEN: u64 = 1024;
 
 pub const SIGNATURE: u16 = 0xEF53;
 
@@ -329,6 +328,9 @@ impl Superblock {
         };
         assert_eq!(from_block_count, from_inode_count);
         from_block_count
+    }
+    pub fn inode_size(&self) -> u16 {
+        self.extended.as_ref().map(|extended| extended.inode_struct_size).unwrap_or(128)
     }
 }
 #[derive(Debug)]

@@ -1,4 +1,4 @@
-use std::{convert::TryInto, env, fs, io::{self, prelude::*}, mem};
+use std::{convert::TryInto, env, fs, io::{self, prelude::*, SeekFrom}, mem};
 
 use uuid::Uuid;
 
@@ -22,18 +22,20 @@ fn read_u8(block: &[u8], offset: usize) -> u8 {
     bytes.copy_from_slice(&block[offset..offset + mem::size_of::<u8>()]);
     u8::from_le_bytes(bytes)
 }
-fn read_block<D: Read + Seek>(mut filesystem: Filesystem<D>) -> io::Result<Box<[u8]>> {
+fn read_block<D: Read + Seek>(filesystem: &mut Filesystem<D>, block_address: u32) -> io::Result<Box<[u8]>> {
+    filesystem.device.seek(SeekFrom::Start(block_address as u64 * filesystem.superblock.block_size))?;
     let mut vector = vec! [0u8; filesystem.superblock.block_size.try_into().unwrap()];
     filesystem.device.read_exact(&mut vector)?;
     Ok(vector.into_boxed_slice())
 }
 
-mod superblock;
 mod block_group;
+mod inode;
+mod superblock;
 
 use superblock::Superblock;
 
-struct Filesystem<D> {
+pub struct Filesystem<D> {
     superblock: Superblock,
     device: D,
 }
@@ -52,8 +54,12 @@ fn main() {
         .write(true)
         .open(env::args().nth(1).unwrap()).unwrap();
 
-    let filesystem = Filesystem::open(file).unwrap();
+    let mut filesystem = Filesystem::open(file).unwrap();
 
     println!("{:?}", filesystem.superblock);
     println!("Block group count: {}.", filesystem.superblock.block_group_count());
+
+    let root_inode_block_group = block_group::inode_block_group_index(&filesystem.superblock, inode::ROOT);
+    println!("Root block group: {:?}", block_group::load_block_group_descriptor(&mut filesystem, root_inode_block_group));
+    println!("Root inode info: {:?}", inode::Inode::load(&mut filesystem, inode::ROOT));
 }
