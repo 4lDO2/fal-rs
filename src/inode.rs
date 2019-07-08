@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    block_group, os_string_from_bytes, read_block, read_u16, read_u32, read_u8,
+    block_group, os_string_from_bytes, read_block, read_block_to, read_u16, read_u32, read_u8,
     superblock::Superblock, Filesystem,
 };
 
@@ -95,6 +95,7 @@ impl Inode {
         filesystem: &mut Filesystem<R>,
         inode_address: u32,
     ) -> io::Result<Self> {
+        if inode_address == 0 { return Err(io::Error::new(io::ErrorKind::NotFound, "no inode address (was 0)")) }
         let block_group_index =
             block_group::inode_block_group_index(&filesystem.superblock, inode_address);
         let block_group_descriptor =
@@ -184,34 +185,78 @@ impl Inode {
             return Err(io::Error::from(io::ErrorKind::InvalidInput));
         }
 
+        assert_ne!(self.size(&filesystem.superblock), 0);
+
         let size = self.size(&filesystem.superblock);
 
-        assert!(size > 0);
-        assert!(size <= filesystem.superblock.block_size);
-        let block_bytes = read_block(filesystem, self.direct_ptrs[0])?;
+        let mut block_bytes = Vec::from(self.read_block(0, filesystem)?);
 
         let mut entries = vec![];
 
         let mut current_offset = 0;
 
+
         while current_offset < size {
-            let entry_bytes = &block_bytes[usize::try_from(current_offset).unwrap()..];
-            let (entry, to_add) = DirEntry::parse(&filesystem.superblock, entry_bytes);
-            if let Some(entry) = entry {
-                entries.push(entry);
+            if current_offset == u64::try_from(block_bytes.len()).unwrap() {
+                self.extend(current_offset, filesystem.superblock.block_size, filesystem, &mut block_bytes)?;
+                continue
             }
-            current_offset += u64::from(to_add);
+            let entry_bytes = &block_bytes[usize::try_from(current_offset).unwrap()..];
+
+            let (entry, to_add) = DirEntry::parse(&filesystem.superblock, entry_bytes);
+            match (entry, to_add) {
+                (Some(entry), to_add) => {
+                    entries.push(entry);
+                    current_offset += u64::from(to_add);
+                }
+                (None, 0) => break,
+                (None, required_size) => {
+                    self.extend(current_offset, u64::from(required_size), filesystem, &mut block_bytes)?;
+                }
+            }
         }
         Ok(entries)
+    }
+    fn extend<D: Read + Seek + Write>(&self, current_offset: u64, additional_size: u64, filesystem: &mut Filesystem<D>, block_bytes: &mut Vec<u8>) -> io::Result<()> {
+        assert_ne!(additional_size, 0);
+        assert_eq!(u64::try_from(block_bytes.len()).unwrap() % filesystem.superblock.block_size, 0);
+
+        let rel_start_baddr = u32::try_from(current_offset / filesystem.superblock.block_size).unwrap();
+        let block_count = additional_size / filesystem.superblock.block_size + 1;
+
+        block_bytes.resize(block_bytes.len() + usize::try_from(block_count * filesystem.superblock.block_size).unwrap(), 0);
+
+        for block_index in 0..block_count {
+            let rel_baddr = rel_start_baddr + u32::try_from(block_index).unwrap();
+            let offset = usize::try_from(u64::from(rel_baddr) * filesystem.superblock.block_size).unwrap();
+            self.read_block_to(rel_baddr, filesystem, &mut block_bytes[offset..offset + usize::try_from(filesystem.superblock.block_size).unwrap()])?;
+        }
+        Ok(())
+    }
+    pub fn read_block_to<D: Read + Seek + Write>(&self, rel_baddr: u32, filesystem: &mut Filesystem<D>, buffer: &mut [u8]) -> io::Result<()> {
+        if rel_baddr <= u32::try_from(filesystem.superblock.block_size * u64::try_from(self.direct_ptrs.len()).unwrap()).unwrap() {
+            read_block_to(filesystem, self.direct_ptrs[usize::try_from(rel_baddr).unwrap()], buffer)
+        } else {
+            unimplemented!()
+        }
+    }
+    pub fn read_block<D: Read + Seek + Write>(&self, rel_baddr: u32, filesystem: &mut Filesystem<D>) -> io::Result<Box<[u8]>> {
+        let mut vector = vec! [0; usize::try_from(filesystem.superblock.block_size).unwrap()];
+        self.read_block_to(rel_baddr, filesystem, &mut vector)?;
+        Ok(vector.into_boxed_slice())
     }
 }
 
 impl DirEntry {
     pub fn parse(superblock: &Superblock, bytes: &[u8]) -> (Option<Self>, u16) {
         let total_entry_size = read_u16(bytes, 4);
+
         if total_entry_size == 0 {
             return (None, 0);
+        } else if usize::try_from(total_entry_size).unwrap() > bytes.len() {
+            return (None, total_entry_size)
         }
+
         let name_length = total_entry_size - 8;
         let name_bytes = &bytes[8..8 + usize::try_from(name_length).unwrap()];
         let name_bytes = &name_bytes[..name_bytes

@@ -29,15 +29,23 @@ fn read_u8(block: &[u8], offset: usize) -> u8 {
     bytes.copy_from_slice(&block[offset..offset + mem::size_of::<u8>()]);
     u8::from_le_bytes(bytes)
 }
+fn read_block_to<D: Read + Seek>(
+    filesystem: &mut Filesystem<D>,
+    block_address: u32,
+    buffer: &mut [u8],
+) -> io::Result<()> {
+    filesystem.device.seek(SeekFrom::Start(
+        block_address as u64 * filesystem.superblock.block_size,
+    ))?;
+    filesystem.device.read_exact(buffer)?;
+    Ok(())
+}
 fn read_block<D: Read + Seek>(
     filesystem: &mut Filesystem<D>,
     block_address: u32,
 ) -> io::Result<Box<[u8]>> {
-    filesystem.device.seek(SeekFrom::Start(
-        block_address as u64 * filesystem.superblock.block_size,
-    ))?;
-    let mut vector = vec![0u8; filesystem.superblock.block_size.try_into().unwrap()];
-    filesystem.device.read_exact(&mut vector)?;
+    let mut vector = vec! [0; filesystem.superblock.block_size.try_into().unwrap()];
+    read_block_to(filesystem, block_address, &mut vector)?;
     Ok(vector.into_boxed_slice())
 }
 
@@ -99,14 +107,19 @@ fn main() {
     fn recursion(inode: inode::Inode, filesystem: &mut Filesystem<impl Read + Seek + Write>) {
         if inode.ty == inode::InodeType::Dir {
             for entry in inode.ls(filesystem).unwrap() {
-                assert_eq!(block_group::inode_exists(entry.inode, filesystem).ok(), Some(true));
                 let name = entry.name.to_string_lossy();
                 if name == "." || name == ".." {
                     continue
                 }
                 println!("{}", name);
+                io::stdout().flush().unwrap();
+                let inode_struct = match inode::Inode::load(filesystem, entry.inode) {
+                    Ok(inode_struct) => inode_struct,
+                    Err(_) => continue,
+                };
+
                 recursion(
-                    inode::Inode::load(filesystem, entry.inode).unwrap(),
+                    inode_struct,
                     filesystem,
                 );
             }

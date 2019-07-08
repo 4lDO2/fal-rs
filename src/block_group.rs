@@ -58,6 +58,7 @@ pub fn inode_index_inside_group(superblock: &superblock::Superblock, inode: u32)
     (inode - 1) % superblock.inodes_per_group
 }
 pub fn inode_exists<D: Read + Seek + Write>(inode: u32, filesystem: &mut Filesystem<D>) -> io::Result<bool> {
+    if inode == 0 { return Ok(false) }
     let group_index = inode_block_group_index(&filesystem.superblock, inode);
     let index_inside_group = inode_index_inside_group(&filesystem.superblock, inode);
 
