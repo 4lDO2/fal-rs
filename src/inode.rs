@@ -247,7 +247,8 @@ impl Inode {
         let mut current_rel_baddr = 0;
 
         while buffer.len() >= usize::try_from(filesystem.superblock.block_size).unwrap() {
-            unimplemented!();
+            self.read_block_to(current_rel_baddr, filesystem, &mut block_bytes)?;
+            buffer[..usize::try_from(filesystem.superblock.block_size).unwrap()].copy_from_slice(&block_bytes);
 
             if buffer.len() > usize::try_from(filesystem.superblock.block_size).unwrap() {
                 buffer = &mut buffer[usize::try_from(filesystem.superblock.block_size).unwrap()..];
