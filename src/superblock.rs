@@ -61,12 +61,12 @@ pub struct SuperblockExtension {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct OptionalFeatureFlags {
-    preallocate_dir_blocks: bool,
-    afs_server_inodes: bool,
-    has_journal: bool,
-    inode_extended_attributes: bool,
-    growable: bool,
-    dir_hash_index: bool
+    pub preallocate_dir_blocks: bool,
+    pub afs_server_inodes: bool,
+    pub has_journal: bool,
+    pub inode_extended_attributes: bool,
+    pub growable: bool,
+    pub dir_hash_index: bool
 }
 impl OptionalFeatureFlags {
     pub const PREALLOCATE_DIR_BLOCKS_BIT: u32 = 0x0001;
@@ -112,10 +112,10 @@ impl OptionalFeatureFlags {
 
 #[derive(Debug)]
 pub struct RequiredFeatureFlags {
-    compression: bool,
-    dir_type: bool,
-    replay_journal_mandatory: bool,
-    journal_device: bool,
+    pub compression: bool,
+    pub dir_type: bool,
+    pub replay_journal_mandatory: bool,
+    pub journal_device: bool,
 }
 
 impl RequiredFeatureFlags {
@@ -152,9 +152,9 @@ impl RequiredFeatureFlags {
 
 #[derive(Debug)]
 pub struct RoFeatureFlags {
-    sparse_super: bool,
-    extended_file_size: bool,
-    bst_dir_contents: bool,
+    pub sparse_super: bool,
+    pub extended_file_size: bool,
+    pub bst_dir_contents: bool,
 }
 
 impl RoFeatureFlags {

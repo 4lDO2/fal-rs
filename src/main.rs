@@ -1,4 +1,4 @@
-use std::{convert::TryInto, env, fs, io::{self, prelude::*, SeekFrom}, mem};
+use std::{convert::TryInto, env, ffi::OsString, fs, io::{self, prelude::*, SeekFrom}, mem};
 
 use uuid::Uuid;
 
@@ -27,6 +27,18 @@ fn read_block<D: Read + Seek>(filesystem: &mut Filesystem<D>, block_address: u32
     let mut vector = vec! [0u8; filesystem.superblock.block_size.try_into().unwrap()];
     filesystem.device.read_exact(&mut vector)?;
     Ok(vector.into_boxed_slice())
+}
+
+fn os_string_from_bytes(bytes: &[u8]) -> OsString {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        OsString::from_vec(Vec::from(bytes))
+    }
+    #[cfg(windows)]
+    {
+        String::from_utf8_lossy(Vec::from(bytes)).into()
+    }
 }
 
 mod block_group;
@@ -60,6 +72,8 @@ fn main() {
     println!("Block group count: {}.", filesystem.superblock.block_group_count());
 
     let root_inode_block_group = block_group::inode_block_group_index(&filesystem.superblock, inode::ROOT);
-    println!("Root block group: {:?}", block_group::load_block_group_descriptor(&mut filesystem, root_inode_block_group));
-    println!("Root inode info: {:?}", inode::Inode::load(&mut filesystem, inode::ROOT));
+    println!("Root block group: {:?}", block_group::load_block_group_descriptor(&mut filesystem, root_inode_block_group).unwrap());
+    let inode = inode::Inode::load(&mut filesystem, inode::ROOT).unwrap();
+    println!("Root inode info: {:?}", inode);
+    println!("Ls root {:?}", inode.ls(&mut filesystem).unwrap());
 }

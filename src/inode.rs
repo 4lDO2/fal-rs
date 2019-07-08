@@ -1,12 +1,18 @@
-use std::{convert::TryFrom, mem, io::{self, prelude::*}};
+use std::{
+    convert::TryFrom,
+    ffi::OsString,
+    mem,
+    io::{self, prelude::*},
+};
 
-use crate::{block_group, Filesystem, read_block, read_u16, read_u32};
+use crate::{block_group, Filesystem, os_string_from_bytes, read_block, read_u8, read_u16, read_u32, superblock::Superblock};
 
 pub const ROOT: u32 = 2;
 
 #[derive(Debug)]
 pub struct Inode {
-    pub type_and_perm: u16,
+    pub ty: InodeType,
+    pub permissions: u16,
     pub uid: u16,
     pub size_low: u32,
     pub last_access_time: u32,
@@ -29,6 +35,55 @@ pub struct Inode {
     pub fragment_baddr: u32,
     pub os_specific_2: [u8; 12],
 }
+#[derive(Debug)]
+pub struct DirEntry {
+    pub inode: u32,
+    pub type_indicator: Option<InodeType>,
+    pub name: OsString,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InodeType {
+    Unknown,
+    Fifo,
+    CharDev,
+    Dir,
+    BlockDev,
+    File,
+    Symlink,
+    UnixSock,
+}
+
+impl InodeType {
+    const TYPE_MASK: u16 = 0xF000;
+    const PERM_MASK: u16 = 0x0FFF;
+    pub fn from_type_and_perm(raw: u16) -> (Option<Self>, u16) {
+        (match raw & Self::TYPE_MASK {
+            0x1000 => Some(InodeType::Fifo),
+            0x2000 => Some(InodeType::CharDev),
+            0x4000 => Some(InodeType::Dir),
+            0x6000 => Some(InodeType::BlockDev),
+            0x8000 => Some(InodeType::File),
+            0xA000 => Some(InodeType::Symlink),
+            0xC000 => Some(InodeType::UnixSock),
+            _ => None,
+        }, raw & Self::PERM_MASK)
+    }
+    pub fn from_direntry_ty_indicator(indicator: u8) -> Option<Self> {
+        match indicator {
+            0 => Some(InodeType::Unknown),
+            1 => Some(InodeType::File),
+            2 => Some(InodeType::Dir),
+            3 => Some(InodeType::CharDev),
+            4 => Some(InodeType::BlockDev),
+            5 => Some(InodeType::Fifo),
+            6 => Some(InodeType::UnixSock),
+            7 => Some(InodeType::Symlink),
+            _ => None,
+        }
+    }
+}
+
 impl Inode {
     pub fn load<R: Read + Seek + Write>(filesystem: &mut Filesystem<R>, inode_address: u32) -> io::Result<Self> {
         let block_group_index = block_group::inode_block_group_index(&filesystem.superblock, inode_address);
@@ -51,8 +106,11 @@ impl Inode {
         Ok(Self::parse(inode_bytes))
     }
     pub fn parse(bytes: &[u8]) -> Self {
+        let (ty, permissions) = InodeType::from_type_and_perm(read_u16(bytes, 0));
+
         Self {
-            type_and_perm: read_u16(bytes, 0),
+            ty: ty.unwrap(),
+            permissions,
             uid: read_u16(bytes, 2),
             size_low: read_u32(bytes, 4),
             last_access_time: read_u32(bytes, 8),
@@ -87,5 +145,64 @@ impl Inode {
                 os_specific_bytes
             },
         }
+    }
+    pub fn size(&self, superblock: &Superblock) -> u64 {
+        u64::from(self.size_low) |
+            if let Some(extended) = superblock.extended.as_ref() {
+                if extended.req_features_for_rw.extended_file_size && self.ty == InodeType::File {
+                    u64::from(self.size_high_or_acl) << 32
+                } else {
+                    0
+                }
+            } else {
+                0
+            }
+    }
+    pub fn ls<D: Read + Seek + Write>(&self, filesystem: &mut Filesystem<D>) -> io::Result<Vec<DirEntry>> {
+        if self.ty != InodeType::Dir {
+            return Err(io::Error::from(io::ErrorKind::InvalidInput))
+        }
+
+        let size = self.size(&filesystem.superblock);
+
+        assert!(size > 0);
+        assert!(size <= filesystem.superblock.block_size);
+        let block_bytes = read_block(filesystem, self.direct_ptrs[0])?;
+
+        let mut entries = vec! [];
+
+        let mut current_offset = 0;
+
+        while current_offset < size {
+            let entry_bytes = &block_bytes[usize::try_from(current_offset).unwrap()..];
+            let (entry, to_add) = DirEntry::parse(&filesystem.superblock, entry_bytes);
+            if let Some(entry) = entry {
+                entries.push(entry);
+            }
+            current_offset += u64::from(to_add);
+        }
+        Ok(entries)
+    }
+}
+
+impl DirEntry {
+    pub fn parse(superblock: &Superblock, bytes: &[u8]) -> (Option<Self>, u16) {
+        let total_entry_size = read_u16(bytes, 4);
+        if total_entry_size == 0 { return (None, 0) }
+        let name_length = total_entry_size - 8;
+        let name_bytes = &bytes[8..8 + usize::try_from(name_length).unwrap()];
+        let name_bytes = &name_bytes[..name_bytes.iter().copied().position(|byte| byte == 0).unwrap_or(name_bytes.len())];
+        let name = os_string_from_bytes(name_bytes);
+        (Some(Self {
+            inode: read_u32(bytes, 0),
+            type_indicator: if let Some(extended) = superblock.extended.as_ref() {
+                if extended.opt_features_present.inode_extended_attributes {
+                    InodeType::from_direntry_ty_indicator(read_u8(bytes, 7))
+                } else {
+                    None
+                }
+            } else { None },
+            name,
+            }), total_entry_size)
     }
 }
