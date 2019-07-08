@@ -1,4 +1,4 @@
-use crate::{read_block, read_u16, read_u32, superblock};
+use crate::{Filesystem, read_block, read_u16, read_u32, superblock};
 use std::{
     convert::TryFrom,
     io::{self, prelude::*},
@@ -53,4 +53,25 @@ pub fn load_block_group_descriptor<D: Read + Seek + Write>(
 }
 pub fn inode_block_group_index(superblock: &superblock::Superblock, inode: u32) -> u32 {
     (inode - 1) / superblock.inodes_per_group
+}
+pub fn inode_index_inside_group(superblock: &superblock::Superblock, inode: u32) -> u32 {
+    (inode - 1) % superblock.inodes_per_group
+}
+pub fn inode_exists<D: Read + Seek + Write>(inode: u32, filesystem: &mut Filesystem<D>) -> io::Result<bool> {
+    let group_index = inode_block_group_index(&filesystem.superblock, inode);
+    let index_inside_group = inode_index_inside_group(&filesystem.superblock, inode);
+
+    let descriptor = load_block_group_descriptor(filesystem, group_index)?;
+
+    let bitmap_start_group = descriptor.inode_usage_bm_baddr;
+    let block_index = u32::try_from(u64::from(index_inside_group / 8) / filesystem.superblock.block_size).unwrap();
+
+    let block_bytes = read_block(filesystem, bitmap_start_group + block_index)?;
+
+    let byte_index_inside_bm = u32::try_from(u64::from(index_inside_group) / filesystem.superblock.block_size).unwrap();
+
+    let bm_byte = block_bytes[usize::try_from(byte_index_inside_bm).unwrap()];
+    let bm_bit = 1 << (inode % 8);
+
+    Ok(bm_byte & bm_bit != 0)
 }

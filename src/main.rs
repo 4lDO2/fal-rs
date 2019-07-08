@@ -95,5 +95,26 @@ fn main() {
     );
     let inode = inode::Inode::load(&mut filesystem, inode::ROOT).unwrap();
     println!("Root inode info: {:?}", inode);
-    println!("Ls root {:?}", inode.ls(&mut filesystem).unwrap());
+
+    fn recursion(inode: inode::Inode, filesystem: &mut Filesystem<impl Read + Seek + Write>) {
+        if inode.ty == inode::InodeType::Dir {
+            for entry in inode.ls(filesystem).unwrap() {
+                assert_eq!(block_group::inode_exists(entry.inode, filesystem).ok(), Some(true));
+                let name = entry.name.to_string_lossy();
+                if name == "." || name == ".." {
+                    continue
+                }
+                println!("{}", name);
+                recursion(
+                    inode::Inode::load(filesystem, entry.inode).unwrap(),
+                    filesystem,
+                );
+            }
+        }
+    }
+    println!("/");
+    recursion(
+        inode::Inode::load(&mut filesystem, inode::ROOT).unwrap(),
+        &mut filesystem,
+    );
 }
