@@ -191,7 +191,7 @@ impl Inode {
 
         let size = self.size(&filesystem.superblock);
 
-        let mut entries = vec![];
+        let mut entries = vec! [];
 
         let mut current_entry_offset = 0;
 
@@ -203,6 +203,7 @@ impl Inode {
 
             self.read(filesystem, current_entry_offset, &mut entry_bytes[..6])?;
             let length = DirEntry::length(&entry_bytes[0..6]).try_into().unwrap();
+            dbg!(length);
 
             if length == 0 { break } // TODO: Assuming the entry with length 0 is the last one, is this correct?
 
@@ -222,26 +223,44 @@ impl Inode {
         }
     }
     pub fn read<D: Read + Write + Seek>(&self, filesystem: &mut Filesystem<D>, offset: u64, mut buffer: &mut [u8]) -> io::Result<()> {
-        let start_block_index = offset / filesystem.superblock.block_size;
+        let off_from_rel_block = offset % filesystem.superblock.block_size;
+        let rel_baddr_start = offset / filesystem.superblock.block_size;
 
-        let mut block_offset = usize::try_from(offset % filesystem.superblock.block_size).unwrap();
+        let mut block_bytes = (vec! [0u8; usize::try_from(filesystem.superblock.block_size).unwrap()]).into_boxed_slice();
 
-        let block_count = div_round_up(u64::try_from(buffer.len()).unwrap(), filesystem.superblock.block_size) + if block_offset != 0 { 1 } else { 0 };
+        if off_from_rel_block != 0 {
+            self.read_block_to(rel_baddr_start.try_into().unwrap(), filesystem, &mut block_bytes)?;
 
-        let mut block_bytes = vec! [0; usize::try_from(filesystem.superblock.block_size).unwrap()];
+            {
+                let off_from_rel_block = usize::try_from(off_from_rel_block).unwrap();
+                let end = std::cmp::min(buffer.len(), usize::try_from(filesystem.superblock.block_size).unwrap() - off_from_rel_block);
+                buffer[..end].copy_from_slice(&block_bytes[off_from_rel_block..off_from_rel_block + end]);
+            }
 
-        for index in 0..block_count {
-            let block_index = start_block_index + index;
-
-            self.read_block_to(u32::try_from(block_index).unwrap(), filesystem, &mut block_bytes)?;
-
-            let buffer_len = buffer.len();
-            let buffer_end = std::cmp::min(filesystem.superblock.block_size.try_into().unwrap(), buffer_len);
-            buffer[..buffer_end].copy_from_slice(&block_bytes[block_offset..block_offset + buffer_len]);
-
-            block_offset = 0;
-            if filesystem.superblock.block_size < u64::try_from(buffer.len()).unwrap() { buffer = &mut buffer[usize::try_from(filesystem.superblock.block_size).unwrap()..] }
+            if u64::try_from(buffer.len()).unwrap() >= off_from_rel_block {
+                return self.read(filesystem, offset - off_from_rel_block, &mut buffer[off_from_rel_block.try_into().unwrap()..]);
+            } else {
+                return Ok(())
+            }
         }
+
+        let mut current_rel_baddr = 0;
+
+        while buffer.len() >= usize::try_from(filesystem.superblock.block_size).unwrap() {
+            unimplemented!();
+
+            if buffer.len() > usize::try_from(filesystem.superblock.block_size).unwrap() {
+                buffer = &mut buffer[usize::try_from(filesystem.superblock.block_size).unwrap()..];
+            }
+            current_rel_baddr += 1;
+        }
+
+        if buffer.len() != 0 {
+            self.read_block_to(current_rel_baddr.try_into().unwrap(), filesystem, &mut block_bytes)?;
+            let buffer_len = buffer.len();
+            buffer.copy_from_slice(&block_bytes[..buffer_len]);
+        }
+
         Ok(())
     }
 }
