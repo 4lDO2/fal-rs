@@ -5,6 +5,7 @@ use std::{
     fs,
     io::{self, prelude::*, SeekFrom},
     mem,
+    ops::{Add, Div, Rem},
 };
 
 use uuid::Uuid;
@@ -47,6 +48,16 @@ fn read_block<D: Read + Seek>(
     let mut vector = vec! [0; filesystem.superblock.block_size.try_into().unwrap()];
     read_block_to(filesystem, block_address, &mut vector)?;
     Ok(vector.into_boxed_slice())
+}
+fn div_round_up<T>(numer: T, denom: T) -> T
+where
+    T: Add<Output = T> + Copy + Div<Output = T> + Rem<Output = T> + From<u8> + PartialEq
+{
+    if numer % denom != T::from(0u8) {
+        numer / denom + T::from(1u8)
+    } else {
+        numer / denom
+    }
 }
 
 fn os_string_from_bytes(bytes: &[u8]) -> OsString {
@@ -105,18 +116,18 @@ fn main() {
     println!("Root inode info: {:?}", inode);
 
     fn recursion(inode: inode::Inode, filesystem: &mut Filesystem<impl Read + Seek + Write>) {
+        println!("Recursion");
         if inode.ty == inode::InodeType::Dir {
             for entry in inode.ls(filesystem).unwrap() {
                 let name = entry.name.to_string_lossy();
                 if name == "." || name == ".." {
                     continue
                 }
-                println!("{}", name);
-                io::stdout().flush().unwrap();
                 let inode_struct = match inode::Inode::load(filesystem, entry.inode) {
                     Ok(inode_struct) => inode_struct,
                     Err(_) => continue,
                 };
+                println!("{}", name);
 
                 recursion(
                     inode_struct,
