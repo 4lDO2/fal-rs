@@ -1,4 +1,4 @@
-use super::{read_u8, read_u16, read_u32, read_uuid, Uuid};
+use super::{read_u16, read_u32, read_u8, read_uuid, Uuid};
 
 use std::{
     ffi::CString,
@@ -66,7 +66,7 @@ pub struct OptionalFeatureFlags {
     pub has_journal: bool,
     pub inode_extended_attributes: bool,
     pub growable: bool,
-    pub dir_hash_index: bool
+    pub dir_hash_index: bool,
 }
 impl OptionalFeatureFlags {
     pub const PREALLOCATE_DIR_BLOCKS_BIT: u32 = 0x0001;
@@ -232,7 +232,11 @@ impl Superblock {
                 let mut vol_name_raw = [0u8; 16];
                 vol_name_raw.copy_from_slice(&block_bytes[120..136]);
 
-                let nul_position = vol_name_raw.iter().copied().position(|byte| byte == 0).unwrap_or(vol_name_raw.len());
+                let nul_position = vol_name_raw
+                    .iter()
+                    .copied()
+                    .position(|byte| byte == 0)
+                    .unwrap_or(vol_name_raw.len());
                 if nul_position != 0 {
                     CString::new(&vol_name_raw[..nul_position]).ok()
                 } else {
@@ -244,7 +248,11 @@ impl Superblock {
                 let mut last_mount_path_raw = [0u8; 64];
                 last_mount_path_raw.copy_from_slice(&block_bytes[136..200]);
 
-                let nul_position = last_mount_path_raw.iter().copied().position(|byte| byte == 0).unwrap_or(last_mount_path_raw.len());
+                let nul_position = last_mount_path_raw
+                    .iter()
+                    .copied()
+                    .position(|byte| byte == 0)
+                    .unwrap_or(last_mount_path_raw.len());
                 if nul_position != 0 {
                     CString::new(&last_mount_path_raw[..nul_position]).ok()
                 } else {
@@ -330,7 +338,10 @@ impl Superblock {
         from_block_count
     }
     pub fn inode_size(&self) -> u16 {
-        self.extended.as_ref().map(|extended| extended.inode_struct_size).unwrap_or(128)
+        self.extended
+            .as_ref()
+            .map(|extended| extended.inode_struct_size)
+            .unwrap_or(128)
     }
 }
 #[derive(Debug)]
