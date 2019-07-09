@@ -35,6 +35,14 @@ fn read_block_to<D: Read + Seek>(
     block_address: u32,
     buffer: &mut [u8],
 ) -> io::Result<()> {
+    debug_assert!(block_group::block_exists(block_address, filesystem)?);
+    read_block_to_raw(filesystem, block_address, buffer)
+}
+fn read_block_to_raw<D: Read + Seek>(
+    filesystem: &mut Filesystem<D>,
+    block_address: u32,
+    buffer: &mut [u8],
+) -> io::Result<()> {
     filesystem.device.seek(SeekFrom::Start(
         block_address as u64 * filesystem.superblock.block_size,
     ))?;
