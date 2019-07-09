@@ -11,12 +11,12 @@ use std::{
 
 use uuid::Uuid;
 
-mod block_group;
-mod inode;
-mod superblock;
+pub mod block_group;
+pub mod inode;
+pub mod superblock;
 
-use inode::Inode;
-use superblock::Superblock;
+pub use inode::Inode;
+pub use superblock::Superblock;
 
 fn read_uuid(block: &[u8], offset: usize) -> Uuid {
     let mut bytes = [0u8; 16];
@@ -89,8 +89,8 @@ fn os_string_from_bytes(bytes: &[u8]) -> OsString {
 }
 
 pub struct Filesystem<D> {
-    superblock: Superblock,
-    device: D,
+    pub superblock: Superblock,
+    pub device: D,
 }
 impl<D: Read + Seek + Write> Filesystem<D> {
     pub fn mount(mut device: D) -> io::Result<Self> {

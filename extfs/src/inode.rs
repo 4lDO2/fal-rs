@@ -36,7 +36,7 @@ pub struct Inode {
     pub extended_atribute_block: u32,
     pub size_high_or_acl: u32,
     pub fragment_baddr: u32,
-    pub os_specific_2: [u8; 12],
+    pub os_specific_2: [u8; 12], // TODO: Support 32-bit gids and uids.
 }
 #[derive(Debug)]
 pub struct DirEntry {
@@ -182,11 +182,15 @@ impl Inode {
                 0
             }
     }
+    pub fn size_in_blocks(&self, superblock: &Superblock) -> u64 {
+        div_round_up(self.size(superblock), superblock.block_size)
+    }
     pub fn ls<D: Read + Seek + Write>(
         &self,
         filesystem: &mut Filesystem<D>,
     ) -> io::Result<Vec<DirEntry>> {
         if self.ty != InodeType::Dir {
+            // TODO: ENOTDIR
             return Err(io::Error::from(io::ErrorKind::InvalidInput));
         }
 
@@ -220,7 +224,7 @@ impl Inode {
         Ok(entries)
     }
     pub fn read_block_to<D: Read + Seek + Write>(&self, rel_baddr: u32, filesystem: &mut Filesystem<D>, buffer: &mut [u8]) -> io::Result<()> {
-        if u64::from(rel_baddr) >= div_round_up(self.size(&filesystem.superblock), filesystem.superblock.block_size) {
+        if u64::from(rel_baddr) >= self.size_in_blocks(&filesystem.superblock) {
             return Err(io::ErrorKind::UnexpectedEof.into())
         }
 

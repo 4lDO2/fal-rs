@@ -1,0 +1,13 @@
+[package]
+name = "extfs-fuse"
+version = "0.1.0"
+authors = ["4lDO2 <4lDO2@protonmail.com>"]
+edition = "2018"
+
+[dependencies]
+clap = "2.23"
+fuse = "0.3"
+libc = "0.2"
+time = "0.1"
+
+extfs = { path = "../extfs", version = "0.1" }
