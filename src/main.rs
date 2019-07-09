@@ -116,26 +116,26 @@ fn main() {
     eprintln!("Root inode info: {:?}", inode);
 
     fn recursion(inode: inode::Inode, filesystem: &mut Filesystem<impl Read + Seek + Write>) {
-        eprintln!("Recursion {{");
         if inode.ty == inode::InodeType::Dir {
+            eprintln!("Recursion {{");
             for entry in inode.ls(filesystem).unwrap() {
                 let name = entry.name.to_string_lossy();
                 if name == "." || name == ".." {
                     continue
                 }
-                eprintln!("{} => {}", name, entry.inode);
                 let inode_struct = match inode::Inode::load(filesystem, entry.inode) {
                     Ok(inode_struct) => inode_struct,
                     Err(_) => continue,
                 };
+                eprintln!("{} => {} ({} bytes large)", name, entry.inode, inode_struct.size(&filesystem.superblock));
 
                 recursion(
                     inode_struct,
                     filesystem,
                 );
             }
+            eprintln!("}}");
         }
-        eprintln!("}}");
     }
     eprintln!("/");
     recursion(

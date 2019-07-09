@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    block_group, div_round_up, os_string_from_bytes, read_block, read_block_to, read_u16, read_u32, read_u8,
+    block_group, os_string_from_bytes, read_block, read_block_to, read_u16, read_u32, read_u8,
     superblock::Superblock, Filesystem,
 };
 
@@ -100,17 +100,15 @@ impl Inode {
             block_group::inode_block_group_index(&filesystem.superblock, inode_address);
         let block_group_descriptor =
             block_group::load_block_group_descriptor(filesystem, block_group_index)?;
-        let inode_index_in_group = (inode_address - 1) % filesystem.superblock.inodes_per_group;
+        let inode_index_in_group = block_group::inode_index_inside_group(&filesystem.superblock, inode_address);
         let inode_size = filesystem.superblock.inode_size();
 
-        let containing_block_index_in_group = block_group_descriptor.inode_table_start_baddr
+        let containing_block_index = block_group_descriptor.inode_table_start_baddr
             + u32::try_from(
                 u64::from(inode_index_in_group * u32::from(inode_size))
                     / filesystem.superblock.block_size,
             )
             .unwrap();
-        let containing_block_index = containing_block_index_in_group
-            + block_group_index * filesystem.superblock.blocks_per_group;
 
         let max_inodes_in_block =
             u32::try_from(filesystem.superblock.block_size / u64::from(inode_size)).unwrap();
@@ -122,6 +120,10 @@ impl Inode {
         let containing_block = read_block(filesystem, containing_block_index)?;
         let inode_bytes = &containing_block
             [inode_index_in_block * inode_size..inode_index_in_block * inode_size + inode_size];
+
+        if inode_address == 344065 {
+            dbg!();
+        }
         Ok(Self::parse(inode_bytes))
     }
     pub fn parse(bytes: &[u8]) -> Self {
