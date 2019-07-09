@@ -100,34 +100,34 @@ fn main() {
 
     let mut filesystem = Filesystem::open(file).unwrap();
 
-    println!("{:?}", filesystem.superblock);
-    println!(
+    eprintln!("{:?}", filesystem.superblock);
+    eprintln!(
         "Block group count: {}.",
         filesystem.superblock.block_group_count()
     );
 
     let root_inode_block_group =
         block_group::inode_block_group_index(&filesystem.superblock, inode::ROOT);
-    println!(
+    eprintln!(
         "Root block group: {:?}",
         block_group::load_block_group_descriptor(&mut filesystem, root_inode_block_group).unwrap()
     );
     let inode = inode::Inode::load(&mut filesystem, inode::ROOT).unwrap();
-    println!("Root inode info: {:?}", inode);
+    eprintln!("Root inode info: {:?}", inode);
 
     fn recursion(inode: inode::Inode, filesystem: &mut Filesystem<impl Read + Seek + Write>) {
-        println!("Recursion");
+        eprintln!("Recursion {{");
         if inode.ty == inode::InodeType::Dir {
             for entry in inode.ls(filesystem).unwrap() {
                 let name = entry.name.to_string_lossy();
                 if name == "." || name == ".." {
                     continue
                 }
+                eprintln!("{} => {}", name, entry.inode);
                 let inode_struct = match inode::Inode::load(filesystem, entry.inode) {
                     Ok(inode_struct) => inode_struct,
                     Err(_) => continue,
                 };
-                println!("{}", name);
 
                 recursion(
                     inode_struct,
@@ -135,8 +135,9 @@ fn main() {
                 );
             }
         }
+        eprintln!("}}");
     }
-    println!("/");
+    eprintln!("/");
     recursion(
         inode::Inode::load(&mut filesystem, inode::ROOT).unwrap(),
         &mut filesystem,

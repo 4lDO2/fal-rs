@@ -185,11 +185,11 @@ impl Inode {
             return Err(io::Error::from(io::ErrorKind::InvalidInput));
         }
 
-        if self.size(&filesystem.superblock) == 0 {
+        let size = self.size(&filesystem.superblock);
+
+        if size == 0 {
             return Ok(vec! [])
         }
-
-        let size = self.size(&filesystem.superblock);
 
         let mut entries = vec! [];
 
@@ -203,7 +203,6 @@ impl Inode {
 
             self.read(filesystem, current_entry_offset, &mut entry_bytes[..6])?;
             let length = DirEntry::length(&entry_bytes[0..6]).try_into().unwrap();
-            dbg!(length);
 
             if length == 0 { break } // TODO: Assuming the entry with length 0 is the last one, is this correct?
 
@@ -247,6 +246,7 @@ impl Inode {
         let mut current_rel_baddr = 0;
 
         while buffer.len() >= usize::try_from(filesystem.superblock.block_size).unwrap() {
+
             self.read_block_to(current_rel_baddr, filesystem, &mut block_bytes)?;
             buffer[..usize::try_from(filesystem.superblock.block_size).unwrap()].copy_from_slice(&block_bytes);
 
