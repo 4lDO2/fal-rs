@@ -1,14 +1,22 @@
 use std::{
     convert::TryInto,
     env,
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     fs,
     io::{self, prelude::*, SeekFrom},
     mem,
     ops::{Add, Div, Rem},
+    path::{self, Path},
 };
 
 use uuid::Uuid;
+
+mod block_group;
+mod inode;
+mod superblock;
+
+use inode::Inode;
+use superblock::Superblock;
 
 fn read_uuid(block: &[u8], offset: usize) -> Uuid {
     let mut bytes = [0u8; 16];
@@ -80,22 +88,53 @@ fn os_string_from_bytes(bytes: &[u8]) -> OsString {
     }
 }
 
-mod block_group;
-mod inode;
-mod superblock;
-
-use superblock::Superblock;
 
 pub struct Filesystem<D> {
     superblock: Superblock,
     device: D,
 }
 impl<D: Read + Seek + Write> Filesystem<D> {
-    pub fn open(mut device: D) -> io::Result<Self> {
+    pub fn mount(mut device: D) -> io::Result<Self> {
         Ok(Self {
             superblock: Superblock::parse(&mut device)?,
             device,
         })
+    }
+    fn open_inode_raw<'a>(&mut self, parent: Inode, components: &[&OsStr]) -> io::Result<inode::Inode> {
+        if components.is_empty() {
+            return Ok(parent)
+        }
+        let entries = parent.ls(self)?;
+
+        if let Some(entry) = entries.iter().find(|entry| entry.name == components[0]) {
+            let inode = Inode::load(self, entry.inode)?;
+            self.open_inode_raw(inode, &components[1..])
+        } else {
+            Err(io::Error::from(io::ErrorKind::NotFound))
+        }
+    }
+    pub fn open_inode<P: AsRef<Path>>(&mut self, path: P) -> io::Result<inode::Inode> {
+        let root = Inode::load(self, inode::ROOT)?;
+
+        let mut components = path.as_ref().components();
+
+        let components = match components.next() {
+            Some(path::Component::RootDir) => {
+                let mut component_names = vec! [];
+
+                for component in components {
+                    match component {
+                        path::Component::Normal(string) => component_names.push(string),
+                        _ => return Err(io::Error::new(io::ErrorKind::NotFound, "expected a normal path component")),
+                    }
+                }
+
+                component_names
+            }
+            Some(_) => return Err(io::Error::new(io::ErrorKind::InvalidInput, "only absolute paths are supported")),
+            None => return Err(io::Error::new(io::ErrorKind::NotFound, "empty path")),
+        };
+        self.open_inode_raw(root, &components)
     }
 }
 
@@ -106,7 +145,7 @@ fn main() {
         .open(env::args().nth(1).unwrap())
         .unwrap();
 
-    let mut filesystem = Filesystem::open(file).unwrap();
+    let mut filesystem = Filesystem::mount(file).unwrap();
 
     eprintln!("{:?}", filesystem.superblock);
     eprintln!(
