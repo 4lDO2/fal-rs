@@ -96,6 +96,9 @@ impl Inode {
         inode_address: u32,
     ) -> io::Result<Self> {
         if inode_address == 0 { return Err(io::Error::new(io::ErrorKind::NotFound, "no inode address (was 0)")) }
+
+        debug_assert!(block_group::inode_exists(inode_address, filesystem)?);
+
         let block_group_index =
             block_group::inode_block_group_index(&filesystem.superblock, inode_address);
         let block_group_descriptor =
