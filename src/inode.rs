@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    block_group, os_string_from_bytes, read_block, read_block_to, read_u16, read_u32, read_u8,
+    block_group, div_round_up, os_string_from_bytes, read_block, read_block_to, read_u16, read_u32, read_u8,
     superblock::Superblock, Filesystem,
 };
 
@@ -220,7 +220,11 @@ impl Inode {
         Ok(entries)
     }
     pub fn read_block_to<D: Read + Seek + Write>(&self, rel_baddr: u32, filesystem: &mut Filesystem<D>, buffer: &mut [u8]) -> io::Result<()> {
-        if rel_baddr <= u32::try_from(filesystem.superblock.block_size * u64::try_from(self.direct_ptrs.len()).unwrap()).unwrap() {
+        if u64::from(rel_baddr) >= div_round_up(self.size(&filesystem.superblock), filesystem.superblock.block_size) {
+            return Err(io::ErrorKind::UnexpectedEof.into())
+        }
+
+        if rel_baddr <= u32::try_from(filesystem.superblock.block_size * u64::try_from(self.direct_ptrs.len()).unwrap()).unwrap()  {
             read_block_to(filesystem, self.direct_ptrs[usize::try_from(rel_baddr).unwrap()], buffer)
         } else {
             unimplemented!()

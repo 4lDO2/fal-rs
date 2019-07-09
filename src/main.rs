@@ -61,13 +61,13 @@ fn read_block<D: Read + Seek>(
     filesystem: &mut Filesystem<D>,
     block_address: u32,
 ) -> io::Result<Box<[u8]>> {
-    let mut vector = vec! [0; filesystem.superblock.block_size.try_into().unwrap()];
+    let mut vector = vec![0; filesystem.superblock.block_size.try_into().unwrap()];
     read_block_to(filesystem, block_address, &mut vector)?;
     Ok(vector.into_boxed_slice())
 }
 fn div_round_up<T>(numer: T, denom: T) -> T
 where
-    T: Add<Output = T> + Copy + Div<Output = T> + Rem<Output = T> + From<u8> + PartialEq
+    T: Add<Output = T> + Copy + Div<Output = T> + Rem<Output = T> + From<u8> + PartialEq,
 {
     if numer % denom != T::from(0u8) {
         numer / denom + T::from(1u8)
@@ -88,7 +88,6 @@ fn os_string_from_bytes(bytes: &[u8]) -> OsString {
     }
 }
 
-
 pub struct Filesystem<D> {
     superblock: Superblock,
     device: D,
@@ -100,9 +99,13 @@ impl<D: Read + Seek + Write> Filesystem<D> {
             device,
         })
     }
-    fn open_inode_raw<'a>(&mut self, parent: Inode, components: &[&OsStr]) -> io::Result<inode::Inode> {
+    fn open_inode_raw<'a>(
+        &mut self,
+        parent: Inode,
+        components: &[&OsStr],
+    ) -> io::Result<inode::Inode> {
         if components.is_empty() {
-            return Ok(parent)
+            return Ok(parent);
         }
         let entries = parent.ls(self)?;
 
@@ -120,18 +123,28 @@ impl<D: Read + Seek + Write> Filesystem<D> {
 
         let components = match components.next() {
             Some(path::Component::RootDir) => {
-                let mut component_names = vec! [];
+                let mut component_names = vec![];
 
                 for component in components {
                     match component {
                         path::Component::Normal(string) => component_names.push(string),
-                        _ => return Err(io::Error::new(io::ErrorKind::NotFound, "expected a normal path component")),
+                        _ => {
+                            return Err(io::Error::new(
+                                io::ErrorKind::NotFound,
+                                "expected a normal path component",
+                            ))
+                        }
                     }
                 }
 
                 component_names
             }
-            Some(_) => return Err(io::Error::new(io::ErrorKind::InvalidInput, "only absolute paths are supported")),
+            Some(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "only absolute paths are supported",
+                ))
+            }
             None => return Err(io::Error::new(io::ErrorKind::NotFound, "empty path")),
         };
         self.open_inode_raw(root, &components)
@@ -168,18 +181,20 @@ fn main() {
             for entry in inode.ls(filesystem).unwrap() {
                 let name = entry.name.to_string_lossy();
                 if name == "." || name == ".." {
-                    continue
+                    continue;
                 }
                 let inode_struct = match inode::Inode::load(filesystem, entry.inode) {
                     Ok(inode_struct) => inode_struct,
                     Err(_) => continue,
                 };
-                eprintln!("{} => {} ({} bytes large)", name, entry.inode, inode_struct.size(&filesystem.superblock));
-
-                recursion(
-                    inode_struct,
-                    filesystem,
+                eprintln!(
+                    "{} => {} ({} bytes large)",
+                    name,
+                    entry.inode,
+                    inode_struct.size(&filesystem.superblock)
                 );
+
+                recursion(inode_struct, filesystem);
             }
             eprintln!("}}");
         }
