@@ -1,21 +1,30 @@
 use std::{
+    collections::HashMap,
     convert::TryFrom, io,
     ffi::OsStr,
     fs::File,
 };
 
 use extfs::{Filesystem, Inode, inode::InodeType};
-use fuse::{FileAttr, Request, ReplyAttr, ReplyEntry};
+use fuse::{FileAttr, Request, ReplyAttr, ReplyEntry, ReplyOpen};
 use time::Timespec;
+
+struct FileHandle {
+    inode: u64,
+}
 
 pub struct FuseFilesystem {
     inner: Filesystem<File>,
+    file_handles: HashMap<u64, FileHandle>,
+    last_fh: u64,
 }
 
 impl FuseFilesystem {
     pub fn init(device: File) -> io::Result<Self> {
         Ok(Self {
             inner: Filesystem::mount(device)?,
+            file_handles: HashMap::new(),
+            last_fh: 0,
         })
     }
     fn file_attributes(&self, inode: u32, inode_struct: &Inode) -> FileAttr {
@@ -46,6 +55,11 @@ impl FuseFilesystem {
             rdev: 0, // TODO
             blocks: inode_struct.size_in_blocks(&self.inner.superblock),
         }
+    }
+    fn fh(&mut self) -> u64 {
+        let fh = self.last_fh;
+        self.last_fh += 1;
+        fh
     }
 }
 
@@ -115,5 +129,18 @@ impl fuse::Filesystem for FuseFilesystem {
         let validity_timeout = Timespec::new(0, 0); // TODO: Is this correct?
 
         reply.entry(&validity_timeout, &dir_attributes, u64::from(entry_inode_struct.generation_number)); // TODO: generation_number?
+    }
+    fn opendir(&mut self, _req: &Request, inode: u64, flags: u32, reply: ReplyOpen) {
+        dbg!(flags);
+        dbg!(inode);
+        let inode = match u32::try_from(inode) {
+            Ok(inode) => inode,
+            Err(_) => {
+                reply.error(libc::EMFILE);
+                return
+            }
+        };
+        let fh = self.fh();
+        self.file_handles.insert(fh, FileHandle { inode: u64::from(inode) });
     }
 }
