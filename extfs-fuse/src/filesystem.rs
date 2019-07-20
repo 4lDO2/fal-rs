@@ -1,12 +1,12 @@
 use std::{
     collections::HashMap,
-    convert::TryFrom, io,
+    convert::{TryFrom, TryInto}, io,
     ffi::OsStr,
     fs::File,
 };
 
 use extfs::{Filesystem, Inode, inode::InodeType};
-use fuse::{FileAttr, Request, ReplyAttr, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyDirectory};
+use fuse::{FileAttr, Request, ReplyAttr, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyDirectory, ReplyData};
 use time::Timespec;
 
 struct FileHandle {
@@ -116,6 +116,10 @@ impl fuse::Filesystem for FuseFilesystem {
                 return
             }
         };
+        if !extfs::block_group::inode_exists(parent_inode, &mut self.inner).unwrap() {
+            reply.error(libc::ENOENT);
+            return
+        }
 
         let inode_struct = match Inode::load(&mut self.inner, parent_inode) {
             Ok(inode_struct) => inode_struct,
@@ -154,6 +158,10 @@ impl fuse::Filesystem for FuseFilesystem {
                 return
             }
         };
+        if !extfs::block_group::inode_exists(inode, &mut self.inner).unwrap() {
+            reply.error(libc::ENOENT);
+            return
+        }
         let fh = self.fh();
         self.file_handles.insert(fh, FileHandle { inode, position: 0, dir: true });
         reply.opened(fh, 0);
@@ -166,7 +174,17 @@ impl fuse::Filesystem for FuseFilesystem {
                 return
             }
         };
-        let file_handle = &mut self.file_handles.get_mut(&fh).unwrap();
+        if !extfs::block_group::inode_exists(inode, &mut self.inner).unwrap() {
+            reply.error(libc::ENOENT);
+            return
+        }
+        let file_handle = match self.file_handles.get_mut(&fh) {
+            Some(file_handle) => file_handle,
+            None => {
+                reply.error(libc::ENOENT);
+                return
+            }
+        };
 
         assert_eq!(inode, file_handle.inode);
 
@@ -179,10 +197,74 @@ impl fuse::Filesystem for FuseFilesystem {
         reply.ok()
     }
     fn releasedir(&mut self, _req: &Request, _fuse_inode: u64, fh: u64, _flags: u32, reply: ReplyEmpty) {
-        self.file_handles.remove(&fh);
-        reply.ok()
+        if self.file_handles.remove(&fh).is_some() {
+            reply.ok()
+        } else {
+            reply.error(libc::EBADF);
+        }
     }
-    fn open(&mut self, _req: &Request, _inode: u64, _fh: u32, reply: ReplyOpen) {
-        reply.error(libc::ENOSYS);
+    fn open(&mut self, _req: &Request, fuse_inode: u64, _flags: u32, reply: ReplyOpen) {
+        let inode = match fuse_inode_to_extfs_inode(fuse_inode) {
+            Some(inode) => inode,
+            None => {
+                reply.error(libc::EMFILE);
+                return
+            }
+        };
+        if !extfs::block_group::inode_exists(inode, &mut self.inner).unwrap() {
+            reply.error(libc::ENOENT);
+            return
+        }
+        let fh = self.fh();
+        self.file_handles.insert(fh, FileHandle { inode, position: 0, dir: false });
+        reply.opened(fh, 0);
+    }
+    fn read(&mut self, _req: &Request, fuse_inode: u64, fh: u64, offset: i64, size: u32, reply: ReplyData) {
+        dbg!(fuse_inode, fh, offset, size);
+        let inode = match fuse_inode_to_extfs_inode(fuse_inode) {
+            Some(inode) => inode,
+            None => {
+                reply.error(libc::ENOENT);
+                return
+            }
+        };
+        let offset = match u64::try_from(offset) {
+            Ok(offset) => offset,
+            Err(_) => {
+                // According to IEEE Std 1003.1-2017, the offset cannot be ready for regular files
+                // or block devices.
+                reply.error(libc::EINVAL);
+                return
+            }
+        };
+        if !extfs::block_group::inode_exists(inode, &mut self.inner).unwrap() {
+            reply.error(libc::ENOENT);
+            return
+        }
+
+        if !self.file_handles.contains_key(&fh) {
+            reply.error(libc::EBADF);
+            return
+        }
+
+        let inode_struct = Inode::load(&mut self.inner, inode).unwrap();
+        assert_eq!(inode_struct.ty, InodeType::File);
+        let inode_size = inode_struct.size(&self.inner.superblock);
+
+        // This will effectively be the size, but possibly reduced to prevent overflow.
+        let bytes_to_read = std::cmp::min(offset + u64::from(size), inode_size) - offset;
+
+        let mut buffer = vec![0u8; bytes_to_read.try_into().unwrap()];
+
+        inode_struct.read(&mut self.inner, offset, &mut buffer).unwrap();
+
+        reply.data(&buffer);
+    }
+    fn release(&mut self, _req: &Request, _fuse_inode: u64, fh: u64, _flags: u32, _lock_owned: u64, _flush: bool, reply: ReplyEmpty) {
+        if self.file_handles.remove(&fh).is_some() {
+            reply.ok();
+        } else {
+            reply.error(libc::EBADF);
+        }
     }
 }
