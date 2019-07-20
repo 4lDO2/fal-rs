@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    block_group, div_round_up, os_string_from_bytes, read_block, read_block_to, read_u16, read_u32, read_u8,
+    block_group, div_round_up, os_string_from_bytes, read_block, read_block_to, read_u16, read_u32, read_u8, round_up,
     superblock::Superblock, Filesystem,
 };
 
@@ -124,10 +124,6 @@ impl Inode {
         let containing_block = read_block(filesystem, containing_block_index)?;
         let inode_bytes = &containing_block
             [inode_index_in_block * inode_size..inode_index_in_block * inode_size + inode_size];
-
-        if inode_address == 344065 {
-            dbg!();
-        }
         Ok(Self::parse(inode_bytes))
     }
     pub fn parse(bytes: &[u8]) -> Self {
@@ -220,6 +216,7 @@ impl Inode {
             self.read(filesystem, current_entry_offset, &mut entry_bytes[..length])?;
 
             entries.push(DirEntry::parse(&filesystem.superblock, &entry_bytes));
+
             current_entry_offset += u64::try_from(length).unwrap();
         }
         Ok(entries)
@@ -244,20 +241,18 @@ impl Inode {
         if off_from_rel_block != 0 {
             self.read_block_to(rel_baddr_start.try_into().unwrap(), filesystem, &mut block_bytes)?;
 
-            {
-                let off_from_rel_block = usize::try_from(off_from_rel_block).unwrap();
-                let end = std::cmp::min(buffer.len(), usize::try_from(filesystem.superblock.block_size).unwrap() - off_from_rel_block);
-                buffer[..end].copy_from_slice(&block_bytes[off_from_rel_block..off_from_rel_block + end]);
-            }
+            let off_from_rel_block_usize = usize::try_from(off_from_rel_block).unwrap();
+            let end = std::cmp::min(buffer.len(), usize::try_from(filesystem.superblock.block_size).unwrap() - off_from_rel_block_usize);
+            buffer[..end].copy_from_slice(&block_bytes[off_from_rel_block_usize..off_from_rel_block_usize + end]);
 
             if u64::try_from(buffer.len()).unwrap() >= off_from_rel_block {
-                return self.read(filesystem, offset - off_from_rel_block, &mut buffer[off_from_rel_block.try_into().unwrap()..]);
+                return self.read(filesystem, round_up(offset, filesystem.superblock.block_size), &mut buffer[end..]);
             } else {
                 return Ok(())
             }
         }
 
-        let mut current_rel_baddr = 0;
+        let mut current_rel_baddr = u32::try_from(rel_baddr_start).unwrap();
 
         while buffer.len() >= usize::try_from(filesystem.superblock.block_size).unwrap() {
 
@@ -300,6 +295,9 @@ impl DirEntry {
             .position(|byte| byte == 0)
             .unwrap_or(name_bytes.len())];
         let name = os_string_from_bytes(name_bytes);
+        if name_bytes[0] == 's' as u8 {
+            std::io::stdout().write_all(bytes).unwrap();
+        }
         Self {
             inode: read_u32(bytes, 0),
             type_indicator: if let Some(extended) = superblock.extended.as_ref() {

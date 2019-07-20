@@ -5,7 +5,7 @@ use std::{
     fs,
     io::{self, prelude::*, SeekFrom},
     mem,
-    ops::{Add, Div, Rem},
+    ops::{Add, Div, Mul, Rem},
     path::{self, Path},
 };
 
@@ -74,6 +74,12 @@ where
     } else {
         numer / denom
     }
+}
+pub fn round_up<T>(number: T, to: T) -> T
+where
+    T: Add<Output = T> + Copy + Div<Output = T> + Mul<Output = T> + Rem<Output = T> + From<u8> + PartialEq,
+{
+    div_round_up(number, to) * number
 }
 
 fn os_string_from_bytes(bytes: &[u8]) -> OsString {

@@ -159,18 +159,16 @@ impl fuse::Filesystem for FuseFilesystem {
         reply.opened(fh, 0);
     }
     fn readdir(&mut self, _req: &Request, fuse_inode: u64, fh: u64, offset: i64, mut reply: ReplyDirectory) {
-        dbg!(offset);
-        let inode = match u32::try_from(fuse_inode) {
-            Ok(1) => 2,
-            Ok(inode) => inode,
-            Err(_) => {
+        let inode = match fuse_inode_to_extfs_inode(fuse_inode) {
+            Some(inode) => inode,
+            None => {
                 reply.error(libc::EMFILE);
                 return
             }
         };
         let file_handle = &mut self.file_handles.get_mut(&fh).unwrap();
 
-        assert_eq!(u64::from(inode), file_handle.inode);
+        assert_eq!(fuse_inode, file_handle.inode);
 
         let entries = Inode::load(&mut self.inner, inode).unwrap();
         if let Some(entry) = entries.ls(&mut self.inner).unwrap().into_iter().nth(file_handle.position as usize) {
