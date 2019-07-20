@@ -63,6 +63,7 @@ impl InodeType {
     pub fn from_type_and_perm(raw: u16) -> (Option<Self>, u16) {
         (
             match raw & Self::TYPE_MASK {
+                0x0000 => Some(InodeType::Unknown),
                 0x1000 => Some(InodeType::Fifo),
                 0x2000 => Some(InodeType::CharDev),
                 0x4000 => Some(InodeType::Dir),

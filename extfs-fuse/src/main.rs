@@ -6,6 +6,7 @@ mod filesystem;
 use filesystem::FuseFilesystem;
 
 fn main() {
+    env_logger::init();
     let app = App::new("Extfs fuse")
         .author(crate_authors!())
         .version(crate_version!())
