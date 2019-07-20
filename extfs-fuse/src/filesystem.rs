@@ -10,7 +10,7 @@ use fuse::{FileAttr, Request, ReplyAttr, ReplyEmpty, ReplyEntry, ReplyOpen, Repl
 use time::Timespec;
 
 struct FileHandle {
-    inode: u64,
+    inode: u32,
     position: u64,
     dir: bool,
 }
@@ -155,7 +155,7 @@ impl fuse::Filesystem for FuseFilesystem {
             }
         };
         let fh = self.fh();
-        self.file_handles.insert(fh, FileHandle { inode: u64::from(inode), position: 0, dir: true });
+        self.file_handles.insert(fh, FileHandle { inode, position: 0, dir: true });
         reply.opened(fh, 0);
     }
     fn readdir(&mut self, _req: &Request, fuse_inode: u64, fh: u64, offset: i64, mut reply: ReplyDirectory) {
@@ -168,7 +168,7 @@ impl fuse::Filesystem for FuseFilesystem {
         };
         let file_handle = &mut self.file_handles.get_mut(&fh).unwrap();
 
-        assert_eq!(fuse_inode, file_handle.inode);
+        assert_eq!(inode, file_handle.inode);
 
         let entries = Inode::load(&mut self.inner, inode).unwrap();
         if let Some(entry) = entries.ls(&mut self.inner).unwrap().into_iter().nth(file_handle.position as usize) {

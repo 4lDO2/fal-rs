@@ -295,9 +295,7 @@ impl DirEntry {
             .position(|byte| byte == 0)
             .unwrap_or(name_bytes.len())];
         let name = os_string_from_bytes(name_bytes);
-        if name_bytes[0] == 's' as u8 {
-            std::io::stdout().write_all(bytes).unwrap();
-        }
+
         Self {
             inode: read_u32(bytes, 0),
             type_indicator: if let Some(extended) = superblock.extended.as_ref() {
