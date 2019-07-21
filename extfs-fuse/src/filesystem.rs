@@ -84,7 +84,7 @@ impl fuse::Filesystem for FuseFilesystem {
         let inode = match fuse_inode_to_extfs_inode(fuse_inode) {
             Some(inode) => inode,
             None => {
-                reply.error(libc::EMFILE);
+                reply.error(libc::EOVERFLOW);
                 return
             }
         };
@@ -112,7 +112,7 @@ impl fuse::Filesystem for FuseFilesystem {
         let parent_inode = match fuse_inode_to_extfs_inode(parent_inode) {
             Some(inode) => inode,
             None => {
-                reply.error(libc::EMFILE);
+                reply.error(libc::EOVERFLOW);
                 return
             }
         };
@@ -154,7 +154,7 @@ impl fuse::Filesystem for FuseFilesystem {
         let inode = match fuse_inode_to_extfs_inode(fuse_inode) {
             Some(inode) => inode,
             None => {
-                reply.error(libc::EMFILE);
+                reply.error(libc::EOVERFLOW);
                 return
             }
         };
@@ -170,7 +170,7 @@ impl fuse::Filesystem for FuseFilesystem {
         let inode = match fuse_inode_to_extfs_inode(fuse_inode) {
             Some(inode) => inode,
             None => {
-                reply.error(libc::EMFILE);
+                reply.error(libc::EOVERFLOW);
                 return
             }
         };
@@ -207,7 +207,7 @@ impl fuse::Filesystem for FuseFilesystem {
         let inode = match fuse_inode_to_extfs_inode(fuse_inode) {
             Some(inode) => inode,
             None => {
-                reply.error(libc::EMFILE);
+                reply.error(libc::EOVERFLOW);
                 return
             }
         };
@@ -220,19 +220,18 @@ impl fuse::Filesystem for FuseFilesystem {
         reply.opened(fh, 0);
     }
     fn read(&mut self, _req: &Request, fuse_inode: u64, fh: u64, offset: i64, size: u32, reply: ReplyData) {
-        dbg!(fuse_inode, fh, offset, size);
         let inode = match fuse_inode_to_extfs_inode(fuse_inode) {
             Some(inode) => inode,
             None => {
-                reply.error(libc::ENOENT);
+                reply.error(libc::EOVERFLOW);
                 return
             }
         };
         let offset = match u64::try_from(offset) {
             Ok(offset) => offset,
             Err(_) => {
-                // According to IEEE Std 1003.1-2017, the offset cannot be ready for regular files
-                // or block devices.
+                // According to IEEE Std 1003.1-2017, the offset cannot be negative for regular files
+                // or block devices when using pread.
                 reply.error(libc::EINVAL);
                 return
             }

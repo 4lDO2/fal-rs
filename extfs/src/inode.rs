@@ -226,11 +226,12 @@ impl Inode {
             return Err(io::ErrorKind::UnexpectedEof.into())
         }
 
-        if rel_baddr <= u32::try_from(filesystem.superblock.block_size * u64::try_from(self.direct_ptrs.len()).unwrap()).unwrap()  {
-            read_block_to(filesystem, self.direct_ptrs[usize::try_from(rel_baddr).unwrap()], buffer)
+        let abs_baddr = if rel_baddr <= u32::try_from(self.direct_ptrs.len()).unwrap()  {
+            self.direct_ptrs[usize::try_from(rel_baddr).unwrap()]
         } else {
             unimplemented!()
-        }
+        };
+        read_block_to(filesystem, abs_baddr, buffer)
     }
     pub fn read<D: Read + Write + Seek>(&self, filesystem: &mut Filesystem<D>, offset: u64, mut buffer: &mut [u8]) -> io::Result<()> {
         let off_from_rel_block = offset % filesystem.superblock.block_size;
@@ -257,16 +258,15 @@ impl Inode {
         while buffer.len() >= usize::try_from(filesystem.superblock.block_size).unwrap() {
 
             self.read_block_to(current_rel_baddr, filesystem, &mut block_bytes)?;
+
             buffer[..usize::try_from(filesystem.superblock.block_size).unwrap()].copy_from_slice(&block_bytes);
 
-            if buffer.len() > usize::try_from(filesystem.superblock.block_size).unwrap() {
-                buffer = &mut buffer[usize::try_from(filesystem.superblock.block_size).unwrap()..];
-            }
+            buffer = &mut buffer[usize::try_from(filesystem.superblock.block_size).unwrap()..];
             current_rel_baddr += 1;
         }
 
         if buffer.len() != 0 {
-            self.read_block_to(current_rel_baddr.try_into().unwrap(), filesystem, &mut block_bytes)?;
+            self.read_block_to(current_rel_baddr, filesystem, &mut block_bytes)?;
             let buffer_len = buffer.len();
             buffer.copy_from_slice(&block_bytes[..buffer_len]);
         }
