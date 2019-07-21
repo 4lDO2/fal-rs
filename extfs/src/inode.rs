@@ -27,7 +27,7 @@ pub struct Inode {
     pub disk_sector_count: u32,
     pub flags: u32,
     pub os_specific_1: u32,
-    pub direct_ptrs: [u32; 12],
+    pub direct_ptrs: [u32; Self::DIRECT_PTR_COUNT],
     pub singly_indirect_ptr: u32,
     pub doubly_indirect_ptr: u32,
     pub triply_indirect_ptr: u32,
@@ -92,6 +92,8 @@ impl InodeType {
 }
 
 impl Inode {
+    const DIRECT_PTR_COUNT: usize = 12;
+
     pub fn load<R: Read + Seek + Write>(
         filesystem: &mut Filesystem<R>,
         inode_address: u32,
@@ -221,19 +223,42 @@ impl Inode {
         }
         Ok(entries)
     }
+    fn read_singly<D: Read + Seek>(filesystem: &mut Filesystem<D>, singly_baddr: u32, rel_baddr: u32) -> io::Result<u32> {
+        let singly_indirect_block_bytes = read_block(filesystem, singly_baddr)?;
+        let index = (rel_baddr as usize - Self::DIRECT_PTR_COUNT) % (filesystem.superblock.block_size as usize / mem::size_of::<u32>());
+        
+        Ok(read_u32(&singly_indirect_block_bytes, index * mem::size_of::<u32>()))
+    }
+    fn read_doubly<D: Read + Seek>(filesystem: &mut Filesystem<D>, doubly_baddr: u32, rel_baddr: u32) -> io::Result<u32> {
+        let doubly_indirect_block_bytes = read_block(filesystem, doubly_baddr)?;
+        let index = (rel_baddr as usize - Self::DIRECT_PTR_COUNT - filesystem.superblock.block_size as usize / mem::size_of::<u32>()) / (filesystem.superblock.block_size as usize / mem::size_of::<u32>());
+
+        let singly = read_u32(&doubly_indirect_block_bytes, index * mem::size_of::<u32>());
+        let singly_rel_baddr = rel_baddr - index as u32 * (filesystem.superblock.block_size as u32 / mem::size_of::<u32>() as u32);
+
+        Self::read_singly(filesystem, singly, singly_rel_baddr)
+    }
+    fn absolute_baddr<D: Read + Seek>(&self, filesystem: &mut Filesystem<D>, rel_baddr: u32) -> io::Result<u32> {
+        let direct_size = Self::DIRECT_PTR_COUNT as u32;
+        let singly_indir_size = direct_size + u32::try_from(filesystem.superblock.block_size).unwrap() / mem::size_of::<u32>() as u32;
+        let doubly_indir_size = direct_size + (u32::try_from(filesystem.superblock.block_size).unwrap() / mem::size_of::<u32>() as u32) + (u32::try_from(filesystem.superblock.block_size).unwrap() / mem::size_of::<u32>() as u32) * (u32::try_from(filesystem.superblock.block_size).unwrap() / mem::size_of::<u32>() as u32);
+
+        Ok(if rel_baddr < direct_size {
+            self.direct_ptrs[usize::try_from(rel_baddr).unwrap()]
+        } else if rel_baddr < singly_indir_size {
+            Self::read_singly(filesystem, self.singly_indirect_ptr, rel_baddr)?
+        } else if rel_baddr < doubly_indir_size {
+            Self::read_doubly(filesystem, self.doubly_indirect_ptr, rel_baddr)?
+        } else {
+            dbg!(rel_baddr);
+            unimplemented!()
+        })
+    }
     pub fn read_block_to<D: Read + Seek + Write>(&self, rel_baddr: u32, filesystem: &mut Filesystem<D>, buffer: &mut [u8]) -> io::Result<()> {
         if u64::from(rel_baddr) >= self.size_in_blocks(&filesystem.superblock) {
             return Err(io::ErrorKind::UnexpectedEof.into())
         }
-
-        let abs_baddr = if rel_baddr < u32::try_from(self.direct_ptrs.len()).unwrap()  {
-            self.direct_ptrs[usize::try_from(rel_baddr).unwrap()]
-        } else {
-            let singly_indirect_block_bytes = read_block(filesystem, self.singly_indirect_ptr)?;
-            let index = rel_baddr - self.direct_ptrs.len() as u32;
-            
-            read_u32(&singly_indirect_block_bytes, index as usize * mem::size_of::<u32>())
-        };
+        let abs_baddr = self.absolute_baddr(filesystem, rel_baddr)?;
         read_block_to(filesystem, abs_baddr, buffer)
     }
     pub fn read<D: Read + Write + Seek>(&self, filesystem: &mut Filesystem<D>, offset: u64, mut buffer: &mut [u8]) -> io::Result<()> {
