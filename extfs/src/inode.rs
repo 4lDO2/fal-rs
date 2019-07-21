@@ -226,10 +226,13 @@ impl Inode {
             return Err(io::ErrorKind::UnexpectedEof.into())
         }
 
-        let abs_baddr = if rel_baddr <= u32::try_from(self.direct_ptrs.len()).unwrap()  {
+        let abs_baddr = if rel_baddr < u32::try_from(self.direct_ptrs.len()).unwrap()  {
             self.direct_ptrs[usize::try_from(rel_baddr).unwrap()]
         } else {
-            unimplemented!()
+            let singly_indirect_block_bytes = read_block(filesystem, self.singly_indirect_ptr)?;
+            let index = rel_baddr - self.direct_ptrs.len() as u32;
+            
+            read_u32(&singly_indirect_block_bytes, index as usize * mem::size_of::<u32>())
         };
         read_block_to(filesystem, abs_baddr, buffer)
     }
