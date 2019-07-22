@@ -11,8 +11,8 @@ use time::Timespec;
 
 struct FileHandle {
     inode: u32,
+    inode_struct: Inode,
     position: u64,
-    dir: bool,
 }
 
 pub struct FuseFilesystem {
@@ -123,8 +123,8 @@ impl fuse::Filesystem for FuseFilesystem {
 
         let inode_struct = match Inode::load(&mut self.inner, parent_inode) {
             Ok(inode_struct) => inode_struct,
-            Err(error) => {
-                reply.error(error.raw_os_error().unwrap()); // FIXME
+            Err(_) => {
+                reply.error(libc::EIO);
                 return
             }
         };
@@ -138,7 +138,10 @@ impl fuse::Filesystem for FuseFilesystem {
 
         let entry_inode_struct = match Inode::load(&mut self.inner, entry.inode) {
             Ok(inode) => inode,
-            error => error.unwrap(), // FIXME
+            Err(_) => {
+                reply.error(libc::EIO); 
+                return
+            }
         };
 
         let dir_attributes = self.file_attributes(entry.inode, &entry_inode_struct);
@@ -159,8 +162,19 @@ impl fuse::Filesystem for FuseFilesystem {
             reply.error(libc::ENOENT);
             return
         }
+        let inode_struct = match Inode::load(&mut self.inner, inode) {
+            Ok(inode_struct) => inode_struct,
+            Err(_) => {
+                reply.error(libc::EIO);
+                return
+            }
+        };
+        if inode_struct.ty != InodeType::Dir {
+            reply.error(libc::ENOTDIR);
+            return
+        }
         let fh = self.fh();
-        self.file_handles.insert(fh, FileHandle { inode, position: 0, dir: true });
+        self.file_handles.insert(fh, FileHandle { inode, position: 0, inode_struct });
         reply.opened(fh, 0);
     }
     fn readdir(&mut self, _req: &Request, fuse_inode: u64, fh: u64, offset: i64, mut reply: ReplyDirectory) {
@@ -185,8 +199,7 @@ impl fuse::Filesystem for FuseFilesystem {
 
         assert_eq!(inode, file_handle.inode);
 
-        let entries = Inode::load(&mut self.inner, inode).unwrap();
-        if let Some(entry) = entries.dir_entries(&mut self.inner).unwrap().nth(file_handle.position as usize) {
+        if let Some(entry) = file_handle.inode_struct.dir_entries(&mut self.inner).unwrap().nth(file_handle.position as usize) {
             let new_position = i64::try_from(file_handle.position).unwrap() + offset;
             file_handle.position = u64::try_from(new_position).unwrap();
             reply.add(fuse_inode_from_extfs_inode(entry.inode), 1, fuse_filetype(Inode::load(&mut self.inner, entry.inode).unwrap().ty), entry.name);
@@ -212,8 +225,15 @@ impl fuse::Filesystem for FuseFilesystem {
             reply.error(libc::ENOENT);
             return
         }
+        let inode_struct = match Inode::load(&mut self.inner, inode) {
+            Ok(inode_struct) => inode_struct,
+            Err(_) => {
+                reply.error(libc::EIO);
+                return
+            }
+        };
         let fh = self.fh();
-        self.file_handles.insert(fh, FileHandle { inode, position: 0, dir: false });
+        self.file_handles.insert(fh, FileHandle { inode, position: 0, inode_struct });
         reply.opened(fh, 0);
     }
     fn read(&mut self, _req: &Request, fuse_inode: u64, fh: u64, offset: i64, size: u32, reply: ReplyData) {
@@ -238,21 +258,22 @@ impl fuse::Filesystem for FuseFilesystem {
             return
         }
 
-        if !self.file_handles.contains_key(&fh) {
-            reply.error(libc::EBADF);
-            return
-        }
+        let file_handle = match self.file_handles.get(&fh) {
+            Some(file_handle) => file_handle,
+            None => {
+                reply.error(libc::EBADF);
+                return
+            }
+        };
 
-        let inode_struct = Inode::load(&mut self.inner, inode).unwrap();
-        assert_eq!(inode_struct.ty, InodeType::File);
-        let inode_size = inode_struct.size(&self.inner.superblock);
+        let inode_size = file_handle.inode_struct.size(&self.inner.superblock);
 
         // This will effectively be the size, but possibly reduced to prevent overflow.
         let bytes_to_read = std::cmp::min(offset + u64::from(size), inode_size) - offset;
 
         let mut buffer = vec![0u8; bytes_to_read.try_into().unwrap()];
 
-        inode_struct.read(&mut self.inner, offset, &mut buffer).unwrap();
+        file_handle.inode_struct.read(&mut self.inner, offset, &mut buffer).unwrap();
 
         reply.data(&buffer);
     }
