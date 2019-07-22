@@ -128,10 +128,7 @@ impl fuse::Filesystem for FuseFilesystem {
                 return
             }
         };
-        let entries = inode_struct.ls(&mut self.inner).unwrap();
-
-        // TODO: Give the inode a lookup function, instead of storing every value into a vec.
-        let entry = match entries.iter().find(|entry| entry.name == name) {
+        let entry = match inode_struct.dir_entries(&mut self.inner).unwrap().find(|entry| entry.name == name) {
             Some(entry) => entry,
             None => {
                 reply.error(libc::ENOENT);
@@ -189,7 +186,7 @@ impl fuse::Filesystem for FuseFilesystem {
         assert_eq!(inode, file_handle.inode);
 
         let entries = Inode::load(&mut self.inner, inode).unwrap();
-        if let Some(entry) = entries.ls(&mut self.inner).unwrap().into_iter().nth(file_handle.position as usize) {
+        if let Some(entry) = entries.dir_entries(&mut self.inner).unwrap().nth(file_handle.position as usize) {
             let new_position = i64::try_from(file_handle.position).unwrap() + offset;
             file_handle.position = u64::try_from(new_position).unwrap();
             reply.add(fuse_inode_from_extfs_inode(entry.inode), 1, fuse_filetype(Inode::load(&mut self.inner, entry.inode).unwrap().ty), entry.name);

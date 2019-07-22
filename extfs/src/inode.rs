@@ -184,45 +184,6 @@ impl Inode {
     pub fn size_in_blocks(&self, superblock: &Superblock) -> u64 {
         div_round_up(self.size(superblock), superblock.block_size)
     }
-    pub fn ls<D: Read + Seek + Write>(
-        &self,
-        filesystem: &mut Filesystem<D>,
-    ) -> io::Result<Vec<DirEntry>> {
-        if self.ty != InodeType::Dir {
-            // TODO: ENOTDIR
-            return Err(io::Error::from(io::ErrorKind::InvalidInput));
-        }
-
-        let size = self.size(&filesystem.superblock);
-
-        if size == 0 {
-            return Ok(vec! [])
-        }
-
-        let mut entries = vec! [];
-
-        let mut current_entry_offset = 0;
-
-        let mut entry_bytes = vec! [0; 6];
-
-        while current_entry_offset < size {
-            entry_bytes.clear();
-            entry_bytes.resize(6, 0);
-
-            self.read(filesystem, current_entry_offset, &mut entry_bytes[..6])?;
-            let length = DirEntry::length(&entry_bytes[0..6]).try_into().unwrap();
-
-            if length == 0 { break } // TODO: Assuming the entry with length 0 is the last one, is this correct?
-
-            entry_bytes.resize(length, 0);
-            self.read(filesystem, current_entry_offset, &mut entry_bytes[..length])?;
-
-            entries.push(DirEntry::parse(&filesystem.superblock, &entry_bytes));
-
-            current_entry_offset += u64::try_from(length).unwrap();
-        }
-        Ok(entries)
-    }
     fn entry_count(block_size: u64) -> usize {
         block_size as usize / mem::size_of::<u32>()
     }
@@ -320,6 +281,69 @@ impl Inode {
         }
 
         Ok(())
+    }
+    pub fn dir_entries<'a, D: Read + Seek>(&'a self, filesystem: &'a mut Filesystem<D>) -> io::Result<DirIterator<'a, D>> {
+        if self.ty != InodeType::Dir {
+            // TODO: ENOTDIR
+            return Err(io::Error::from(io::ErrorKind::InvalidInput));
+        }
+        Ok(DirIterator {
+            filesystem,
+            inode_struct: self,
+            current_entry_offset: 0,
+            entry_bytes: vec![0; 6],
+            finished: false,
+        })
+    }
+}
+pub struct DirIterator<'a, D> {
+    filesystem: &'a mut Filesystem<D>,
+    inode_struct: &'a Inode,
+    current_entry_offset: u64,
+    entry_bytes: Vec<u8>,
+    finished: bool,
+}
+impl<'a, D: Read + Seek + Write> Iterator for DirIterator<'a, D> {
+    type Item = DirEntry;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.finished { return None }
+
+        let size = self.inode_struct.size(&self.filesystem.superblock);
+
+        if size == 0 {
+            self.finished = true;
+            return None
+        }
+
+        if self.current_entry_offset + 6 < size {
+            self.entry_bytes.clear();
+            self.entry_bytes.resize(6, 0);
+
+            if self.inode_struct.read(self.filesystem, self.current_entry_offset, &mut self.entry_bytes[..6]).is_err() {
+                self.finished = true;
+                return None
+            }
+            let length = DirEntry::length(&self.entry_bytes[0..6]).try_into().unwrap();
+
+            if length == 0 { 
+                self.finished = true;
+                return None
+            }
+
+            self.entry_bytes.resize(length, 0);
+            if self.inode_struct.read(self.filesystem, self.current_entry_offset, &mut self.entry_bytes[..length]).is_err() {
+                self.finished = true;
+                return None
+            }
+
+            let entry = DirEntry::parse(&self.filesystem.superblock, &self.entry_bytes);
+
+            self.current_entry_offset += u64::try_from(length).unwrap();
+            return Some(entry)
+        } else {
+            self.finished = true;
+            return None
+        }
     }
 }
 

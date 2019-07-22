@@ -1,12 +1,9 @@
 use std::{
     convert::TryInto,
-    env,
-    ffi::{OsStr, OsString},
-    fs,
+    ffi::OsString,
     io::{self, prelude::*, SeekFrom},
     mem,
     ops::{Add, Div, Mul, Rem},
-    path::{self, Path},
 };
 
 use uuid::Uuid;
@@ -105,109 +102,4 @@ impl<D: Read + Seek + Write> Filesystem<D> {
             device,
         })
     }
-    fn open_inode_raw<'a>(
-        &mut self,
-        parent: Inode,
-        components: &[&OsStr],
-    ) -> io::Result<inode::Inode> {
-        if components.is_empty() {
-            return Ok(parent);
-        }
-        let entries = parent.ls(self)?;
-
-        if let Some(entry) = entries.iter().find(|entry| entry.name == components[0]) {
-            let inode = Inode::load(self, entry.inode)?;
-            self.open_inode_raw(inode, &components[1..])
-        } else {
-            Err(io::Error::from(io::ErrorKind::NotFound))
-        }
-    }
-    pub fn open_inode<P: AsRef<Path>>(&mut self, path: P) -> io::Result<inode::Inode> {
-        let root = Inode::load(self, inode::ROOT)?;
-
-        let mut components = path.as_ref().components();
-
-        let components = match components.next() {
-            Some(path::Component::RootDir) => {
-                let mut component_names = vec![];
-
-                for component in components {
-                    match component {
-                        path::Component::Normal(string) => component_names.push(string),
-                        _ => {
-                            return Err(io::Error::new(
-                                io::ErrorKind::NotFound,
-                                "expected a normal path component",
-                            ))
-                        }
-                    }
-                }
-
-                component_names
-            }
-            Some(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "only absolute paths are supported",
-                ))
-            }
-            None => return Err(io::Error::new(io::ErrorKind::NotFound, "empty path")),
-        };
-        self.open_inode_raw(root, &components)
-    }
-}
-
-fn main() {
-    let file = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(env::args().nth(1).unwrap())
-        .unwrap();
-
-    let mut filesystem = Filesystem::mount(file).unwrap();
-
-    eprintln!("{:?}", filesystem.superblock);
-    eprintln!(
-        "Block group count: {}.",
-        filesystem.superblock.block_group_count()
-    );
-
-    let root_inode_block_group =
-        block_group::inode_block_group_index(&filesystem.superblock, inode::ROOT);
-    eprintln!(
-        "Root block group: {:?}",
-        block_group::load_block_group_descriptor(&mut filesystem, root_inode_block_group).unwrap()
-    );
-    let inode = inode::Inode::load(&mut filesystem, inode::ROOT).unwrap();
-    eprintln!("Root inode info: {:?}", inode);
-
-    fn recursion(inode: inode::Inode, filesystem: &mut Filesystem<impl Read + Seek + Write>) {
-        if inode.ty == inode::InodeType::Dir {
-            eprintln!("Recursion {{");
-            for entry in inode.ls(filesystem).unwrap() {
-                let name = entry.name.to_string_lossy();
-                if name == "." || name == ".." {
-                    continue;
-                }
-                let inode_struct = match inode::Inode::load(filesystem, entry.inode) {
-                    Ok(inode_struct) => inode_struct,
-                    Err(_) => continue,
-                };
-                eprintln!(
-                    "{} => {} ({} bytes large)",
-                    name,
-                    entry.inode,
-                    inode_struct.size(&filesystem.superblock)
-                );
-
-                recursion(inode_struct, filesystem);
-            }
-            eprintln!("}}");
-        }
-    }
-    eprintln!("/");
-    recursion(
-        inode::Inode::load(&mut filesystem, inode::ROOT).unwrap(),
-        &mut filesystem,
-    );
 }
