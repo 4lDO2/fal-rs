@@ -223,25 +223,44 @@ impl Inode {
         }
         Ok(entries)
     }
+    fn entry_count(block_size: u64) -> usize {
+        block_size as usize / mem::size_of::<u32>()
+    }
     fn read_singly<D: Read + Seek>(filesystem: &mut Filesystem<D>, singly_baddr: u32, rel_baddr: u32) -> io::Result<u32> {
         let singly_indirect_block_bytes = read_block(filesystem, singly_baddr)?;
-        let index = (rel_baddr as usize - Self::DIRECT_PTR_COUNT) % (filesystem.superblock.block_size as usize / mem::size_of::<u32>());
-        
+        let index = rel_baddr as usize - Self::DIRECT_PTR_COUNT;
+
         Ok(read_u32(&singly_indirect_block_bytes, index * mem::size_of::<u32>()))
     }
     fn read_doubly<D: Read + Seek>(filesystem: &mut Filesystem<D>, doubly_baddr: u32, rel_baddr: u32) -> io::Result<u32> {
+        let entry_count = Self::entry_count(filesystem.superblock.block_size);
+
         let doubly_indirect_block_bytes = read_block(filesystem, doubly_baddr)?;
-        let index = (rel_baddr as usize - Self::DIRECT_PTR_COUNT - filesystem.superblock.block_size as usize / mem::size_of::<u32>()) / (filesystem.superblock.block_size as usize / mem::size_of::<u32>());
+        let index = (rel_baddr as usize - Self::DIRECT_PTR_COUNT - entry_count) / entry_count;
 
         let singly = read_u32(&doubly_indirect_block_bytes, index * mem::size_of::<u32>());
-        let singly_rel_baddr = rel_baddr - index as u32 * (filesystem.superblock.block_size as u32 / mem::size_of::<u32>() as u32);
+        let singly_rel_baddr = rel_baddr - (index as u32 + 1) * entry_count as u32;
 
         Self::read_singly(filesystem, singly, singly_rel_baddr)
     }
+    fn read_triply<D: Read + Seek>(filesystem: &mut Filesystem<D>, triply_baddr: u32, rel_baddr: u32) -> io::Result<u32> {
+        let entry_count = Self::entry_count(filesystem.superblock.block_size);
+
+        let triply_indirect_block_bytes = read_block(filesystem, triply_baddr)?;
+        let index = (rel_baddr as usize - Self::DIRECT_PTR_COUNT - entry_count - entry_count * entry_count) / (entry_count * entry_count);
+
+        let doubly = read_u32(&triply_indirect_block_bytes, index * mem::size_of::<u32>());
+        let doubly_rel_baddr = rel_baddr - (index as u32 + 1) * entry_count as u32 * entry_count as u32;
+
+        Self::read_doubly(filesystem, doubly, doubly_rel_baddr)
+    }
     fn absolute_baddr<D: Read + Seek>(&self, filesystem: &mut Filesystem<D>, rel_baddr: u32) -> io::Result<u32> {
+        let entry_count = Self::entry_count(filesystem.superblock.block_size) as u32;
+
         let direct_size = Self::DIRECT_PTR_COUNT as u32;
-        let singly_indir_size = direct_size + u32::try_from(filesystem.superblock.block_size).unwrap() / mem::size_of::<u32>() as u32;
-        let doubly_indir_size = direct_size + (u32::try_from(filesystem.superblock.block_size).unwrap() / mem::size_of::<u32>() as u32) + (u32::try_from(filesystem.superblock.block_size).unwrap() / mem::size_of::<u32>() as u32) * (u32::try_from(filesystem.superblock.block_size).unwrap() / mem::size_of::<u32>() as u32);
+        let singly_indir_size = direct_size + entry_count;
+        let doubly_indir_size = singly_indir_size + entry_count * entry_count;
+        let triply_indir_size = doubly_indir_size + entry_count * entry_count * entry_count;
 
         Ok(if rel_baddr < direct_size {
             self.direct_ptrs[usize::try_from(rel_baddr).unwrap()]
@@ -249,9 +268,10 @@ impl Inode {
             Self::read_singly(filesystem, self.singly_indirect_ptr, rel_baddr)?
         } else if rel_baddr < doubly_indir_size {
             Self::read_doubly(filesystem, self.doubly_indirect_ptr, rel_baddr)?
+        } else if rel_baddr < triply_indir_size {
+            Self::read_triply(filesystem, self.triply_indirect_ptr, rel_baddr)?
         } else {
-            dbg!(rel_baddr);
-            unimplemented!()
+            panic!("Read exceeding maximum ext2 file size.");
         })
     }
     pub fn read_block_to<D: Read + Seek + Write>(&self, rel_baddr: u32, filesystem: &mut Filesystem<D>, buffer: &mut [u8]) -> io::Result<()> {
