@@ -235,14 +235,14 @@ impl Inode {
             panic!("Read exceeding maximum ext2 file size.");
         })
     }
-    pub fn read_block_to<D: Read + Seek + Write>(&self, rel_baddr: u32, filesystem: &mut Filesystem<D>, buffer: &mut [u8]) -> io::Result<()> {
+    pub fn read_block_to<D: Read + Seek>(&self, rel_baddr: u32, filesystem: &mut Filesystem<D>, buffer: &mut [u8]) -> io::Result<()> {
         if u64::from(rel_baddr) >= self.size_in_blocks(&filesystem.superblock) {
             return Err(io::ErrorKind::UnexpectedEof.into())
         }
         let abs_baddr = self.absolute_baddr(filesystem, rel_baddr)?;
         read_block_to(filesystem, abs_baddr, buffer)
     }
-    pub fn read<D: Read + Write + Seek>(&self, filesystem: &mut Filesystem<D>, offset: u64, mut buffer: &mut [u8]) -> io::Result<()> {
+    pub fn read<D: Read + Seek>(&self, filesystem: &mut Filesystem<D>, offset: u64, mut buffer: &mut [u8]) -> io::Result<()> {
         let off_from_rel_block = offset % filesystem.superblock.block_size;
         let rel_baddr_start = offset / filesystem.superblock.block_size;
 
@@ -294,6 +294,29 @@ impl Inode {
             entry_bytes: vec![0; 6],
             finished: false,
         })
+    }
+    pub fn with_symlink_target<D: Read + Seek, F: FnOnce(io::Result<&[u8]>) -> ()>(&self, filesystem: &mut Filesystem<D>, handler: F) {
+        let size = self.size(&filesystem.superblock);
+
+        if size <= 60 {
+            // fast symlink
+
+            let mut bytes = [0u8; 60];
+            let stride = mem::size_of::<u32>();
+            for (index, value) in self.direct_ptrs.iter().chain(&[self.singly_indirect_ptr, self.doubly_indirect_ptr, self.triply_indirect_ptr]).enumerate() {
+                bytes[index * stride .. (index + 1) * stride ].copy_from_slice(&value.to_le_bytes());
+            }
+            handler(Ok(&bytes));
+        } else {
+            // slow symlink
+
+            // TODO: Waiting for try_reserve (https://github.com/rust-lang/rust/issues/48043).
+            let mut bytes = vec![0u8; size.try_into().unwrap()];
+            match self.read(filesystem, 0, &mut bytes) {
+                Ok(()) => handler(Ok(&bytes)),
+                Err(error) => handler(Err(error)),
+            }
+        }
     }
 }
 pub struct DirIterator<'a, D> {

@@ -284,4 +284,32 @@ impl fuse::Filesystem for FuseFilesystem {
             reply.error(libc::EBADF);
         }
     }
+    fn readlink(&mut self, _req: &Request, fuse_inode: u64, reply: ReplyData) {
+        let inode = match fuse_inode_to_extfs_inode(fuse_inode) {
+            Some(inode) => inode,
+            None => {
+                reply.error(libc::EOVERFLOW);
+                return
+            }
+        };
+        if !extfs::block_group::inode_exists(inode, &mut self.inner).unwrap() {
+            reply.error(libc::ENOENT);
+            return
+        }
+        let inode_struct = match Inode::load(&mut self.inner, inode) {
+            Ok(inode_struct) => inode_struct,
+            Err(_) => {
+                reply.error(libc::EIO);
+                return
+            }
+        };
+        if inode_struct.ty != InodeType::Symlink {
+            reply.error(libc::EINVAL);
+            return
+        }
+        inode_struct.with_symlink_target(&mut self.inner, |result| match result {
+            Ok(data) => reply.data(data),
+            Err(_) => reply.error(libc::EIO),
+        });
+    }
 }
