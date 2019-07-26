@@ -15,42 +15,8 @@ pub mod superblock;
 pub use inode::Inode;
 pub use superblock::Superblock;
 
-fn read_uuid(block: &[u8], offset: usize) -> Uuid {
-    let mut bytes = [0u8; 16];
-    bytes.copy_from_slice(&block[offset..offset + 16]);
-    uuid::builder::Builder::from_bytes(bytes).build()
-}
-fn read_u32(block: &[u8], offset: usize) -> u32 {
-    let mut bytes = [0u8; mem::size_of::<u32>()];
-    bytes.copy_from_slice(&block[offset..offset + mem::size_of::<u32>()]);
-    u32::from_le_bytes(bytes)
-}
-fn read_u16(block: &[u8], offset: usize) -> u16 {
-    let mut bytes = [0u8; mem::size_of::<u16>()];
-    bytes.copy_from_slice(&block[offset..offset + mem::size_of::<u16>()]);
-    u16::from_le_bytes(bytes)
-}
-fn read_u8(block: &[u8], offset: usize) -> u8 {
-    let mut bytes = [0u8; mem::size_of::<u8>()];
-    bytes.copy_from_slice(&block[offset..offset + mem::size_of::<u8>()]);
-    u8::from_le_bytes(bytes)
-}
-fn write_uuid(block: &mut [u8], offset: usize, uuid: &Uuid) {
-    let bytes = uuid.as_bytes();
-    block[offset..offset + bytes.len()].copy_from_slice(bytes);
-}
-fn write_u32(block: &mut [u8], offset: usize, number: u32) {
-    let bytes = number.to_le_bytes();
-    block[offset..offset + bytes.len()].copy_from_slice(&bytes)
-}
-fn write_u16(block: &mut [u8], offset: usize, number: u16) {
-    let bytes = number.to_le_bytes();
-    block[offset..offset + bytes.len()].copy_from_slice(&bytes)
-}
-fn write_u8(block: &mut [u8], offset: usize, number: u8) {
-    let bytes = number.to_le_bytes();
-    block[offset..offset + bytes.len()].copy_from_slice(&bytes)
-}
+pub use fs_core::{read_u8, read_u16, read_u32, read_u64, read_uuid, write_u8, write_u16, write_u32, write_u64, write_uuid};
+
 fn read_block_to<D: Read + Seek>(
     filesystem: &mut Filesystem<D>,
     block_address: u32,
