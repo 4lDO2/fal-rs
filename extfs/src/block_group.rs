@@ -61,7 +61,7 @@ pub fn inode_block_group_index(superblock: &superblock::Superblock, inode: u32) 
 pub fn inode_index_inside_group(superblock: &superblock::Superblock, inode: u32) -> u32 {
     (inode - 1) % superblock.inodes_per_group
 }
-pub fn inode_exists<D: Read + Seek + Write>(
+pub fn inode_exists<D: Read + Seek>(
     inode: u32,
     filesystem: &mut Filesystem<D>,
 ) -> io::Result<bool> {
@@ -88,6 +88,9 @@ pub fn inode_exists<D: Read + Seek + Write>(
     let bm_bit = 1 << ((inode - 1) % 8);
 
     Ok(bm_byte & bm_bit != 0)
+}
+pub fn free_inode<D: Read + Seek + Write>(_inode: u32, _filesystem: &mut Filesystem<D>) -> io::Result<()> {
+    unimplemented!()
 }
 pub fn block_exists<D: Read + Seek>(
     baddr: u32,

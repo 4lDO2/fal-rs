@@ -35,6 +35,22 @@ fn read_u8(block: &[u8], offset: usize) -> u8 {
     bytes.copy_from_slice(&block[offset..offset + mem::size_of::<u8>()]);
     u8::from_le_bytes(bytes)
 }
+fn write_uuid(block: &mut [u8], offset: usize, uuid: &Uuid) {
+    let bytes = uuid.as_bytes();
+    block[offset..offset + bytes.len()].copy_from_slice(bytes);
+}
+fn write_u32(block: &mut [u8], offset: usize, number: u32) {
+    let bytes = number.to_le_bytes();
+    block[offset..offset + bytes.len()].copy_from_slice(&bytes)
+}
+fn write_u16(block: &mut [u8], offset: usize, number: u16) {
+    let bytes = number.to_le_bytes();
+    block[offset..offset + bytes.len()].copy_from_slice(&bytes)
+}
+fn write_u8(block: &mut [u8], offset: usize, number: u8) {
+    let bytes = number.to_le_bytes();
+    block[offset..offset + bytes.len()].copy_from_slice(&bytes)
+}
 fn read_block_to<D: Read + Seek>(
     filesystem: &mut Filesystem<D>,
     block_address: u32,
@@ -61,6 +77,15 @@ fn read_block<D: Read + Seek>(
     let mut vector = vec![0; filesystem.superblock.block_size.try_into().unwrap()];
     read_block_to(filesystem, block_address, &mut vector)?;
     Ok(vector.into_boxed_slice())
+}
+fn write_block_raw<D: Read + Seek + Write>(filesystem: &mut Filesystem<D>, block_address: u32, buffer: &[u8]) -> io::Result<()> {
+    filesystem.device.seek(SeekFrom::Start(block_address as u64 * filesystem.superblock.block_size))?;
+    filesystem.device.write_all(buffer)?;
+    Ok(())
+}
+fn write_block<D: Read + Seek + Write>(filesystem: &mut Filesystem<D>, block_address: u32, buffer: &[u8]) -> io::Result<()> {
+    debug_assert!(block_group::block_exists(block_address, filesystem)?);
+    write_block_raw(filesystem, block_address, buffer)
 }
 fn div_round_up<T>(numer: T, denom: T) -> T
 where

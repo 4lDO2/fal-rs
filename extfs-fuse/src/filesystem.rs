@@ -312,4 +312,55 @@ impl fuse::Filesystem for FuseFilesystem {
             Err(_) => reply.error(libc::EIO),
         });
     }
+    fn unlink(&mut self, _req: &Request, fuse_parent: u64, name: &OsStr, reply: ReplyEmpty) {
+        let parent = match fuse_inode_to_extfs_inode(fuse_parent) {
+            Some(parent) => parent,
+            None => {
+                reply.error(libc::EOVERFLOW);
+                return
+            }
+        };
+        let parent_struct = match Inode::load(&mut self.inner, parent) {
+            Ok(parent_struct) => parent_struct,
+            Err(_) => {
+                reply.error(libc::EIO);
+                return
+            }
+        };
+        let mut dir_entries = match parent_struct.dir_entries(&mut self.inner) {
+            Ok(dir_entries) => dir_entries,
+            Err(_) => {
+                reply.error(libc::EIO);
+                return
+            }
+        };
+        let inode = match dir_entries.find(|dir_entry| dir_entry.name == name) {
+            Some(dir_entry) => dir_entry.inode,
+            None => {
+                reply.error(libc::ENOENT);
+                return
+            }
+        };
+        let mut inode_struct = match Inode::load(&mut self.inner, inode) {
+            Ok(inode_struct) => inode_struct,
+            Err(_) => {
+                reply.error(libc::EIO);
+                return
+            }
+        };
+        match inode_struct.remove_entry(&mut self.inner, name) {
+            Ok(()) => (),
+            Err(_) => {
+                reply.error(libc::EIO);
+                return
+            }
+        };
+        match Inode::store(&inode_struct, &mut self.inner, inode) {
+            Ok(()) => (),
+            Err(_) => {
+                reply.error(libc::EIO);
+                return
+            }
+        }
+    }
 }
