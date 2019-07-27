@@ -1,4 +1,5 @@
 use std::{
+    ffi::CString,
     fs::File,
     io::{prelude::*, SeekFrom},
 };
@@ -45,6 +46,7 @@ pub struct Superblock {
     log_root_level: u8,
 
     device_properties: DeviceProperties,
+    device_label: CString, // TODO: Is this really a C string?
 }
 #[derive(Debug)]
 pub struct DeviceProperties {
@@ -164,6 +166,13 @@ impl Superblock {
             }
         };
 
+        let device_label = {
+            let label_bytes = &block[299..554];
+            let nul_position = label_bytes.iter().copied().position(|byte| byte == 0).unwrap();
+            let label_bytes_to_nul = &label_bytes[..nul_position];
+            CString::new(label_bytes_to_nul).unwrap()
+        };
+
         Self {
             checksum,
             fs_id,
@@ -193,6 +202,7 @@ impl Superblock {
             chunk_root_level,
             log_root_level,
             device_properties,
+            device_label,
         }
     }
 }
