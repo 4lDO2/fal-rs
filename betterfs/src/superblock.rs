@@ -3,7 +3,7 @@ use std::{
     io::{prelude::*, SeekFrom},
 };
 
-use fs_core::{read_u32, read_u64, read_uuid};
+use fs_core::{read_u8, read_u16, read_u32, read_u64, read_uuid};
 
 const SUPERBLOCK_OFFSET: u64 = 65536;
 const CHECKSUM_SIZE: usize = 32;
@@ -37,6 +37,12 @@ pub struct Superblock {
     optional_flags: u64,
     flags_for_write_support: u64,
     required_flags: u64,
+
+    checksum_type: u16,
+
+    root_level: u8,
+    chunk_root_level: u8,
+    log_root_level: u8,
 }
 
 impl Superblock {
@@ -77,6 +83,12 @@ impl Superblock {
         let flags_for_write_support = read_u64(&block, 180);
         let required_flags = read_u64(&block, 188);
 
+        let checksum_type = read_u16(&block, 196);
+
+        let root_level = read_u8(&block, 198);
+        let chunk_root_level = read_u8(&block, 199);
+        let log_root_level = read_u8(&block, 200);
+
         Self {
             checksum,
             fs_id,
@@ -101,6 +113,10 @@ impl Superblock {
             optional_flags,
             flags_for_write_support,
             required_flags,
+            checksum_type,
+            root_level,
+            chunk_root_level,
+            log_root_level,
         }
     }
 }
