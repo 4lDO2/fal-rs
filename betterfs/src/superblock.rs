@@ -38,11 +38,50 @@ pub struct Superblock {
     flags_for_write_support: u64,
     required_flags: u64,
 
-    checksum_type: u16,
+    checksum_type: ChecksumType,
 
     root_level: u8,
     chunk_root_level: u8,
     log_root_level: u8,
+
+    device_properties: DeviceProperties,
+}
+#[derive(Debug)]
+pub struct DeviceProperties {
+    id: u64,
+    size: u64,
+    bytes_used: u64,
+    io_alignment: u32,
+    io_width: u32,
+    sector_size: u32,
+    type_and_info: u64,
+    generation: u64,
+    start_byte: u64,
+    group: u32,
+    seek_speed: u8,
+    bandwidth: u8,
+    uuid: uuid::Uuid,
+    fs_uuid: uuid::Uuid,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ChecksumType {
+    Crc32,
+}
+impl ChecksumType {
+    const CRC32_RAW: u16 = 0;
+
+    pub fn from_raw(raw: u16) -> Option<Self> {
+        match raw {
+            Self::CRC32_RAW => Some(ChecksumType::Crc32),
+            _ => None,
+        }
+    }
+    pub fn to_raw(this: Self) -> u16 {
+        match this {
+            ChecksumType::Crc32 => Self::CRC32_RAW,
+        }
+    }
 }
 
 impl Superblock {
@@ -83,11 +122,47 @@ impl Superblock {
         let flags_for_write_support = read_u64(&block, 180);
         let required_flags = read_u64(&block, 188);
 
-        let checksum_type = read_u16(&block, 196);
+        let checksum_type = ChecksumType::from_raw(read_u16(&block, 196)).unwrap();
 
         let root_level = read_u8(&block, 198);
         let chunk_root_level = read_u8(&block, 199);
         let log_root_level = read_u8(&block, 200);
+
+        let device_properties = {
+            let id = read_u64(&block, 201);
+            let size = read_u64(&block, 209);
+            let bytes_used = read_u64(&block, 217);
+            let io_alignment = read_u32(&block, 225);
+            let io_width = read_u32(&block, 229);
+            let sector_size = read_u32(&block, 233);
+            let type_and_info = read_u64(&block, 237);
+            let generation = read_u64(&block, 245);
+            let start_byte = read_u64(&block, 253);
+            let group = read_u32(&block, 261);
+            let seek_speed = read_u8(&block, 265);
+            let bandwidth = read_u8(&block, 266);
+            let device_uuid = read_uuid(&block, 267);
+            let fs_uuid = read_uuid(&block, 283);
+
+            assert_eq!(fs_uuid, fs_id);
+
+            DeviceProperties {
+                id,
+                size,
+                bytes_used,
+                io_alignment,
+                io_width,
+                sector_size,
+                type_and_info,
+                generation,
+                start_byte,
+                group,
+                seek_speed,
+                bandwidth,
+                fs_uuid,
+                uuid: device_uuid,
+            }
+        };
 
         Self {
             checksum,
@@ -117,6 +192,7 @@ impl Superblock {
             root_level,
             chunk_root_level,
             log_root_level,
+            device_properties,
         }
     }
 }
