@@ -15,7 +15,7 @@ const MAGIC: u64 = 0x4D5F53665248425F;
 pub struct Superblock {
     checksum: [u8; CHECKSUM_SIZE],
     fs_id: uuid::Uuid,
-    block_number: u64,
+    byte_number: u64,
     flags: u64,
     magic: u64,
     generation: u64,
@@ -113,7 +113,7 @@ impl Superblock {
 
         let fs_id = read_uuid(&block, 32);
 
-        let block_number = read_u64(&block, 48);
+        let byte_number = read_u64(&block, 48);
         let flags = read_u64(&block, 56);
         let magic = read_u64(&block, 64);
         assert_eq!(magic, MAGIC);
@@ -203,7 +203,7 @@ impl Superblock {
         Self {
             checksum,
             fs_id,
-            block_number,
+            byte_number,
             flags,
             magic,
             generation,
