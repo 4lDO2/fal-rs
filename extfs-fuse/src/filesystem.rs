@@ -9,6 +9,61 @@ use extfs::{Filesystem, Inode, inode::InodeType};
 use fuse::{FileAttr, Request, ReplyAttr, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyDirectory, ReplyData};
 use time::Timespec;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AccessTime {
+    Atime,
+    Noatime,
+    Relatime,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Options {
+    write: bool,
+    execute: bool,
+    access_time: AccessTime,
+}
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            write: true,
+            execute: true,
+            access_time: AccessTime::Atime,
+        }
+    }
+}
+#[derive(Debug)]
+pub enum OptionsParseError<'a> {
+    UnknownOption(&'a str),
+}
+impl std::fmt::Display for OptionsParseError<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let OptionsParseError::UnknownOption(option) = self;
+        write!(f, "unknown option: `{}`", option)
+    }
+}
+impl std::error::Error for OptionsParseError<'_> {}
+
+impl Options {
+    pub fn parse<'a>(options_str: &'a str) -> Result<Self, OptionsParseError<'a>> { 
+        let mut options = Self::default();
+
+        for option in options_str.split(',') {
+            match option {
+                "ro" => options.write = false,
+                "rw" => options.write = true,
+                "exec" => options.execute = true,
+                "noexec" => options.execute = false,
+                "atime" => options.access_time = AccessTime::Atime,
+                "noatime" => options.access_time = AccessTime::Noatime,
+                "relatime" => options.access_time = AccessTime::Relatime,
+                other => return Err(OptionsParseError::UnknownOption(other))
+            }
+        }
+
+        Ok(options)
+    }
+}
+
 struct FileHandle {
     inode: u32,
     inode_struct: Inode,
@@ -19,6 +74,7 @@ pub struct FuseFilesystem {
     inner: Filesystem<File>,
     file_handles: HashMap<u64, FileHandle>,
     last_fh: u64,
+    options: Options,
 }
 
 fn fuse_filetype(ty: InodeType) -> fuse::FileType {
@@ -30,16 +86,17 @@ fn fuse_filetype(ty: InodeType) -> fuse::FileType {
         InodeType::Fifo => fuse::FileType::NamedPipe,
         InodeType::Symlink => fuse::FileType::Symlink,
         InodeType::UnixSock => fuse::FileType::Socket,
-        InodeType::Unknown => panic!("Unknown file"),
+        InodeType::Unknown => fuse::FileType::RegularFile,
     }
 }
 
 impl FuseFilesystem {
-    pub fn init(device: File) -> io::Result<Self> {
+    pub fn init(device: File, options: Options) -> io::Result<Self> {
         Ok(Self {
             inner: Filesystem::mount(device)?,
             file_handles: HashMap::new(),
             last_fh: 0,
+            options,
         })
     }
     fn file_attributes(&self, inode: u32, inode_struct: &Inode) -> FileAttr {
@@ -80,6 +137,7 @@ impl fuse::Filesystem for FuseFilesystem {
     }
     fn destroy(&mut self, _req: &Request) {
     }
+
     fn getattr(&mut self, _req: &Request, fuse_inode: u64, reply: ReplyAttr) {
         let inode = match fuse_inode_to_extfs_inode(fuse_inode) {
             Some(inode) => inode,
@@ -322,45 +380,20 @@ impl fuse::Filesystem for FuseFilesystem {
         };
         let parent_struct = match Inode::load(&mut self.inner, parent) {
             Ok(parent_struct) => parent_struct,
-            Err(_) => {
+            Err(error) => {
+                eprintln!("Error when unlinking: loading parent struct: {}.", error);
                 reply.error(libc::EIO);
                 return
             }
         };
-        let mut dir_entries = match parent_struct.dir_entries(&mut self.inner) {
-            Ok(dir_entries) => dir_entries,
-            Err(_) => {
-                reply.error(libc::EIO);
-                return
-            }
-        };
-        let inode = match dir_entries.find(|dir_entry| dir_entry.name == name) {
-            Some(dir_entry) => dir_entry.inode,
-            None => {
-                reply.error(libc::ENOENT);
-                return
-            }
-        };
-        let mut inode_struct = match Inode::load(&mut self.inner, inode) {
-            Ok(inode_struct) => inode_struct,
-            Err(_) => {
-                reply.error(libc::EIO);
-                return
-            }
-        };
-        match inode_struct.remove_entry(&mut self.inner, name) {
+        match parent_struct.remove_entry(&mut self.inner, name) {
             Ok(()) => (),
-            Err(_) => {
+            Err(error) => {
+                eprintln!("Error when unlinking: removing entry: {}.", error);
                 reply.error(libc::EIO);
                 return
             }
         };
-        match Inode::store(&inode_struct, &mut self.inner, inode) {
-            Ok(()) => (),
-            Err(_) => {
-                reply.error(libc::EIO);
-                return
-            }
-        }
+        reply.ok();
     }
 }

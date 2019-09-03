@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    block_group, div_round_up, os_string_from_bytes, read_block, read_block_to, read_u16, read_u32, read_u8, round_up, write_u16, write_u32, write_u8, write_block,
+    block_group, div_round_up, os_str_to_bytes, os_string_from_bytes, read_block, read_block_to, read_u16, read_u32, read_u8, round_up, write_u16, write_u32, write_u8, write_block,
     superblock::Superblock, Filesystem,
 };
 
@@ -255,10 +255,7 @@ impl Inode {
 
         assert!(u64::from(superblock.inode_size()) <= superblock.block_size);
 
-        let stride = mem::size_of::<u32>();
-        for (index, value) in this.os_specific_2.iter().enumerate() {
-            buffer[index * stride..(index + 1) * stride].copy_from_slice(&value.to_le_bytes());
-        }
+        buffer[116..128].copy_from_slice(&this.os_specific_2);
 
         for byte in &mut buffer[BASE_INODE_SIZE.try_into().unwrap()..] {
             *byte = 0;
@@ -468,18 +465,53 @@ impl Inode {
         }
     }
 
-    pub fn remove<D: Read + Seek + Write>(&mut self, filesystem: &mut Filesystem<D>, inode: u32) -> io::Result<()> {
+    pub fn remove<D: Read + Seek + Write>(&self, filesystem: &mut Filesystem<D>, inode: u32) -> io::Result<()> {
         assert_eq!(self.hard_link_count, 0);
 
         // Frees the inode and its owned blocks.
         block_group::free_inode(inode, filesystem)
     }
-    pub fn remove_entry<D: Read + Seek + Write>(&mut self, filesystem: &mut Filesystem<D>, name: &OsStr) -> io::Result<()> {
-        let (_, offset) = self.raw_dir_entries(filesystem)?.find(|(entry, _)| entry.name == name).unwrap();
+    pub fn remove_entry<D: Read + Seek + Write>(&self, filesystem: &mut Filesystem<D>, name: &OsStr) -> io::Result<()> {
+        // Remove the entry by setting the length of the entry with matching name to zero, and
+        // append the length of that entry to the previous (if any).
 
-        let mut entry_bytes = vec![0; 6];
-        self.read(filesystem, offset, &mut entry_bytes[..6]);
-        unimplemented!()
+        let (index, (mut entry, offset)) = match self.raw_dir_entries(filesystem)?.enumerate().find(|(_, (entry, _))| entry.name == name) {
+            Some(x) => x,
+            None => return Err(io::Error::from(io::ErrorKind::NotFound)),
+        };
+
+        if index > 0 {
+            // TODO: Avoid iterating twice.
+
+            let (mut previous_entry, previous_offset) = self.raw_dir_entries(filesystem)?.nth(index - 1).unwrap();
+            previous_entry.total_entry_size += entry.total_entry_size;
+
+            let mut bytes = [0u8; 8];
+            DirEntry::serialize_raw(&previous_entry, &filesystem.superblock, &mut bytes);
+            self.write(filesystem, previous_offset, &bytes)?;
+        }
+
+        let mut entry_inode_struct = Inode::load(filesystem, entry.inode)?;
+        let entry_inode = entry.inode;
+
+        entry.total_entry_size = 0;
+        entry.inode = 0;
+        entry.type_indicator = Some(InodeType::Unknown);
+        entry.name = OsString::new();
+
+        let mut bytes = [0u8; 8];
+        DirEntry::serialize(&entry, &filesystem.superblock, &mut bytes);
+        self.write(filesystem, offset, &bytes)?;
+
+        entry_inode_struct.hard_link_count -= 1;
+
+        if entry_inode_struct.hard_link_count == 0 {
+            entry_inode_struct.remove(filesystem, entry.inode)?;
+        } else {
+            Inode::store(&entry_inode_struct, filesystem, entry_inode)?;
+        }
+
+        Ok(())
     }
 }
 pub struct RawDirIterator<'a, D> {
@@ -527,8 +559,9 @@ impl<'a, D: Read + Seek> Iterator for RawDirIterator<'a, D> {
 
             let entry = DirEntry::parse(&self.filesystem.superblock, &self.entry_bytes);
 
+            let value = Some((entry, self.current_entry_offset));
             self.current_entry_offset += u64::try_from(length).unwrap();
-            return Some((entry, self.current_entry_offset))
+            return value;
         } else {
             self.finished = true;
             return None
@@ -586,10 +619,20 @@ impl DirEntry {
             total_entry_size,
         }
     }
-    pub fn serialize(this: &Self, superblock: &Superblock, bytes: &mut [u8]) {
+    pub fn serialize_raw(this: &Self, superblock: &Superblock, bytes: &mut [u8]) {
         write_u32(bytes, 0, this.inode);
         write_u16(bytes, 4, this.total_entry_size);
         write_u8(bytes, 6, this.name.len() as u8);
-        write_u8(bytes, 7, InodeType::to_direntry_ty_indicator(this.type_indicator.unwrap()));
+
+        if superblock.extended.as_ref().map(|extended| extended.req_features_present.dir_type).unwrap_or(false) {
+            write_u8(bytes, 7, InodeType::to_direntry_ty_indicator(this.type_indicator.unwrap()));
+        } else {
+            write_u8(bytes, 7, (this.name.len() >> 8) as u8);
+
+        }
+    }
+    pub fn serialize(this: &Self, superblock: &Superblock, bytes: &mut [u8]) {
+        Self::serialize_raw(this, superblock, bytes);
+        bytes[8..8 + this.name.len()].copy_from_slice(&os_str_to_bytes(&this.name));
     }
 }

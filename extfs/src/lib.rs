@@ -1,8 +1,7 @@
 use std::{
     convert::TryInto,
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     io::{self, prelude::*, SeekFrom},
-    mem,
     ops::{Add, Div, Mul, Rem},
 };
 
@@ -79,6 +78,17 @@ fn os_string_from_bytes(bytes: &[u8]) -> OsString {
     #[cfg(windows)]
     {
         String::from_utf8_lossy(Vec::from(bytes)).into()
+    }
+}
+fn os_str_to_bytes(string: &OsStr) -> Vec<u8> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        string.as_bytes().into()
+    }
+    #[cfg(windows)]
+    {
+        string.to_string_lossy().as_bytes().into()
     }
 }
 

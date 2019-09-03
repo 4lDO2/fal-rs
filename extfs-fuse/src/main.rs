@@ -3,7 +3,7 @@ use clap::{App, Arg, crate_authors, crate_version, SubCommand};
 
 mod filesystem;
 
-use filesystem::FuseFilesystem;
+use filesystem::{FuseFilesystem, Options};
 
 fn main() {
     env_logger::init();
@@ -40,12 +40,14 @@ fn main() {
         let device = matches.value_of("DEVICE").unwrap();
         let mount_point = matches.value_of("MOUNTPOINT").unwrap();
 
+        let options = matches.value_of("OPTIONS").map(|string| Options::parse(string).unwrap()).unwrap_or(Options::default());
+
         let file = OpenOptions::new()
             .read(true)
             .write(true)
             .open(device).expect("Failed to open filesystem device");
 
-        let filesystem = FuseFilesystem::init(file).expect("Failed to initialize the driver");
+        let filesystem = FuseFilesystem::init(file, options).expect("Failed to initialize the driver");
 
         if let Some(options_str) = matches.value_of("OPTIONS") {
             let options_owned = options_str.split(',').map(OsString::from).collect::<Vec<_>>();

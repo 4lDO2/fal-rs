@@ -319,6 +319,10 @@ impl Superblock {
             extended,
         })
     }
+    pub fn serialize_basic(&self, buffer: &mut [u8]) {
+    }
+    pub fn serialize_extended(&self, buffer: &mut [u8]) {
+    }
     pub fn block_group_count(&self) -> u32 {
         let from_block_count = div_round_up(self.block_count, self.blocks_per_group);
         let from_inode_count = div_round_up(self.inode_count, self.inodes_per_group);
