@@ -3,5 +3,6 @@ members = [
     "betterfs",
     "extfs",
     "extfs-fuse",
+    "extfs-redox",
     "fs-core",
 ]
