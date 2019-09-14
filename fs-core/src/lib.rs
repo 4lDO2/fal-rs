@@ -52,6 +52,10 @@ pub trait Device: Read + Seek {
     // TODO: Add support for querying bad sectors etc.
     // TODO: Remove the std::io traits, TODO: right?.
 }
+
+impl Device for std::fs::File {}
+impl DeviceMut for std::fs::File {}
+
 /// A read-write device.
 pub trait DeviceMut: Device + Write {}
 

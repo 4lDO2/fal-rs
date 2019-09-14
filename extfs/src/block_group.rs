@@ -24,7 +24,7 @@ pub fn block_address(superblock: &superblock::Superblock, offset: u64) -> u32 {
 pub fn block_offset(superblock: &superblock::Superblock, offset: u64) -> u32 {
     (offset % superblock.block_size) as u32
 }
-pub fn load_block_group_descriptor<D: Read + Seek>(
+pub fn load_block_group_descriptor<D: fs_core::Device>(
     filesystem: &mut crate::Filesystem<D>,
     index: u32,
 ) -> io::Result<BlockGroupDescriptor> {
@@ -61,7 +61,7 @@ pub fn inode_block_group_index(superblock: &superblock::Superblock, inode: u32) 
 pub fn inode_index_inside_group(superblock: &superblock::Superblock, inode: u32) -> u32 {
     (inode - 1) % superblock.inodes_per_group
 }
-pub fn inode_exists<D: Read + Seek>(
+pub fn inode_exists<D: fs_core::Device>(
     inode: u32,
     filesystem: &mut Filesystem<D>,
 ) -> io::Result<bool> {
@@ -89,10 +89,10 @@ pub fn inode_exists<D: Read + Seek>(
 
     Ok(bm_byte & bm_bit != 0)
 }
-pub fn free_inode<D: Read + Seek + Write>(_inode: u32, _filesystem: &mut Filesystem<D>) -> io::Result<()> {
+pub fn free_inode<D: fs_core::DeviceMut>(_inode: u32, _filesystem: &mut Filesystem<D>) -> io::Result<()> {
     unimplemented!()
 }
-pub fn block_exists<D: Read + Seek>(
+pub fn block_exists<D: fs_core::Device>(
     baddr: u32,
     filesystem: &mut Filesystem<D>,
 ) -> io::Result<bool> {

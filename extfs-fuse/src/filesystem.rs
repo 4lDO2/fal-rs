@@ -5,7 +5,7 @@ use std::{
     fs::File,
 };
 
-use extfs::{Filesystem, Inode, inode::InodeType};
+use extfs::{Filesystem, fs_core::Filesystem as _, Inode, inode::InodeType};
 use fuse::{FileAttr, Request, ReplyAttr, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyDirectory, ReplyData};
 use time::Timespec;
 
@@ -93,7 +93,7 @@ fn fuse_filetype(ty: InodeType) -> fuse::FileType {
 impl FuseFilesystem {
     pub fn init(device: File, options: Options) -> io::Result<Self> {
         Ok(Self {
-            inner: Filesystem::mount(device)?,
+            inner: Filesystem::mount(device),
             file_handles: HashMap::new(),
             last_fh: 0,
             options,

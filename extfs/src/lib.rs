@@ -1,3 +1,5 @@
+pub extern crate fs_core;
+
 use std::{
     collections::HashMap,
     convert::TryInto,
@@ -181,13 +183,5 @@ impl<'a, D: fs_core::Device + 'a> fs_core::Filesystem<'a, D> for Filesystem<D> {
     fn close_file(&mut self, fh: Self::FileHandle) {
         // FIXME: Flush before closing.
         self.fhs.remove(&fh.raw.fh);
-    }
-}
-impl<'a, D: fs_core::Device> Drop for Filesystem<D> {
-    fn drop(&mut self) {
-        // TODO: Optimize.
-        for (_, fh) in self.fhs.drain() {
-            self.close_file(FileHandle { raw: fh, filesystem: self });
-        }
     }
 }
