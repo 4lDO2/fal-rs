@@ -15,7 +15,7 @@ impl Scheme for ExtfsScheme {
 
 
 fn main() {
-    let mut socket = File::create(":ext2").expect("Failed to create scheme.");
+    let mut socket = File::create(":ext2").expect("Failed to create scheme");
 
     let scheme = ExtfsScheme {};
 

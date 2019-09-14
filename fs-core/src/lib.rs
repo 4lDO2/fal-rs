@@ -1,4 +1,4 @@
-use std::mem;
+use std::{io::prelude::*, mem};
 use uuid::Uuid;
 
 pub fn read_uuid(block: &[u8], offset: usize) -> Uuid {
@@ -45,4 +45,43 @@ pub fn write_u16(block: &mut [u8], offset: usize, number: u16) {
 pub fn write_u8(block: &mut [u8], offset: usize, number: u8) {
     let bytes = number.to_le_bytes();
     block[offset..offset + bytes.len()].copy_from_slice(&bytes)
+}
+
+/// An readonly device, such as the file /dev/sda. Typically implemented by the frontend.
+pub trait Device: Read + Seek {
+    // TODO: Add support for querying bad sectors etc.
+    // TODO: Remove the std::io traits, TODO: right?.
+}
+/// A read-write device.
+pub trait DeviceMut: Device + Write {}
+
+/// An abstract inode structure.
+pub trait Inode {
+}
+
+// TODO: Add some kind of Result type.
+/// An abstract filesystem. Typically implemented by the backend.
+pub trait Filesystem<'a, D: Device> {
+    /// An inode address. u32 on ext2.
+    type InodeAddr: Into<u64>;
+
+    /// An inode structure, capable of retrieving inode information.
+    type InodeStruct: Inode;
+
+    /// A file handle, capable of reading and seeking.
+    type FileHandle: Read + Seek + 'a;
+
+    // TODO: Support mounting multiple devices as one filesystem, for filesystems that support it.
+    /// Mount the filesystem from a device.
+    fn mount(_device: D) -> Self;
+
+    /// Load an inode structure from the filesystem. For example, on ext2, the address 2 would load the root directory.
+    fn load_inode(&mut self, address: Self::InodeAddr) -> Self::InodeStruct;
+
+    /// Open a file from an inode address.
+    fn open_file(&'a mut self, inode: Self::InodeAddr) -> Self::FileHandle;
+
+    /// Close an opened file. The filesystem implementation will ensure that unread bytes get
+    /// flushed before closing.
+    fn close_file(&mut self, file: Self::FileHandle);
 }
