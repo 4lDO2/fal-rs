@@ -3,6 +3,7 @@ members = [
     "fal-backend-btrfs",
     "fal-backend-ext2",
     "fal-frontend-fuse",
+    "fal-frontend-redox",
     "extfs-fuse",
     "extfs-redox",
     "fal",

@@ -1,5 +1,5 @@
 [package]
-name = "extfs-redox"
+name = "fal-frontend-redox"
 version = "0.1.0"
 authors = ["4lDO2 <4lDO2@protonmail.com>"]
 edition = "2018"
@@ -8,5 +8,4 @@ edition = "2018"
 
 [dependencies]
 redox_syscall = "0.1"
-fal-frontend-redox = { path = "../fal-frontend-redox", version = "0.1" }
-fal-backend-ext2 = { path = "../fal-backend-ext2", version = "0.1" }
+fal = { path = "../fal", version = "0.1" }

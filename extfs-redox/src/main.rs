@@ -1,15 +1,20 @@
-use std::{fs::File, io::prelude::*, mem};
+use std::{fs::{File, OpenOptions}, io::prelude::*, mem};
 
 use syscall::{data::Packet, Scheme};
 
-struct ExtfsScheme {}
-
-impl Scheme for ExtfsScheme {}
+use fal_frontend_redox::RedoxFilesystem;
 
 fn main() {
     let mut socket = File::create(":ext2").expect("Failed to create scheme");
 
-    let scheme = ExtfsScheme {};
+    let file = OpenOptions::new()
+        .read(true)
+        .write(false)
+        .open(std::env::args().nth(1).unwrap()).unwrap();
+
+    let scheme = RedoxFilesystem::<fal_backend_ext2::Filesystem<File>>::init(file);
+
+    println!("{:?}", scheme.inner.superblock);
 
     loop {
         let mut packet = Packet::default();

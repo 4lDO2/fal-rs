@@ -5,7 +5,7 @@ use std::{
     io::{prelude::*, SeekFrom},
 };
 
-use fs_core::{read_u16, read_u32, read_u64, read_u8, read_uuid, write_u64, write_u8};
+use fal::{read_u16, read_u32, read_u64, read_u8, read_uuid, write_u64, write_u8};
 
 const SUPERBLOCK_OFFSET: u64 = 65536;
 const CHECKSUM_SIZE: usize = 32;
