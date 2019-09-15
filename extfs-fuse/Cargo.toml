@@ -12,3 +12,4 @@ libc = "0.2"
 time = "0.1"
 
 extfs = { path = "../extfs", version = "0.1" }
+fs-core = { path = "../fs-core", version = "0.1" }

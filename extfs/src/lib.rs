@@ -1,11 +1,17 @@
+pub extern crate fs_core;
+
 use std::{
+    collections::HashMap,
     convert::TryInto,
     ffi::{OsStr, OsString},
     io::{self, prelude::*, SeekFrom},
     ops::{Add, Div, Mul, Rem},
+    sync::Mutex,
 };
 
 use uuid::Uuid;
+
+use fs_core::{time::Timespec, Filesystem as _};
 
 pub mod block_group;
 pub mod inode;
@@ -14,41 +20,54 @@ pub mod superblock;
 pub use inode::Inode;
 pub use superblock::Superblock;
 
-pub use fs_core::{read_u8, read_u16, read_u32, read_u64, read_uuid, write_u8, write_u16, write_u32, write_u64, write_uuid};
+pub use fs_core::{
+    read_u16, read_u32, read_u64, read_u8, read_uuid, write_u16, write_u32, write_u64, write_u8,
+    write_uuid,
+};
 
-fn read_block_to<D: Read + Seek>(
-    filesystem: &mut Filesystem<D>,
+fn read_block_to<D: fs_core::Device>(
+    filesystem: &Filesystem<D>,
     block_address: u32,
     buffer: &mut [u8],
 ) -> io::Result<()> {
     debug_assert!(block_group::block_exists(block_address, filesystem)?);
     read_block_to_raw(filesystem, block_address, buffer)
 }
-fn read_block_to_raw<D: Read + Seek>(
-    filesystem: &mut Filesystem<D>,
+fn read_block_to_raw<D: fs_core::Device>(
+    filesystem: &Filesystem<D>,
     block_address: u32,
     buffer: &mut [u8],
 ) -> io::Result<()> {
-    filesystem.device.seek(SeekFrom::Start(
+    filesystem.device.lock().unwrap().seek(SeekFrom::Start(
         block_address as u64 * filesystem.superblock.block_size,
     ))?;
-    filesystem.device.read_exact(buffer)?;
+    filesystem.device.lock().unwrap().read_exact(buffer)?;
     Ok(())
 }
-fn read_block<D: Read + Seek>(
-    filesystem: &mut Filesystem<D>,
+fn read_block<D: fs_core::Device>(
+    filesystem: &Filesystem<D>,
     block_address: u32,
 ) -> io::Result<Box<[u8]>> {
     let mut vector = vec![0; filesystem.superblock.block_size.try_into().unwrap()];
     read_block_to(filesystem, block_address, &mut vector)?;
     Ok(vector.into_boxed_slice())
 }
-fn write_block_raw<D: Read + Seek + Write>(filesystem: &mut Filesystem<D>, block_address: u32, buffer: &[u8]) -> io::Result<()> {
-    filesystem.device.seek(SeekFrom::Start(block_address as u64 * filesystem.superblock.block_size))?;
-    filesystem.device.write_all(buffer)?;
+fn write_block_raw<D: fs_core::DeviceMut>(
+    filesystem: &Filesystem<D>,
+    block_address: u32,
+    buffer: &[u8],
+) -> io::Result<()> {
+    filesystem.device.lock().unwrap().seek(SeekFrom::Start(
+        block_address as u64 * filesystem.superblock.block_size,
+    ))?;
+    filesystem.device.lock().unwrap().write_all(buffer)?;
     Ok(())
 }
-fn write_block<D: Read + Seek + Write>(filesystem: &mut Filesystem<D>, block_address: u32, buffer: &[u8]) -> io::Result<()> {
+fn write_block<D: fs_core::DeviceMut>(
+    filesystem: &Filesystem<D>,
+    block_address: u32,
+    buffer: &[u8],
+) -> io::Result<()> {
     debug_assert!(block_group::block_exists(block_address, filesystem)?);
     write_block_raw(filesystem, block_address, buffer)
 }
@@ -64,7 +83,13 @@ where
 }
 pub fn round_up<T>(number: T, to: T) -> T
 where
-    T: Add<Output = T> + Copy + Div<Output = T> + Mul<Output = T> + Rem<Output = T> + From<u8> + PartialEq,
+    T: Add<Output = T>
+        + Copy
+        + Div<Output = T>
+        + Mul<Output = T>
+        + Rem<Output = T>
+        + From<u8>
+        + PartialEq,
 {
     div_round_up(number, to) * number
 }
@@ -92,15 +117,165 @@ fn os_str_to_bytes(string: &OsStr) -> Vec<u8> {
     }
 }
 
-pub struct Filesystem<D> {
+pub struct Filesystem<D: fs_core::Device> {
     pub superblock: Superblock,
-    pub device: D,
+    pub device: Mutex<D>,
+    pub fhs: HashMap<u64, FileHandle>,
+    last_fh: u64,
 }
-impl<D: Read + Seek + Write> Filesystem<D> {
-    pub fn mount(mut device: D) -> io::Result<Self> {
-        Ok(Self {
-            superblock: Superblock::parse(&mut device)?,
-            device,
+
+fn inode_attrs(inode: &Inode, addr: u32, superblock: &Superblock) -> fs_core::Attributes<u32> {
+    fs_core::Attributes {
+        access_time: Timespec {
+            sec: inode.last_access_time.into(),
+            nsec: 0,
+        },
+        change_time: Timespec {
+            sec: inode.last_modification_time.into(),
+            nsec: 0,
+        },
+        creation_time: Timespec {
+            sec: inode.creation_time.into(),
+            nsec: 0,
+        },
+        modification_time: Timespec {
+            sec: inode.last_modification_time.into(),
+            nsec: 0,
+        },
+        filetype: inode.ty.into(),
+        block_count: div_round_up(inode.size(&superblock), superblock.block_size),
+        flags: inode.flags,
+        group_id: inode.gid.into(),
+        hardlink_count: inode.hard_link_count.into(),
+        inode: addr.into(),
+        permissions: inode.permissions,
+        rdev: 0,
+        size: inode.size(&superblock),
+        user_id: inode.uid.into(),
+    }
+}
+
+impl fs_core::Inode for Inode {
+    fn generation_number(&self) -> Option<u64> {
+        Some(self.generation_number.into())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FileHandle {
+    fh: u64,
+    offset: u64,
+    inode_addr: u32,
+    inode: Inode,
+}
+
+impl fs_core::FileHandle for FileHandle {
+    fn fd(&self) -> u64 {
+        self.fh
+    }
+}
+
+impl<D: fs_core::Device> fs_core::Filesystem<D> for Filesystem<D> {
+    type InodeAddr = u32;
+    type InodeStruct = Inode;
+
+    fn mount(mut device: D) -> Self {
+        Self {
+            superblock: Superblock::parse(&mut device).unwrap(),
+            device: Mutex::new(device),
+            fhs: HashMap::new(),
+            last_fh: 0,
+        }
+    }
+    fn load_inode(&mut self, addr: Self::InodeAddr) -> fs_core::Result<Self::InodeStruct> {
+        Ok(Inode::load(self, addr)?)
+    }
+    fn open_file(&mut self, addr: Self::InodeAddr) -> fs_core::Result<u64> {
+        let fh = FileHandle {
+            inode_addr: addr,
+            fh: self.last_fh,
+            inode: Inode::load(self, addr)?,
+            offset: 0,
+        };
+        self.fhs.insert(self.last_fh, fh);
+        self.last_fh += 1;
+
+        Ok(fh.fh)
+    }
+    fn read(&mut self, fh: u64, offset: u64, buffer: &mut [u8]) -> fs_core::Result<usize> {
+        match self.fhs.get(&fh) {
+            Some(fh) => Ok(fh.inode.read(self, offset, buffer)?),
+            None => Err(fs_core::Error::BadFd),
+        }
+    }
+    fn close_file(&mut self, fh: u64) {
+        // FIXME: Flush before closing.
+        self.fhs.remove(&fh);
+    }
+    fn getattrs(&mut self, inode_addr: u32) -> fs_core::Result<fs_core::Attributes<u32>> {
+        let inode = Inode::load(self, inode_addr)?;
+
+        Ok(inode_attrs(&inode, inode_addr, &self.superblock))
+    }
+    fn open_directory(&mut self, inode: u32) -> fs_core::Result<u64> {
+        self.open_file(inode)
+    }
+    fn read_directory(
+        &mut self,
+        fh: u64,
+        offset: i64,
+    ) -> fs_core::Result<Option<fs_core::DirectoryEntry>> {
+        let handle = match self.fhs.get(&fh) {
+            Some(handle) => handle,
+            None => return Err(fs_core::Error::BadFd),
+        };
+        Ok(
+            match handle
+                .inode
+                .dir_entries(self)?
+                .enumerate()
+                .skip(self.fhs[&fh].offset as usize + offset as usize)
+                .next()
+            {
+                Some((offset, entry)) => Some({
+                    let entry = fs_core::DirectoryEntry {
+                        filetype: entry.ty(self)?.into(),
+                        name: entry.name,
+                        inode: entry.inode.into(),
+                        offset: offset as u64,
+                    };
+                    self.fhs.get_mut(&fh).unwrap().offset = offset as u64 + 1;
+                    entry
+                }),
+                None => None,
+            },
+        )
+    }
+    fn lookup_direntry(
+        &mut self,
+        parent: u32,
+        name: &OsStr,
+    ) -> fs_core::Result<fs_core::DirectoryEntry> {
+        let (offset, entry) = Inode::load(self, parent)?
+            .dir_entries(self)?
+            .enumerate()
+            .find(|(_, entry)| entry.name == name)
+            .unwrap();
+
+        Ok(fs_core::DirectoryEntry {
+            filetype: entry.ty(self)?.into(),
+            name: entry.name,
+            inode: entry.inode.into(),
+            offset: offset as u64,
         })
+    }
+    fn close_directory(&mut self, handle: u64) {
+        self.close_file(handle)
+    }
+    fn inode_attrs(&mut self, addr: u32, inode: &Inode) -> fs_core::Attributes<u32> {
+        inode_attrs(inode, addr, &self.superblock)
+    }
+    fn fh_inode(&self, fh: u64) -> &'_ Inode {
+        &self.fhs[&fh].inode
     }
 }
