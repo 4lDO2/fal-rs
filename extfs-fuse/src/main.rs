@@ -43,8 +43,8 @@ fn main() {
             .open(device)
             .expect("Failed to open filesystem device");
 
-        let filesystem =
-            FuseFilesystem::init(file, options).expect("Failed to initialize the driver");
+        let filesystem = FuseFilesystem::<extfs::Filesystem<std::fs::File>>::init(file, options)
+            .expect("Failed to initialize the driver");
 
         if let Some(options_str) = matches.value_of("OPTIONS") {
             let options_owned = options_str

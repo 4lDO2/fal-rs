@@ -2,6 +2,7 @@ pub extern crate libc;
 pub extern crate time;
 
 use std::{
+    convert::TryFrom,
     ffi::{OsStr, OsString},
     io::{self, prelude::*},
     mem,
@@ -83,7 +84,7 @@ pub enum FileType {
     CharacterDevice,
 }
 
-pub struct Attributes<InodeAddr: Into<u64> = u64> {
+pub struct Attributes<InodeAddr: Into<u64>> {
     pub filetype: FileType,
     pub size: u64,
     pub block_count: u64,
@@ -103,7 +104,7 @@ pub struct Attributes<InodeAddr: Into<u64> = u64> {
     pub flags: u32,
 }
 
-pub struct DirectoryEntry<InodeAddr: Into<u64> = u64> {
+pub struct DirectoryEntry<InodeAddr: Into<u64>> {
     pub name: OsString,
     pub filetype: FileType,
     pub inode: InodeAddr,
@@ -145,7 +146,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// An abstract filesystem. Typically implemented by the backend.
 pub trait Filesystem<D: Device> {
     /// An inode address. u32 on ext2.
-    type InodeAddr: Into<u64> + Copy;
+    type InodeAddr: From<u32> + Into<u64> + Copy + TryFrom<u64> + Eq;
 
     /// An inode structure, capable of retrieving inode information.
     type InodeStruct: Inode;
@@ -171,10 +172,18 @@ pub trait Filesystem<D: Device> {
     fn open_directory(&mut self, address: Self::InodeAddr) -> Result<u64>;
 
     /// Get an entry from a directory.
-    fn read_directory(&mut self, directory: u64, offset: i64) -> Result<Option<DirectoryEntry>>;
+    fn read_directory(
+        &mut self,
+        directory: u64,
+        offset: i64,
+    ) -> Result<Option<DirectoryEntry<Self::InodeAddr>>>;
 
     /// Get a directory entry from a directory inode and a name.
-    fn lookup_direntry(&mut self, parent: Self::InodeAddr, name: &OsStr) -> Result<DirectoryEntry>;
+    fn lookup_direntry(
+        &mut self,
+        parent: Self::InodeAddr,
+        name: &OsStr,
+    ) -> Result<DirectoryEntry<Self::InodeAddr>>;
 
     /// Close an opened directory.
     fn close_directory(&mut self, dir: u64);
@@ -187,7 +196,7 @@ pub trait Filesystem<D: Device> {
 
     /// Get the attributes of an inode.
     fn inode_attrs(
-        &mut self,
+        &self,
         addr: Self::InodeAddr,
         inode: &Self::InodeStruct,
     ) -> Attributes<Self::InodeAddr>;

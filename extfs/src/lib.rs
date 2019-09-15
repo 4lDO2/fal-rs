@@ -224,7 +224,7 @@ impl<D: fs_core::Device> fs_core::Filesystem<D> for Filesystem<D> {
         &mut self,
         fh: u64,
         offset: i64,
-    ) -> fs_core::Result<Option<fs_core::DirectoryEntry>> {
+    ) -> fs_core::Result<Option<fs_core::DirectoryEntry<u32>>> {
         let handle = match self.fhs.get(&fh) {
             Some(handle) => handle,
             None => return Err(fs_core::Error::BadFd),
@@ -255,7 +255,7 @@ impl<D: fs_core::Device> fs_core::Filesystem<D> for Filesystem<D> {
         &mut self,
         parent: u32,
         name: &OsStr,
-    ) -> fs_core::Result<fs_core::DirectoryEntry> {
+    ) -> fs_core::Result<fs_core::DirectoryEntry<u32>> {
         let (offset, entry) = Inode::load(self, parent)?
             .dir_entries(self)?
             .enumerate()
@@ -272,7 +272,7 @@ impl<D: fs_core::Device> fs_core::Filesystem<D> for Filesystem<D> {
     fn close_directory(&mut self, handle: u64) {
         self.close_file(handle)
     }
-    fn inode_attrs(&mut self, addr: u32, inode: &Inode) -> fs_core::Attributes<u32> {
+    fn inode_attrs(&self, addr: u32, inode: &Inode) -> fs_core::Attributes<u32> {
         inode_attrs(inode, addr, &self.superblock)
     }
     fn fh_inode(&self, fh: u64) -> &'_ Inode {
@@ -282,11 +282,9 @@ impl<D: fs_core::Device> fs_core::Filesystem<D> for Filesystem<D> {
         let mut location = None;
         let mut error = None;
 
-        Inode::load(self, inode)?.with_symlink_target(self, |result| {
-            match result {
-                Ok(data) => location = Some(data.to_owned()),
-                Err(err) => error = Some(err),
-            }
+        Inode::load(self, inode)?.with_symlink_target(self, |result| match result {
+            Ok(data) => location = Some(data.to_owned()),
+            Err(err) => error = Some(err),
         });
 
         if let Some(err) = error {

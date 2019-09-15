@@ -77,8 +77,8 @@ struct FileHandle {
     position: u64,
 }
 
-pub struct FuseFilesystem {
-    inner: Filesystem<File>,
+pub struct FuseFilesystem<Backend: fs_core::Filesystem<File>> {
+    inner: Backend,
     options: Options,
 }
 
@@ -96,7 +96,7 @@ fn fuse_filetype(ty: extfs::fs_core::FileType) -> fuse::FileType {
     }
 }
 
-fn fuse_attr(attrs: fs_core::Attributes<u32>) -> fuse::FileAttr {
+fn fuse_attr<InodeAddr: Into<u64>>(attrs: fs_core::Attributes<InodeAddr>) -> fuse::FileAttr {
     fuse::FileAttr {
         atime: attrs.access_time,
         blocks: attrs.block_count,
@@ -115,19 +115,25 @@ fn fuse_attr(attrs: fs_core::Attributes<u32>) -> fuse::FileAttr {
     }
 }
 
-impl FuseFilesystem {
+impl<Backend: fs_core::Filesystem<File>> FuseFilesystem<Backend> {
     pub fn init(device: File, options: Options) -> io::Result<Self> {
         Ok(Self {
-            inner: Filesystem::mount(device),
+            inner: Backend::mount(device),
             options,
         })
     }
 }
 
-fn fuse_inode_to_extfs_inode(fuse_inode: u64) -> Option<u32> {
-    u32::try_from(fuse_inode)
-        .ok()
-        .map(|fuse_inode| if fuse_inode == 1 { 2 } else { fuse_inode })
+fn fuse_inode_to_extfs_inode<InodeAddr: From<u32> + TryFrom<u64> + Eq>(
+    fuse_inode: u64,
+) -> Option<InodeAddr> {
+    InodeAddr::try_from(fuse_inode).ok().map(|fuse_inode| {
+        if fuse_inode == 1.into() {
+            2.into()
+        } else {
+            fuse_inode
+        }
+    })
 }
 fn fuse_inode_from_extfs_inode(extfs_inode: u32) -> u64 {
     if extfs_inode == 2 {
@@ -137,7 +143,7 @@ fn fuse_inode_from_extfs_inode(extfs_inode: u32) -> u64 {
     }
 }
 
-impl fuse::Filesystem for FuseFilesystem {
+impl<Backend: fs_core::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend> {
     fn init(&mut self, _req: &Request) -> Result<(), libc::c_int> {
         Ok(())
     }
@@ -191,7 +197,7 @@ impl fuse::Filesystem for FuseFilesystem {
             }
         };
 
-        let inode_struct = match Inode::load(&mut self.inner, entry.inode as u32) {
+        let inode_struct = match self.inner.load_inode(entry.inode.try_into().unwrap()) {
             Ok(inode_struct) => inode_struct,
             Err(err) => {
                 match err {
@@ -208,7 +214,10 @@ impl fuse::Filesystem for FuseFilesystem {
 
         reply.entry(
             &validity_timeout,
-            &fuse_attr(self.inner.inode_attrs(entry.inode as u32, &inode_struct)),
+            &fuse_attr(
+                self.inner
+                    .inode_attrs(entry.inode.try_into().unwrap(), &inode_struct),
+            ),
             inode_struct.generation_number().unwrap_or(0),
         ); // TODO: generation_number?
     }
@@ -242,13 +251,13 @@ impl fuse::Filesystem for FuseFilesystem {
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
-        let inode = match fuse_inode_to_extfs_inode(fuse_inode) {
+        /*let inode = match fuse_inode_to_extfs_inode(fuse_inode) {
             Some(inode) => inode,
             None => {
                 reply.error(libc::EOVERFLOW);
                 return;
             }
-        };
+        };*/
         match self.inner.read_directory(fh, offset) {
             Ok(Some(entry)) => {
                 reply.add(
@@ -331,7 +340,8 @@ impl fuse::Filesystem for FuseFilesystem {
             }
         };
 
-        let inode_size = self.inner.fh_inode(fh).size(&self.inner.superblock);
+        let inode_struct = self.inner.fh_inode(fh);
+        let inode_size = self.inner.inode_attrs(inode, inode_struct).size;
 
         // This will effectively be the size, but possibly reduced to prevent overflow.
         let bytes_to_read = std::cmp::min(offset + u64::from(size), inode_size) - offset;
@@ -385,7 +395,7 @@ impl fuse::Filesystem for FuseFilesystem {
                 return;
             }
         };
-        let parent_struct = match Inode::load(&mut self.inner, parent) {
+        let parent_struct = match self.inner.load_inode(parent) {
             Ok(parent_struct) => parent_struct,
             Err(error) => {
                 eprintln!("Error when unlinking: loading parent struct: {}.", error);
@@ -393,14 +403,15 @@ impl fuse::Filesystem for FuseFilesystem {
                 return;
             }
         };
-        match parent_struct.remove_entry(&mut self.inner, name) {
+        /*match parent_struct.remove_entry(&mut self.inner, name) {
             Ok(()) => (),
             Err(error) => {
                 eprintln!("Error when unlinking: removing entry: {}.", error);
                 reply.error(libc::EIO);
                 return;
             }
-        };
+        };*/
+        unimplemented!();
         reply.ok();
     }
 }
