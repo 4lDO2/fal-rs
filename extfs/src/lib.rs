@@ -11,7 +11,7 @@ use std::{
 
 use uuid::Uuid;
 
-use fs_core::Filesystem as _;
+use fs_core::{Filesystem as _, time::Timespec};
 
 pub mod block_group;
 pub mod inode;
@@ -49,12 +49,12 @@ fn read_block<D: fs_core::Device>(
     read_block_to(filesystem, block_address, &mut vector)?;
     Ok(vector.into_boxed_slice())
 }
-fn write_block_raw<D: fs_core::DeviceMut>(filesystem: &mut Filesystem<D>, block_address: u32, buffer: &[u8]) -> io::Result<()> {
+fn write_block_raw<D: fs_core::DeviceMut>(filesystem: &Filesystem<D>, block_address: u32, buffer: &[u8]) -> io::Result<()> {
     filesystem.device.lock().unwrap().seek(SeekFrom::Start(block_address as u64 * filesystem.superblock.block_size))?;
     filesystem.device.lock().unwrap().write_all(buffer)?;
     Ok(())
 }
-fn write_block<D: fs_core::DeviceMut>(filesystem: &mut Filesystem<D>, block_address: u32, buffer: &[u8]) -> io::Result<()> {
+fn write_block<D: fs_core::DeviceMut>(filesystem: &Filesystem<D>, block_address: u32, buffer: &[u8]) -> io::Result<()> {
     debug_assert!(block_group::block_exists(block_address, filesystem)?);
     write_block_raw(filesystem, block_address, buffer)
 }
@@ -184,5 +184,47 @@ impl<'a, D: fs_core::Device + 'a> fs_core::Filesystem<'a, D> for Filesystem<D> {
     fn close_file(&mut self, fh: Self::FileHandle) {
         // FIXME: Flush before closing.
         self.fhs.remove(&fh.raw.fh);
+    }
+    fn getattrs(&mut self, inode_addr: u32) -> fs_core::Attributes<u32> {
+        use inode::InodeType;
+
+        let inode = Inode::load(self, inode_addr).unwrap();
+        fs_core::Attributes {
+            access_time: Timespec {
+                sec: inode.last_access_time.into(),
+                nsec: 0,
+            },
+            change_time: Timespec {
+                sec: inode.last_modification_time.into(),
+                nsec: 0,
+            },
+            creation_time: Timespec {
+                sec: inode.creation_time.into(),
+                nsec: 0,
+            },
+            modification_time: Timespec {
+                sec: inode.last_modification_time.into(),
+                nsec: 0,
+            },
+            filetype: match inode.ty {
+                InodeType::File => fs_core::FileType::RegularFile,
+                InodeType::Dir => fs_core::FileType::Directory,
+                InodeType::Symlink => fs_core::FileType::Symlink,
+                InodeType::BlockDev => fs_core::FileType::BlockDevice,
+                InodeType::UnixSock => fs_core::FileType::Socket,
+                InodeType::CharDev => fs_core::FileType::CharacterDevice,
+                InodeType::Fifo => fs_core::FileType::NamedPipe,
+                InodeType::Unknown => panic!(),
+            },
+            block_count: div_round_up(inode.size(&self.superblock), self.superblock.block_size),
+            flags: inode.flags,
+            group_id: inode.gid.into(),
+            hardlink_count: inode.hard_link_count.into(),
+            inode: inode_addr.into(),
+            permissions: inode.permissions,
+            rdev: 0,
+            size: inode.size(&self.superblock),
+            user_id: inode.uid.into(),
+        }
     }
 }

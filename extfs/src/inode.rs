@@ -466,7 +466,7 @@ impl Inode {
             // TODO: Waiting for try_reserve (https://github.com/rust-lang/rust/issues/48043).
             let mut bytes = vec![0u8; size.try_into().unwrap()];
             match self.read(filesystem, 0, &mut bytes) {
-                Ok(()) => handler(Ok(&bytes)),
+                Ok(_) => handler(Ok(&bytes)),
                 Err(error) => handler(Err(error)),
             }
         }

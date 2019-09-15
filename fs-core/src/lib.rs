@@ -1,4 +1,7 @@
+pub extern crate time;
+
 use std::{io::prelude::*, mem};
+use time::Timespec;
 use uuid::Uuid;
 
 pub fn read_uuid(block: &[u8], offset: usize) -> Uuid {
@@ -63,6 +66,37 @@ pub trait DeviceMut: Device + Write {}
 pub trait Inode {
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FileType {
+    RegularFile,
+    Directory,
+    BlockDevice,
+    Symlink,
+    NamedPipe,
+    Socket,
+    CharacterDevice,
+}
+
+pub struct Attributes<InodeAddr: Into<u64> = u64> {
+    pub filetype: FileType,
+    pub size: u64,
+    pub block_count: u64,
+    pub hardlink_count: u64,
+    pub permissions: u16,
+    pub user_id: u32,
+    pub group_id: u32,
+    pub rdev: u32,
+    pub inode: InodeAddr,
+
+    pub creation_time: Timespec,
+    pub modification_time: Timespec,
+    pub change_time: Timespec,
+    pub access_time: Timespec,
+
+    /// macOS only
+    pub flags: u32,
+}
+
 // TODO: Add some kind of Result type.
 /// An abstract filesystem. Typically implemented by the backend.
 pub trait Filesystem<'a, D: Device> {
@@ -88,4 +122,7 @@ pub trait Filesystem<'a, D: Device> {
     /// Close an opened file. The filesystem implementation will ensure that unread bytes get
     /// flushed before closing.
     fn close_file(&mut self, file: Self::FileHandle);
+
+    /// Get a file's attributes, typically called from stat(2).
+    fn getattrs(&mut self, inode: Self::InodeAddr) -> Attributes<Self::InodeAddr>;
 }
