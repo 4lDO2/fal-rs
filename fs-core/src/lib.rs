@@ -1,6 +1,6 @@
 pub extern crate time;
 
-use std::{ffi::OsString, io::prelude::*, mem};
+use std::{ffi::{OsStr, OsString}, io::prelude::*, mem};
 use time::Timespec;
 use uuid::Uuid;
 
@@ -141,6 +141,9 @@ pub trait Filesystem<D: Device> {
 
     /// Get an entry from a directory.
     fn read_directory(&mut self, directory: &Self::DirHandle, offset: i64) -> DirectoryEntry;
+
+    /// Get a directory entry from a directory inode and a name.
+    fn lookup_direntry(&mut self, parent: Self::InodeAddr, name: &OsStr) -> DirectoryEntry;
 
     /// Close an opened directory.
     fn close_directory(&mut self, dir: Self::DirHandle);

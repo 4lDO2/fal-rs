@@ -195,6 +195,16 @@ impl<D: fs_core::Device> fs_core::Filesystem<D> for Filesystem<D> {
             offset: offset as u64,
         }
     }
+    fn lookup_direntry(&mut self, parent: u32, name: &OsStr) -> fs_core::DirectoryEntry {
+        let (offset, entry) = Inode::load(self, parent).unwrap().dir_entries(self).unwrap().enumerate().next().unwrap();
+
+        fs_core::DirectoryEntry {
+            filetype: entry.ty(self).into(),
+            name: entry.name,
+            inode: entry.inode.into(),
+            offset: offset as u64,
+        }
+    }
     fn close_directory(&mut self, handle: FileHandle) {
         self.close_file(handle)
     }
