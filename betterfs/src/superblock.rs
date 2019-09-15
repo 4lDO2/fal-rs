@@ -5,7 +5,7 @@ use std::{
     io::{prelude::*, SeekFrom},
 };
 
-use fs_core::{read_u8, read_u16, read_u32, read_u64, read_uuid, write_u8, write_u64};
+use fs_core::{read_u16, read_u32, read_u64, read_u8, read_uuid, write_u64, write_u8};
 
 const SUPERBLOCK_OFFSET: u64 = 65536;
 const CHECKSUM_SIZE: usize = 32;
@@ -183,7 +183,11 @@ impl Superblock {
 
         let device_label = {
             let label_bytes = &block[299..=554];
-            let nul_position = label_bytes.iter().copied().position(|byte| byte == 0).unwrap();
+            let nul_position = label_bytes
+                .iter()
+                .copied()
+                .position(|byte| byte == 0)
+                .unwrap();
             let label_bytes_to_nul = &label_bytes[..nul_position];
             CString::new(label_bytes_to_nul).unwrap()
         };
@@ -197,7 +201,10 @@ impl Superblock {
 
         let mut root_backups = [Default::default(); 4];
         for (index, backup) in root_backups.iter_mut().enumerate() {
-            *backup = RootBackup::from_raw(&block[2859 + index * RootBackup::RAW_SIZE .. 2859 + (index + 1) * RootBackup::RAW_SIZE]);
+            *backup = RootBackup::from_raw(
+                &block[2859 + index * RootBackup::RAW_SIZE
+                    ..2859 + (index + 1) * RootBackup::RAW_SIZE],
+            );
         }
 
         Self {

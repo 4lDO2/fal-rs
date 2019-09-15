@@ -1,18 +1,10 @@
-use std::{
-    io::prelude::*,
-    fs::File,
-    mem,
-};
+use std::{fs::File, io::prelude::*, mem};
 
 use syscall::{data::Packet, Scheme};
 
-struct ExtfsScheme {
-}
+struct ExtfsScheme {}
 
-impl Scheme for ExtfsScheme {
-    
-}
-
+impl Scheme for ExtfsScheme {}
 
 fn main() {
     let mut socket = File::create(":ext2").expect("Failed to create scheme");

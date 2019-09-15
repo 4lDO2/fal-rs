@@ -1,8 +1,5 @@
 use crate::{read_block, read_block_to_raw, read_u16, read_u32, superblock, Filesystem};
-use std::{
-    convert::TryFrom,
-    io,
-};
+use std::{convert::TryFrom, io};
 
 #[derive(Debug)]
 pub struct BlockGroupDescriptor {
@@ -89,7 +86,10 @@ pub fn inode_exists<D: fs_core::Device>(
 
     Ok(bm_byte & bm_bit != 0)
 }
-pub fn free_inode<D: fs_core::DeviceMut>(_inode: u32, _filesystem: &mut Filesystem<D>) -> io::Result<()> {
+pub fn free_inode<D: fs_core::DeviceMut>(
+    _inode: u32,
+    _filesystem: &mut Filesystem<D>,
+) -> io::Result<()> {
     unimplemented!()
 }
 pub fn block_exists<D: fs_core::Device>(

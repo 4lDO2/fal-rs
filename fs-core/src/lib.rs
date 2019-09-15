@@ -1,7 +1,11 @@
-pub extern crate time;
 pub extern crate libc;
+pub extern crate time;
 
-use std::{ffi::{OsStr, OsString}, io::{self, prelude::*}, mem};
+use std::{
+    ffi::{OsStr, OsString},
+    io::{self, prelude::*},
+    mem,
+};
 use time::Timespec;
 use uuid::Uuid;
 
@@ -182,7 +186,11 @@ pub trait Filesystem<D: Device> {
     }
 
     /// Get the attributes of an inode.
-    fn inode_attrs(&mut self, addr: Self::InodeAddr, inode: &Self::InodeStruct) -> Attributes<Self::InodeAddr>;
+    fn inode_attrs(
+        &mut self,
+        addr: Self::InodeAddr,
+        inode: &Self::InodeStruct,
+    ) -> Attributes<Self::InodeAddr>;
 
     fn fh_inode(&self, fh: u64) -> &'_ Self::InodeStruct;
 }

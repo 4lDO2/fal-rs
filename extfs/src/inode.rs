@@ -6,8 +6,9 @@ use std::{
 };
 
 use crate::{
-    block_group, div_round_up, os_str_to_bytes, os_string_from_bytes, read_block, read_block_to, read_u16, read_u32, read_u8, round_up, write_u16, write_u32, write_u8, write_block,
-    superblock::Superblock, Filesystem,
+    block_group, div_round_up, os_str_to_bytes, os_string_from_bytes, read_block, read_block_to,
+    read_u16, read_u32, read_u8, round_up, superblock::Superblock, write_block, write_u16,
+    write_u32, write_u8, Filesystem,
 };
 
 pub const ROOT: u32 = 2;
@@ -135,17 +136,20 @@ impl Inode {
         filesystem: &Filesystem<R>,
         inode_address: u32,
     ) -> fs_core::Result<Self> {
-        if inode_address == 0 { return Err(fs_core::Error::NoEntity) }
+        if inode_address == 0 {
+            return Err(fs_core::Error::NoEntity);
+        }
 
         if !block_group::inode_exists(inode_address, filesystem)? {
-            return Err(fs_core::Error::NoEntity)
+            return Err(fs_core::Error::NoEntity);
         }
 
         let block_group_index =
             block_group::inode_block_group_index(&filesystem.superblock, inode_address);
         let block_group_descriptor =
             block_group::load_block_group_descriptor(filesystem, block_group_index)?;
-        let inode_index_in_group = block_group::inode_index_inside_group(&filesystem.superblock, inode_address);
+        let inode_index_in_group =
+            block_group::inode_index_inside_group(&filesystem.superblock, inode_address);
         let inode_size = filesystem.superblock.inode_size();
 
         let containing_block_index = block_group_descriptor.inode_table_start_baddr
@@ -167,8 +171,17 @@ impl Inode {
             [inode_index_in_block * inode_size..inode_index_in_block * inode_size + inode_size];
         Ok(Self::parse(inode_bytes))
     }
-    pub fn store<D: fs_core::DeviceMut>(this: &Self, filesystem: &mut Filesystem<D>, inode_address: u32) -> io::Result<()> {
-        if inode_address == 0 { return Err(io::Error::new(io::ErrorKind::NotFound, "no inode address (was 0)")) }
+    pub fn store<D: fs_core::DeviceMut>(
+        this: &Self,
+        filesystem: &mut Filesystem<D>,
+        inode_address: u32,
+    ) -> io::Result<()> {
+        if inode_address == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "no inode address (was 0)",
+            ));
+        }
 
         debug_assert!(block_group::inode_exists(inode_address, filesystem)?);
 
@@ -176,7 +189,8 @@ impl Inode {
             block_group::inode_block_group_index(&filesystem.superblock, inode_address);
         let block_group_descriptor =
             block_group::load_block_group_descriptor(filesystem, block_group_index)?;
-        let inode_index_in_group = block_group::inode_index_inside_group(&filesystem.superblock, inode_address);
+        let inode_index_in_group =
+            block_group::inode_index_inside_group(&filesystem.superblock, inode_address);
         let inode_size = filesystem.superblock.inode_size();
 
         let containing_block_index = block_group_descriptor.inode_table_start_baddr
@@ -244,7 +258,11 @@ impl Inode {
         }
     }
     pub fn serialize(this: &Inode, superblock: &Superblock, buffer: &mut [u8]) {
-        write_u16(buffer, 0, InodeType::to_type_and_perm((this.ty, this.permissions)));
+        write_u16(
+            buffer,
+            0,
+            InodeType::to_type_and_perm((this.ty, this.permissions)),
+        );
         write_u16(buffer, 2, this.uid);
         write_u32(buffer, 4, this.size_low);
         write_u32(buffer, 8, this.last_access_time);
@@ -296,13 +314,24 @@ impl Inode {
     fn entry_count(block_size: u64) -> usize {
         block_size as usize / mem::size_of::<u32>()
     }
-    fn read_singly<D: fs_core::Device>(filesystem: &Filesystem<D>, singly_baddr: u32, rel_baddr: u32) -> io::Result<u32> {
+    fn read_singly<D: fs_core::Device>(
+        filesystem: &Filesystem<D>,
+        singly_baddr: u32,
+        rel_baddr: u32,
+    ) -> io::Result<u32> {
         let singly_indirect_block_bytes = read_block(filesystem, singly_baddr)?;
         let index = rel_baddr as usize - Self::DIRECT_PTR_COUNT;
 
-        Ok(read_u32(&singly_indirect_block_bytes, index * mem::size_of::<u32>()))
+        Ok(read_u32(
+            &singly_indirect_block_bytes,
+            index * mem::size_of::<u32>(),
+        ))
     }
-    fn read_doubly<D: fs_core::Device>(filesystem: &Filesystem<D>, doubly_baddr: u32, rel_baddr: u32) -> io::Result<u32> {
+    fn read_doubly<D: fs_core::Device>(
+        filesystem: &Filesystem<D>,
+        doubly_baddr: u32,
+        rel_baddr: u32,
+    ) -> io::Result<u32> {
         let entry_count = Self::entry_count(filesystem.superblock.block_size);
 
         let doubly_indirect_block_bytes = read_block(filesystem, doubly_baddr)?;
@@ -313,18 +342,29 @@ impl Inode {
 
         Self::read_singly(filesystem, singly, singly_rel_baddr)
     }
-    fn read_triply<D: fs_core::Device>(filesystem: &Filesystem<D>, triply_baddr: u32, rel_baddr: u32) -> io::Result<u32> {
+    fn read_triply<D: fs_core::Device>(
+        filesystem: &Filesystem<D>,
+        triply_baddr: u32,
+        rel_baddr: u32,
+    ) -> io::Result<u32> {
         let entry_count = Self::entry_count(filesystem.superblock.block_size);
 
         let triply_indirect_block_bytes = read_block(filesystem, triply_baddr)?;
-        let index = (rel_baddr as usize - Self::DIRECT_PTR_COUNT - entry_count - entry_count * entry_count) / (entry_count * entry_count);
+        let index =
+            (rel_baddr as usize - Self::DIRECT_PTR_COUNT - entry_count - entry_count * entry_count)
+                / (entry_count * entry_count);
 
         let doubly = read_u32(&triply_indirect_block_bytes, index * mem::size_of::<u32>());
-        let doubly_rel_baddr = rel_baddr - (index as u32 + 1) * entry_count as u32 * entry_count as u32;
+        let doubly_rel_baddr =
+            rel_baddr - (index as u32 + 1) * entry_count as u32 * entry_count as u32;
 
         Self::read_doubly(filesystem, doubly, doubly_rel_baddr)
     }
-    fn absolute_baddr<D: fs_core::Device>(&self, filesystem: &Filesystem<D>, rel_baddr: u32) -> io::Result<u32> {
+    fn absolute_baddr<D: fs_core::Device>(
+        &self,
+        filesystem: &Filesystem<D>,
+        rel_baddr: u32,
+    ) -> io::Result<u32> {
         let entry_count = Self::entry_count(filesystem.superblock.block_size) as u32;
 
         let direct_size = Self::DIRECT_PTR_COUNT as u32;
@@ -344,51 +384,84 @@ impl Inode {
             panic!("Read exceeding maximum ext2 file size.");
         })
     }
-    pub fn read_block_to<D: fs_core::Device>(&self, rel_baddr: u32, filesystem: &Filesystem<D>, buffer: &mut [u8]) -> io::Result<()> {
+    pub fn read_block_to<D: fs_core::Device>(
+        &self,
+        rel_baddr: u32,
+        filesystem: &Filesystem<D>,
+        buffer: &mut [u8],
+    ) -> io::Result<()> {
         if u64::from(rel_baddr) >= self.size_in_blocks(&filesystem.superblock) {
-            return Err(io::ErrorKind::UnexpectedEof.into())
+            return Err(io::ErrorKind::UnexpectedEof.into());
         }
         let abs_baddr = self.absolute_baddr(filesystem, rel_baddr)?;
         read_block_to(filesystem, abs_baddr, buffer)
     }
-    pub fn write_block<D: fs_core::DeviceMut>(&self, rel_baddr: u32, filesystem: &Filesystem<D>, buffer: &[u8]) -> io::Result<()> {
+    pub fn write_block<D: fs_core::DeviceMut>(
+        &self,
+        rel_baddr: u32,
+        filesystem: &Filesystem<D>,
+        buffer: &[u8],
+    ) -> io::Result<()> {
         if u64::from(rel_baddr) >= self.size_in_blocks(&filesystem.superblock) {
-            return Err(io::ErrorKind::UnexpectedEof.into())
+            return Err(io::ErrorKind::UnexpectedEof.into());
         }
         let abs_baddr = self.absolute_baddr(filesystem, rel_baddr)?;
         write_block(filesystem, abs_baddr, buffer)
     }
-    pub fn read<D: fs_core::Device>(&self, filesystem: &Filesystem<D>, offset: u64, mut buffer: &mut [u8]) -> io::Result<usize> {
+    pub fn read<D: fs_core::Device>(
+        &self,
+        filesystem: &Filesystem<D>,
+        offset: u64,
+        mut buffer: &mut [u8],
+    ) -> io::Result<usize> {
         let mut bytes_read = 0;
 
         let off_from_rel_block = offset % filesystem.superblock.block_size;
         let rel_baddr_start = offset / filesystem.superblock.block_size;
 
-        let mut block_bytes = (vec! [0u8; usize::try_from(filesystem.superblock.block_size).unwrap()]).into_boxed_slice();
+        let mut block_bytes =
+            (vec![0u8; usize::try_from(filesystem.superblock.block_size).unwrap()])
+                .into_boxed_slice();
 
         if off_from_rel_block != 0 {
-            self.read_block_to(rel_baddr_start.try_into().unwrap(), filesystem, &mut block_bytes)?;
+            self.read_block_to(
+                rel_baddr_start.try_into().unwrap(),
+                filesystem,
+                &mut block_bytes,
+            )?;
 
             let off_from_rel_block_usize = usize::try_from(off_from_rel_block).unwrap();
-            let end = std::cmp::min(buffer.len(), usize::try_from(filesystem.superblock.block_size).unwrap() - off_from_rel_block_usize);
-            buffer[..end].copy_from_slice(&block_bytes[off_from_rel_block_usize..off_from_rel_block_usize + end]);
+            let end = std::cmp::min(
+                buffer.len(),
+                usize::try_from(filesystem.superblock.block_size).unwrap()
+                    - off_from_rel_block_usize,
+            );
+            buffer[..end].copy_from_slice(
+                &block_bytes[off_from_rel_block_usize..off_from_rel_block_usize + end],
+            );
 
             bytes_read += end;
 
             if u64::try_from(buffer.len()).unwrap() >= off_from_rel_block {
-                return self.read(filesystem, round_up(offset, filesystem.superblock.block_size), &mut buffer[end..]).map(|b| b + bytes_read)
+                return self
+                    .read(
+                        filesystem,
+                        round_up(offset, filesystem.superblock.block_size),
+                        &mut buffer[end..],
+                    )
+                    .map(|b| b + bytes_read);
             } else {
-                return Ok(bytes_read)
+                return Ok(bytes_read);
             }
         }
 
         let mut current_rel_baddr = u32::try_from(rel_baddr_start).unwrap();
 
         while buffer.len() >= usize::try_from(filesystem.superblock.block_size).unwrap() {
-
             self.read_block_to(current_rel_baddr, filesystem, &mut block_bytes)?;
 
-            buffer[..usize::try_from(filesystem.superblock.block_size).unwrap()].copy_from_slice(&block_bytes);
+            buffer[..usize::try_from(filesystem.superblock.block_size).unwrap()]
+                .copy_from_slice(&block_bytes);
 
             bytes_read += block_bytes.len();
 
@@ -405,35 +478,59 @@ impl Inode {
 
         Ok(bytes_read)
     }
-    pub fn write<D: fs_core::DeviceMut>(&self, filesystem: &mut Filesystem<D>, offset: u64, mut buffer: &[u8]) -> io::Result<()> {
+    pub fn write<D: fs_core::DeviceMut>(
+        &self,
+        filesystem: &mut Filesystem<D>,
+        offset: u64,
+        mut buffer: &[u8],
+    ) -> io::Result<()> {
         let off_from_rel_block = offset % filesystem.superblock.block_size;
         let rel_baddr_start = offset / filesystem.superblock.block_size;
 
-        let mut block_bytes = vec! [0u8; usize::try_from(filesystem.superblock.block_size).unwrap()].into_boxed_slice();
+        let mut block_bytes = vec![0u8; usize::try_from(filesystem.superblock.block_size).unwrap()]
+            .into_boxed_slice();
 
         if off_from_rel_block != 0 {
-            self.read_block_to(rel_baddr_start.try_into().unwrap(), filesystem, &mut block_bytes)?;
+            self.read_block_to(
+                rel_baddr_start.try_into().unwrap(),
+                filesystem,
+                &mut block_bytes,
+            )?;
 
             let off_from_rel_block_usize = usize::try_from(off_from_rel_block).unwrap();
-            let end = std::cmp::min(buffer.len(), usize::try_from(filesystem.superblock.block_size).unwrap() - off_from_rel_block_usize);
-            block_bytes[off_from_rel_block_usize..off_from_rel_block_usize + end].copy_from_slice(&buffer[..end]);
+            let end = std::cmp::min(
+                buffer.len(),
+                usize::try_from(filesystem.superblock.block_size).unwrap()
+                    - off_from_rel_block_usize,
+            );
+            block_bytes[off_from_rel_block_usize..off_from_rel_block_usize + end]
+                .copy_from_slice(&buffer[..end]);
 
-            self.write_block(rel_baddr_start.try_into().unwrap(), filesystem, &block_bytes)?;
+            self.write_block(
+                rel_baddr_start.try_into().unwrap(),
+                filesystem,
+                &block_bytes,
+            )?;
 
             if u64::try_from(buffer.len()).unwrap() >= off_from_rel_block {
-                return self.write(filesystem, round_up(offset, filesystem.superblock.block_size), &buffer[end..]);
+                return self.write(
+                    filesystem,
+                    round_up(offset, filesystem.superblock.block_size),
+                    &buffer[end..],
+                );
             } else {
-                return Ok(())
+                return Ok(());
             }
         }
 
         let mut current_rel_baddr = u32::try_from(rel_baddr_start).unwrap();
 
         while buffer.len() >= usize::try_from(filesystem.superblock.block_size).unwrap() {
-
             self.read_block_to(current_rel_baddr, filesystem, &mut block_bytes)?;
 
-            block_bytes.copy_from_slice(&buffer[..usize::try_from(filesystem.superblock.block_size).unwrap()]);
+            block_bytes.copy_from_slice(
+                &buffer[..usize::try_from(filesystem.superblock.block_size).unwrap()],
+            );
 
             self.write_block(current_rel_baddr, filesystem, &block_bytes)?;
 
@@ -449,7 +546,10 @@ impl Inode {
 
         Ok(())
     }
-    fn raw_dir_entries<'a, D: fs_core::Device>(&'a self, filesystem: &'a Filesystem<D>) -> io::Result<RawDirIterator<'a, D>> {
+    fn raw_dir_entries<'a, D: fs_core::Device>(
+        &'a self,
+        filesystem: &'a Filesystem<D>,
+    ) -> io::Result<RawDirIterator<'a, D>> {
         if self.ty != InodeType::Dir {
             // TODO: ENOTDIR
             return Err(io::Error::from(io::ErrorKind::InvalidInput));
@@ -462,10 +562,19 @@ impl Inode {
             finished: false,
         })
     }
-    pub fn dir_entries<'a, D: fs_core::Device>(&'a self, filesystem: &'a Filesystem<D>) -> io::Result<DirIterator<'a, D>> {
-        Ok(DirIterator { raw: self.raw_dir_entries(filesystem)? })
+    pub fn dir_entries<'a, D: fs_core::Device>(
+        &'a self,
+        filesystem: &'a Filesystem<D>,
+    ) -> io::Result<DirIterator<'a, D>> {
+        Ok(DirIterator {
+            raw: self.raw_dir_entries(filesystem)?,
+        })
     }
-    pub fn with_symlink_target<D: fs_core::Device, F: FnOnce(io::Result<&[u8]>) -> ()>(&self, filesystem: &mut Filesystem<D>, handler: F) {
+    pub fn with_symlink_target<D: fs_core::Device, F: FnOnce(io::Result<&[u8]>) -> ()>(
+        &self,
+        filesystem: &mut Filesystem<D>,
+        handler: F,
+    ) {
         let size = self.size(&filesystem.superblock);
 
         if size <= 60 {
@@ -473,8 +582,17 @@ impl Inode {
 
             let mut bytes = [0u8; 60];
             let stride = mem::size_of::<u32>();
-            for (index, value) in self.direct_ptrs.iter().chain(&[self.singly_indirect_ptr, self.doubly_indirect_ptr, self.triply_indirect_ptr]).enumerate() {
-                bytes[index * stride .. (index + 1) * stride ].copy_from_slice(&value.to_le_bytes());
+            for (index, value) in self
+                .direct_ptrs
+                .iter()
+                .chain(&[
+                    self.singly_indirect_ptr,
+                    self.doubly_indirect_ptr,
+                    self.triply_indirect_ptr,
+                ])
+                .enumerate()
+            {
+                bytes[index * stride..(index + 1) * stride].copy_from_slice(&value.to_le_bytes());
             }
             handler(Ok(&bytes));
         } else {
@@ -489,17 +607,29 @@ impl Inode {
         }
     }
 
-    pub fn remove<D: fs_core::DeviceMut>(&self, filesystem: &mut Filesystem<D>, inode: u32) -> io::Result<()> {
+    pub fn remove<D: fs_core::DeviceMut>(
+        &self,
+        filesystem: &mut Filesystem<D>,
+        inode: u32,
+    ) -> io::Result<()> {
         assert_eq!(self.hard_link_count, 0);
 
         // Frees the inode and its owned blocks.
         block_group::free_inode(inode, filesystem)
     }
-    pub fn remove_entry<D: fs_core::DeviceMut>(&self, filesystem: &mut Filesystem<D>, name: &OsStr) -> fs_core::Result<()> {
+    pub fn remove_entry<D: fs_core::DeviceMut>(
+        &self,
+        filesystem: &mut Filesystem<D>,
+        name: &OsStr,
+    ) -> fs_core::Result<()> {
         // Remove the entry by setting the length of the entry with matching name to zero, and
         // append the length of that entry to the previous (if any).
 
-        let (index, (mut entry, offset)) = match self.raw_dir_entries(filesystem)?.enumerate().find(|(_, (entry, _))| entry.name == name) {
+        let (index, (mut entry, offset)) = match self
+            .raw_dir_entries(filesystem)?
+            .enumerate()
+            .find(|(_, (entry, _))| entry.name == name)
+        {
             Some(x) => x,
             None => return Err(fs_core::Error::NoEntity),
         };
@@ -507,7 +637,8 @@ impl Inode {
         if index > 0 {
             // TODO: Avoid iterating twice.
 
-            let (mut previous_entry, previous_offset) = self.raw_dir_entries(filesystem)?.nth(index - 1).unwrap();
+            let (mut previous_entry, previous_offset) =
+                self.raw_dir_entries(filesystem)?.nth(index - 1).unwrap();
             previous_entry.total_entry_size += entry.total_entry_size;
 
             let mut bytes = [0u8; 8];
@@ -551,34 +682,54 @@ pub struct DirIterator<'a, D: fs_core::Device> {
 impl<'a, D: fs_core::Device> Iterator for RawDirIterator<'a, D> {
     type Item = (DirEntry, u64);
     fn next(&mut self) -> Option<Self::Item> {
-        if self.finished { return None }
+        if self.finished {
+            return None;
+        }
 
         let size = self.inode_struct.size(&self.filesystem.superblock);
 
         if size == 0 {
             self.finished = true;
-            return None
+            return None;
         }
 
         if self.current_entry_offset + 6 < size {
             self.entry_bytes.clear();
             self.entry_bytes.resize(6, 0);
 
-            if self.inode_struct.read(self.filesystem, self.current_entry_offset, &mut self.entry_bytes[..6]).is_err() {
+            if self
+                .inode_struct
+                .read(
+                    self.filesystem,
+                    self.current_entry_offset,
+                    &mut self.entry_bytes[..6],
+                )
+                .is_err()
+            {
                 self.finished = true;
-                return None
+                return None;
             }
-            let length = DirEntry::length(&self.entry_bytes[0..6]).try_into().unwrap();
+            let length = DirEntry::length(&self.entry_bytes[0..6])
+                .try_into()
+                .unwrap();
 
-            if length == 0 { 
+            if length == 0 {
                 self.finished = true;
-                return None
+                return None;
             }
 
             self.entry_bytes.resize(length, 0);
-            if self.inode_struct.read(self.filesystem, self.current_entry_offset, &mut self.entry_bytes[..length]).is_err() {
+            if self
+                .inode_struct
+                .read(
+                    self.filesystem,
+                    self.current_entry_offset,
+                    &mut self.entry_bytes[..length],
+                )
+                .is_err()
+            {
                 self.finished = true;
-                return None
+                return None;
             }
 
             let entry = DirEntry::parse(&self.filesystem.superblock, &self.entry_bytes);
@@ -588,7 +739,7 @@ impl<'a, D: fs_core::Device> Iterator for RawDirIterator<'a, D> {
             return value;
         } else {
             self.finished = true;
-            return None
+            return None;
         }
     }
 }
@@ -648,11 +799,19 @@ impl DirEntry {
         write_u16(bytes, 4, this.total_entry_size);
         write_u8(bytes, 6, this.name.len() as u8);
 
-        if superblock.extended.as_ref().map(|extended| extended.req_features_present.dir_type).unwrap_or(false) {
-            write_u8(bytes, 7, InodeType::to_direntry_ty_indicator(this.type_indicator.unwrap()));
+        if superblock
+            .extended
+            .as_ref()
+            .map(|extended| extended.req_features_present.dir_type)
+            .unwrap_or(false)
+        {
+            write_u8(
+                bytes,
+                7,
+                InodeType::to_direntry_ty_indicator(this.type_indicator.unwrap()),
+            );
         } else {
             write_u8(bytes, 7, (this.name.len() >> 8) as u8);
-
         }
     }
     pub fn serialize(this: &Self, superblock: &Superblock, bytes: &mut [u8]) {

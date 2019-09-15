@@ -1,12 +1,19 @@
 use std::{
     collections::HashMap,
-    convert::{TryFrom, TryInto}, io,
+    convert::{TryFrom, TryInto},
     ffi::OsStr,
     fs::File,
+    io,
 };
 
-use extfs::{Filesystem, fs_core::{FileHandle as _, Filesystem as _, Inode as _}, Inode, inode::InodeType};
-use fuse::{FileAttr, Request, ReplyAttr, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyDirectory, ReplyData};
+use extfs::{
+    fs_core::{FileHandle as _, Filesystem as _, Inode as _},
+    inode::InodeType,
+    Filesystem, Inode,
+};
+use fuse::{
+    FileAttr, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, Request,
+};
 use time::Timespec;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -44,7 +51,7 @@ impl std::fmt::Display for OptionsParseError<'_> {
 impl std::error::Error for OptionsParseError<'_> {}
 
 impl Options {
-    pub fn parse<'a>(options_str: &'a str) -> Result<Self, OptionsParseError<'a>> { 
+    pub fn parse<'a>(options_str: &'a str) -> Result<Self, OptionsParseError<'a>> {
         let mut options = Self::default();
 
         for option in options_str.split(',') {
@@ -56,7 +63,7 @@ impl Options {
                 "atime" => options.access_time = AccessTime::Atime,
                 "noatime" => options.access_time = AccessTime::Noatime,
                 "relatime" => options.access_time = AccessTime::Relatime,
-                other => return Err(OptionsParseError::UnknownOption(other))
+                other => return Err(OptionsParseError::UnknownOption(other)),
             }
         }
 
@@ -118,90 +125,99 @@ impl FuseFilesystem {
 }
 
 fn fuse_inode_to_extfs_inode(fuse_inode: u64) -> Option<u32> {
-u32::try_from(fuse_inode).ok().map(|fuse_inode| if fuse_inode == 1 { 2 } else { fuse_inode })
+    u32::try_from(fuse_inode)
+        .ok()
+        .map(|fuse_inode| if fuse_inode == 1 { 2 } else { fuse_inode })
 }
 fn fuse_inode_from_extfs_inode(extfs_inode: u32) -> u64 {
-if extfs_inode == 2 { 1 } else { extfs_inode as u64 }
+    if extfs_inode == 2 {
+        1
+    } else {
+        extfs_inode as u64
+    }
 }
 
 impl fuse::Filesystem for FuseFilesystem {
-fn init(&mut self, _req: &Request) -> Result<(), libc::c_int> {
-    Ok(())
-}
-fn destroy(&mut self, _req: &Request) {
-}
+    fn init(&mut self, _req: &Request) -> Result<(), libc::c_int> {
+        Ok(())
+    }
+    fn destroy(&mut self, _req: &Request) {}
 
-fn getattr(&mut self, _req: &Request, fuse_inode: u64, reply: ReplyAttr) {
-    let inode = match fuse_inode_to_extfs_inode(fuse_inode) {
-        Some(inode) => inode,
-        None => {
-            reply.error(libc::EOVERFLOW);
-            return
-        }
-    };
-
-    let file_attributes = match self.inner.getattrs(inode) {
-        Ok(attrs) => fuse_attr(attrs),
-        Err(err) => {
-            match err {
-                extfs::fs_core::Error::NoEntity => reply.error(libc::ENOENT),
-                extfs::fs_core::Error::Io(_) => reply.error(libc::EIO),
-                extfs::fs_core::Error::BadFd => unreachable!(),
-                extfs::fs_core::Error::Other(_) => panic!(),
+    fn getattr(&mut self, _req: &Request, fuse_inode: u64, reply: ReplyAttr) {
+        let inode = match fuse_inode_to_extfs_inode(fuse_inode) {
+            Some(inode) => inode,
+            None => {
+                reply.error(libc::EOVERFLOW);
+                return;
             }
-            return
-        }
-    };
+        };
 
-    let validity_timeout = Timespec::new(0, 0); // TODO: Is this correct?
-
-    reply.attr(&validity_timeout, &file_attributes);
-}
-fn lookup(&mut self, _req: &Request, parent_inode: u64, name: &OsStr, reply: ReplyEntry) {
-    let parent_inode = match fuse_inode_to_extfs_inode(parent_inode) {
-        Some(inode) => inode,
-        None => {
-            reply.error(libc::EOVERFLOW);
-            return
-        }
-    };
-
-    let entry = match self.inner.lookup_direntry(parent_inode, name) {
-        Ok(entry) => entry,
-        Err(err) => {
-            match err {
-                fs_core::Error::BadFd => unreachable!(),
-                fs_core::Error::NoEntity => reply.error(libc::ENOENT),
-                fs_core::Error::Io(_) => reply.error(libc::EIO),
-                extfs::fs_core::Error::Other(_) => panic!(),
+        let file_attributes = match self.inner.getattrs(inode) {
+            Ok(attrs) => fuse_attr(attrs),
+            Err(err) => {
+                match err {
+                    extfs::fs_core::Error::NoEntity => reply.error(libc::ENOENT),
+                    extfs::fs_core::Error::Io(_) => reply.error(libc::EIO),
+                    extfs::fs_core::Error::BadFd => unreachable!(),
+                    extfs::fs_core::Error::Other(_) => panic!(),
+                }
+                return;
             }
-            return
-        }
-    };
+        };
 
-    let inode_struct = match Inode::load(&mut self.inner, entry.inode as u32) {
-        Ok(inode_struct) => inode_struct,
-        Err(err) => {
-            match err {
-                fs_core::Error::BadFd => unreachable!(),
-                fs_core::Error::NoEntity => reply.error(libc::ENOENT),
-                fs_core::Error::Io(_) => reply.error(libc::EIO),
-                extfs::fs_core::Error::Other(_) => panic!(),
-            };
-            return
-        }
-    };
+        let validity_timeout = Timespec::new(0, 0); // TODO: Is this correct?
 
-    let validity_timeout = Timespec::new(0, 0); // TODO: Is this correct?
+        reply.attr(&validity_timeout, &file_attributes);
+    }
+    fn lookup(&mut self, _req: &Request, parent_inode: u64, name: &OsStr, reply: ReplyEntry) {
+        let parent_inode = match fuse_inode_to_extfs_inode(parent_inode) {
+            Some(inode) => inode,
+            None => {
+                reply.error(libc::EOVERFLOW);
+                return;
+            }
+        };
 
-    reply.entry(&validity_timeout, &fuse_attr(self.inner.inode_attrs(entry.inode as u32, &inode_struct)), inode_struct.generation_number().unwrap_or(0)); // TODO: generation_number?
-}
-fn opendir(&mut self, _req: &Request, fuse_inode: u64, _flags: u32, reply: ReplyOpen) {
-    let inode = match fuse_inode_to_extfs_inode(fuse_inode) {
-        Some(inode) => inode,
-        None => {
-            reply.error(libc::EOVERFLOW);
-            return
+        let entry = match self.inner.lookup_direntry(parent_inode, name) {
+            Ok(entry) => entry,
+            Err(err) => {
+                match err {
+                    fs_core::Error::BadFd => unreachable!(),
+                    fs_core::Error::NoEntity => reply.error(libc::ENOENT),
+                    fs_core::Error::Io(_) => reply.error(libc::EIO),
+                    extfs::fs_core::Error::Other(_) => panic!(),
+                }
+                return;
+            }
+        };
+
+        let inode_struct = match Inode::load(&mut self.inner, entry.inode as u32) {
+            Ok(inode_struct) => inode_struct,
+            Err(err) => {
+                match err {
+                    fs_core::Error::BadFd => unreachable!(),
+                    fs_core::Error::NoEntity => reply.error(libc::ENOENT),
+                    fs_core::Error::Io(_) => reply.error(libc::EIO),
+                    extfs::fs_core::Error::Other(_) => panic!(),
+                };
+                return;
+            }
+        };
+
+        let validity_timeout = Timespec::new(0, 0); // TODO: Is this correct?
+
+        reply.entry(
+            &validity_timeout,
+            &fuse_attr(self.inner.inode_attrs(entry.inode as u32, &inode_struct)),
+            inode_struct.generation_number().unwrap_or(0),
+        ); // TODO: generation_number?
+    }
+    fn opendir(&mut self, _req: &Request, fuse_inode: u64, _flags: u32, reply: ReplyOpen) {
+        let inode = match fuse_inode_to_extfs_inode(fuse_inode) {
+            Some(inode) => inode,
+            None => {
+                reply.error(libc::EOVERFLOW);
+                return;
             }
         };
         let fh = match self.inner.open_directory(inode) {
@@ -213,22 +229,34 @@ fn opendir(&mut self, _req: &Request, fuse_inode: u64, _flags: u32, reply: Reply
                     fs_core::Error::Io(_) => reply.error(libc::EIO),
                     fs_core::Error::Other(_) => panic!(),
                 }
-                return
+                return;
             }
         };
         reply.opened(fh, 0);
     }
-    fn readdir(&mut self, _req: &Request, fuse_inode: u64, fh: u64, offset: i64, mut reply: ReplyDirectory) {
+    fn readdir(
+        &mut self,
+        _req: &Request,
+        fuse_inode: u64,
+        fh: u64,
+        offset: i64,
+        mut reply: ReplyDirectory,
+    ) {
         let inode = match fuse_inode_to_extfs_inode(fuse_inode) {
             Some(inode) => inode,
             None => {
                 reply.error(libc::EOVERFLOW);
-                return
+                return;
             }
         };
         match self.inner.read_directory(fh, offset) {
             Ok(Some(entry)) => {
-                reply.add(entry.inode.into(), entry.offset as i64, fuse_filetype(entry.filetype), entry.name);
+                reply.add(
+                    entry.inode.into(),
+                    entry.offset as i64,
+                    fuse_filetype(entry.filetype),
+                    entry.name,
+                );
             }
             Ok(None) => (),
             Err(err) => {
@@ -238,12 +266,19 @@ fn opendir(&mut self, _req: &Request, fuse_inode: u64, _flags: u32, reply: Reply
                     fs_core::Error::Io(_) => reply.error(libc::EIO),
                     fs_core::Error::Other(_) => panic!(),
                 }
-                return
+                return;
             }
         }
         reply.ok()
     }
-    fn releasedir(&mut self, _req: &Request, _fuse_inode: u64, fh: u64, _flags: u32, reply: ReplyEmpty) {
+    fn releasedir(
+        &mut self,
+        _req: &Request,
+        _fuse_inode: u64,
+        fh: u64,
+        _flags: u32,
+        reply: ReplyEmpty,
+    ) {
         self.inner.close_directory(fh);
         reply.ok();
     }
@@ -252,7 +287,7 @@ fn opendir(&mut self, _req: &Request, fuse_inode: u64, _flags: u32, reply: Reply
             Some(inode) => inode,
             None => {
                 reply.error(libc::EOVERFLOW);
-                return
+                return;
             }
         };
         let fh = match self.inner.open_file(inode) {
@@ -264,17 +299,25 @@ fn opendir(&mut self, _req: &Request, fuse_inode: u64, _flags: u32, reply: Reply
                     fs_core::Error::Io(_) => reply.error(libc::EIO),
                     fs_core::Error::Other(_) => panic!(),
                 }
-                return
+                return;
             }
         };
         reply.opened(fh, 0);
     }
-    fn read(&mut self, _req: &Request, fuse_inode: u64, fh: u64, offset: i64, size: u32, reply: ReplyData) {
+    fn read(
+        &mut self,
+        _req: &Request,
+        fuse_inode: u64,
+        fh: u64,
+        offset: i64,
+        size: u32,
+        reply: ReplyData,
+    ) {
         let inode = match fuse_inode_to_extfs_inode(fuse_inode) {
             Some(inode) => inode,
             None => {
                 reply.error(libc::EOVERFLOW);
-                return
+                return;
             }
         };
         let offset = match u64::try_from(offset) {
@@ -283,7 +326,7 @@ fn opendir(&mut self, _req: &Request, fuse_inode: u64, _flags: u32, reply: Reply
                 // According to IEEE Std 1003.1-2017, the offset cannot be negative for regular files
                 // or block devices when using pread.
                 reply.error(libc::EINVAL);
-                return
+                return;
             }
         };
 
@@ -298,7 +341,16 @@ fn opendir(&mut self, _req: &Request, fuse_inode: u64, _flags: u32, reply: Reply
 
         reply.data(&buffer);
     }
-    fn release(&mut self, _req: &Request, _fuse_inode: u64, fh: u64, _flags: u32, _lock_owned: u64, _flush: bool, reply: ReplyEmpty) {
+    fn release(
+        &mut self,
+        _req: &Request,
+        _fuse_inode: u64,
+        fh: u64,
+        _flags: u32,
+        _lock_owned: u64,
+        _flush: bool,
+        reply: ReplyEmpty,
+    ) {
         self.inner.close_file(fh);
         reply.ok();
     }
@@ -307,23 +359,23 @@ fn opendir(&mut self, _req: &Request, fuse_inode: u64, _flags: u32, reply: Reply
             Some(inode) => inode,
             None => {
                 reply.error(libc::EOVERFLOW);
-                return
+                return;
             }
         };
         if !extfs::block_group::inode_exists(inode, &mut self.inner).unwrap() {
             reply.error(libc::ENOENT);
-            return
+            return;
         }
         let inode_struct = match Inode::load(&mut self.inner, inode) {
             Ok(inode_struct) => inode_struct,
             Err(_) => {
                 reply.error(libc::EIO);
-                return
+                return;
             }
         };
         if inode_struct.ty != InodeType::Symlink {
             reply.error(libc::EINVAL);
-            return
+            return;
         }
         inode_struct.with_symlink_target(&mut self.inner, |result| match result {
             Ok(data) => reply.data(data),
@@ -335,7 +387,7 @@ fn opendir(&mut self, _req: &Request, fuse_inode: u64, _flags: u32, reply: Reply
             Some(parent) => parent,
             None => {
                 reply.error(libc::EOVERFLOW);
-                return
+                return;
             }
         };
         let parent_struct = match Inode::load(&mut self.inner, parent) {
@@ -343,7 +395,7 @@ fn opendir(&mut self, _req: &Request, fuse_inode: u64, _flags: u32, reply: Reply
             Err(error) => {
                 eprintln!("Error when unlinking: loading parent struct: {}.", error);
                 reply.error(libc::EIO);
-                return
+                return;
             }
         };
         match parent_struct.remove_entry(&mut self.inner, name) {
@@ -351,7 +403,7 @@ fn opendir(&mut self, _req: &Request, fuse_inode: u64, _flags: u32, reply: Reply
             Err(error) => {
                 eprintln!("Error when unlinking: removing entry: {}.", error);
                 reply.error(libc::EIO);
-                return
+                return;
             }
         };
         reply.ok();

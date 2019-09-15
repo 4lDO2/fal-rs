@@ -11,7 +11,7 @@ use std::{
 
 use uuid::Uuid;
 
-use fs_core::{Filesystem as _, time::Timespec};
+use fs_core::{time::Timespec, Filesystem as _};
 
 pub mod block_group;
 pub mod inode;
@@ -20,7 +20,10 @@ pub mod superblock;
 pub use inode::Inode;
 pub use superblock::Superblock;
 
-pub use fs_core::{read_u8, read_u16, read_u32, read_u64, read_uuid, write_u8, write_u16, write_u32, write_u64, write_uuid};
+pub use fs_core::{
+    read_u16, read_u32, read_u64, read_u8, read_uuid, write_u16, write_u32, write_u64, write_u8,
+    write_uuid,
+};
 
 fn read_block_to<D: fs_core::Device>(
     filesystem: &Filesystem<D>,
@@ -49,12 +52,22 @@ fn read_block<D: fs_core::Device>(
     read_block_to(filesystem, block_address, &mut vector)?;
     Ok(vector.into_boxed_slice())
 }
-fn write_block_raw<D: fs_core::DeviceMut>(filesystem: &Filesystem<D>, block_address: u32, buffer: &[u8]) -> io::Result<()> {
-    filesystem.device.lock().unwrap().seek(SeekFrom::Start(block_address as u64 * filesystem.superblock.block_size))?;
+fn write_block_raw<D: fs_core::DeviceMut>(
+    filesystem: &Filesystem<D>,
+    block_address: u32,
+    buffer: &[u8],
+) -> io::Result<()> {
+    filesystem.device.lock().unwrap().seek(SeekFrom::Start(
+        block_address as u64 * filesystem.superblock.block_size,
+    ))?;
     filesystem.device.lock().unwrap().write_all(buffer)?;
     Ok(())
 }
-fn write_block<D: fs_core::DeviceMut>(filesystem: &Filesystem<D>, block_address: u32, buffer: &[u8]) -> io::Result<()> {
+fn write_block<D: fs_core::DeviceMut>(
+    filesystem: &Filesystem<D>,
+    block_address: u32,
+    buffer: &[u8],
+) -> io::Result<()> {
     debug_assert!(block_group::block_exists(block_address, filesystem)?);
     write_block_raw(filesystem, block_address, buffer)
 }
@@ -70,7 +83,13 @@ where
 }
 pub fn round_up<T>(number: T, to: T) -> T
 where
-    T: Add<Output = T> + Copy + Div<Output = T> + Mul<Output = T> + Rem<Output = T> + From<u8> + PartialEq,
+    T: Add<Output = T>
+        + Copy
+        + Div<Output = T>
+        + Mul<Output = T>
+        + Rem<Output = T>
+        + From<u8>
+        + PartialEq,
 {
     div_round_up(number, to) * number
 }
@@ -199,24 +218,43 @@ impl<D: fs_core::Device> fs_core::Filesystem<D> for Filesystem<D> {
     fn open_directory(&mut self, inode: u32) -> fs_core::Result<u64> {
         self.open_file(inode)
     }
-    fn read_directory(&mut self, fh: u64, offset: i64) -> fs_core::Result<Option<fs_core::DirectoryEntry>> {
+    fn read_directory(
+        &mut self,
+        fh: u64,
+        offset: i64,
+    ) -> fs_core::Result<Option<fs_core::DirectoryEntry>> {
         let handle = match self.fhs.get(&fh) {
             Some(handle) => handle,
             None => return Err(fs_core::Error::BadFd),
         };
-        Ok(match handle.inode.dir_entries(self)?.enumerate().skip(offset as usize).next() {
-            Some((offset, entry)) => Some(fs_core::DirectoryEntry {
-                filetype: entry.ty(self)?.into(),
-                name: entry.name,
-                inode: entry.inode.into(),
-                offset: offset as u64,
-            }),
-            None => None,
-        })
-
+        Ok(
+            match handle
+                .inode
+                .dir_entries(self)?
+                .enumerate()
+                .skip(offset as usize)
+                .next()
+            {
+                Some((offset, entry)) => Some(fs_core::DirectoryEntry {
+                    filetype: entry.ty(self)?.into(),
+                    name: entry.name,
+                    inode: entry.inode.into(),
+                    offset: offset as u64,
+                }),
+                None => None,
+            },
+        )
     }
-    fn lookup_direntry(&mut self, parent: u32, name: &OsStr) -> fs_core::Result<fs_core::DirectoryEntry> {
-        let (offset, entry) = Inode::load(self, parent)?.dir_entries(self)?.enumerate().find(|(_, entry)| entry.name == name).unwrap();
+    fn lookup_direntry(
+        &mut self,
+        parent: u32,
+        name: &OsStr,
+    ) -> fs_core::Result<fs_core::DirectoryEntry> {
+        let (offset, entry) = Inode::load(self, parent)?
+            .dir_entries(self)?
+            .enumerate()
+            .find(|(_, entry)| entry.name == name)
+            .unwrap();
 
         Ok(fs_core::DirectoryEntry {
             filetype: entry.ty(self)?.into(),
