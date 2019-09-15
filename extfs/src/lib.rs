@@ -105,7 +105,42 @@ pub struct Filesystem<D: fs_core::Device> {
     last_fh: u64,
 }
 
-impl fs_core::Inode for Inode {}
+fn inode_attrs(inode: &Inode, addr: u32, superblock: &Superblock) -> fs_core::Attributes<u32> {
+    fs_core::Attributes {
+        access_time: Timespec {
+            sec: inode.last_access_time.into(),
+            nsec: 0,
+        },
+        change_time: Timespec {
+            sec: inode.last_modification_time.into(),
+            nsec: 0,
+        },
+        creation_time: Timespec {
+            sec: inode.creation_time.into(),
+            nsec: 0,
+        },
+        modification_time: Timespec {
+            sec: inode.last_modification_time.into(),
+            nsec: 0,
+        },
+        filetype: inode.ty.into(),
+        block_count: div_round_up(inode.size(&superblock), superblock.block_size),
+        flags: inode.flags,
+        group_id: inode.gid.into(),
+        hardlink_count: inode.hard_link_count.into(),
+        inode: addr.into(),
+        permissions: inode.permissions,
+        rdev: 0,
+        size: inode.size(&superblock),
+        user_id: inode.uid.into(),
+    }
+}
+
+impl fs_core::Inode for Inode {
+    fn generation_number(&self) -> Option<u64> {
+        Some(self.generation_number.into())
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FileHandle {
@@ -128,84 +163,61 @@ impl<D: fs_core::Device> fs_core::Filesystem<D> for Filesystem<D> {
             last_fh: 0,
         }
     }
-    fn load_inode(&mut self, addr: Self::InodeAddr) -> Self::InodeStruct {
-        Inode::load(self, addr).unwrap()
+    fn load_inode(&mut self, addr: Self::InodeAddr) -> fs_core::Result<Self::InodeStruct> {
+        Ok(Inode::load(self, addr)?)
     }
-    fn open_file(&mut self, addr: Self::InodeAddr) -> FileHandle {
+    fn open_file(&mut self, addr: Self::InodeAddr) -> fs_core::Result<FileHandle> {
         let fh = FileHandle {
             inode_addr: addr,
             fh: self.last_fh,
-            inode: Inode::load(self, addr).unwrap(),
+            inode: Inode::load(self, addr)?,
         };
         self.fhs.insert(self.last_fh, fh);
         self.last_fh += 1;
 
-        fh
+        Ok(fh)
     }
-    fn read(&mut self, fh: &FileHandle, offset: u64, buffer: &mut [u8]) -> usize {
-        fh.inode.read(self, offset, buffer).unwrap()
+    fn read(&mut self, fh: &FileHandle, offset: u64, buffer: &mut [u8]) -> fs_core::Result<usize> {
+        Ok(fh.inode.read(self, offset, buffer)?)
     }
     fn close_file(&mut self, fh: Self::FileHandle) {
         // FIXME: Flush before closing.
         self.fhs.remove(&fh.fh);
     }
-    fn getattrs(&mut self, inode_addr: u32) -> fs_core::Attributes<u32> {
-        use inode::InodeType;
+    fn getattrs(&mut self, inode_addr: u32) -> fs_core::Result<fs_core::Attributes<u32>> {
+        let inode = Inode::load(self, inode_addr)?;
 
-        let inode = Inode::load(self, inode_addr).unwrap();
-        fs_core::Attributes {
-            access_time: Timespec {
-                sec: inode.last_access_time.into(),
-                nsec: 0,
-            },
-            change_time: Timespec {
-                sec: inode.last_modification_time.into(),
-                nsec: 0,
-            },
-            creation_time: Timespec {
-                sec: inode.creation_time.into(),
-                nsec: 0,
-            },
-            modification_time: Timespec {
-                sec: inode.last_modification_time.into(),
-                nsec: 0,
-            },
-            filetype: inode.ty.into(),
-            block_count: div_round_up(inode.size(&self.superblock), self.superblock.block_size),
-            flags: inode.flags,
-            group_id: inode.gid.into(),
-            hardlink_count: inode.hard_link_count.into(),
-            inode: inode_addr.into(),
-            permissions: inode.permissions,
-            rdev: 0,
-            size: inode.size(&self.superblock),
-            user_id: inode.uid.into(),
-        }
+        Ok(inode_attrs(&inode, inode_addr, &self.superblock))
     }
-    fn open_directory(&mut self, inode: u32) -> FileHandle {
+    fn open_directory(&mut self, inode: u32) -> fs_core::Result<FileHandle> {
         self.open_file(inode)
     }
-    fn read_directory(&mut self, handle: &FileHandle, offset: i64) -> fs_core::DirectoryEntry {
-        let (offset, entry) = handle.inode.dir_entries(self).unwrap().enumerate().skip(offset as usize).next().unwrap();
+    fn read_directory(&mut self, handle: &FileHandle, offset: i64) -> fs_core::Result<Option<fs_core::DirectoryEntry>> {
+        Ok(match handle.inode.dir_entries(self)?.enumerate().skip(offset as usize).next() {
+            Some((offset, entry)) => Some(fs_core::DirectoryEntry {
+                filetype: entry.ty(self)?.into(),
+                name: entry.name,
+                inode: entry.inode.into(),
+                offset: offset as u64,
+            }),
+            None => None,
+        })
 
-        fs_core::DirectoryEntry {
-            filetype: entry.ty(self).into(),
-            name: entry.name,
-            inode: entry.inode.into(),
-            offset: offset as u64,
-        }
     }
-    fn lookup_direntry(&mut self, parent: u32, name: &OsStr) -> fs_core::DirectoryEntry {
-        let (offset, entry) = Inode::load(self, parent).unwrap().dir_entries(self).unwrap().enumerate().next().unwrap();
+    fn lookup_direntry(&mut self, parent: u32, name: &OsStr) -> fs_core::Result<fs_core::DirectoryEntry> {
+        let (offset, entry) = Inode::load(self, parent)?.dir_entries(self)?.enumerate().find(|(_, entry)| entry.name == name).unwrap();
 
-        fs_core::DirectoryEntry {
-            filetype: entry.ty(self).into(),
+        Ok(fs_core::DirectoryEntry {
+            filetype: entry.ty(self)?.into(),
             name: entry.name,
             inode: entry.inode.into(),
             offset: offset as u64,
-        }
+        })
     }
     fn close_directory(&mut self, handle: FileHandle) {
         self.close_file(handle)
+    }
+    fn inode_attrs(&mut self, addr: u32, inode: &Inode) -> fs_core::Attributes<u32> {
+        inode_attrs(inode, addr, &self.superblock)
     }
 }

@@ -134,10 +134,12 @@ impl Inode {
     pub fn load<R: fs_core::Device>(
         filesystem: &Filesystem<R>,
         inode_address: u32,
-    ) -> io::Result<Self> {
-        if inode_address == 0 { return Err(io::Error::new(io::ErrorKind::NotFound, "no inode address (was 0)")) }
+    ) -> fs_core::Result<Self> {
+        if inode_address == 0 { return Err(fs_core::Error::NoEntity) }
 
-        debug_assert!(block_group::inode_exists(inode_address, filesystem)?);
+        if !block_group::inode_exists(inode_address, filesystem)? {
+            return Err(fs_core::Error::NoEntity)
+        }
 
         let block_group_index =
             block_group::inode_block_group_index(&filesystem.superblock, inode_address);
@@ -493,13 +495,13 @@ impl Inode {
         // Frees the inode and its owned blocks.
         block_group::free_inode(inode, filesystem)
     }
-    pub fn remove_entry<D: fs_core::DeviceMut>(&self, filesystem: &mut Filesystem<D>, name: &OsStr) -> io::Result<()> {
+    pub fn remove_entry<D: fs_core::DeviceMut>(&self, filesystem: &mut Filesystem<D>, name: &OsStr) -> fs_core::Result<()> {
         // Remove the entry by setting the length of the entry with matching name to zero, and
         // append the length of that entry to the previous (if any).
 
         let (index, (mut entry, offset)) = match self.raw_dir_entries(filesystem)?.enumerate().find(|(_, (entry, _))| entry.name == name) {
             Some(x) => x,
-            None => return Err(io::Error::from(io::ErrorKind::NotFound)),
+            None => return Err(fs_core::Error::NoEntity),
         };
 
         if index > 0 {
@@ -657,7 +659,10 @@ impl DirEntry {
         Self::serialize_raw(this, superblock, bytes);
         bytes[8..8 + this.name.len()].copy_from_slice(&os_str_to_bytes(&this.name));
     }
-    pub fn ty<D: fs_core::Device>(&self, filesystem: &Filesystem<D>) -> InodeType {
-        self.type_indicator.unwrap_or_else(|| Inode::load(filesystem, self.inode).unwrap().ty)
+    pub fn ty<D: fs_core::Device>(&self, filesystem: &Filesystem<D>) -> fs_core::Result<InodeType> {
+        Ok(match self.type_indicator {
+            Some(ty) => ty,
+            None => Inode::load(filesystem, self.inode)?.ty,
+        })
     }
 }

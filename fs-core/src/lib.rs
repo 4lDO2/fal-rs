@@ -1,6 +1,7 @@
 pub extern crate time;
+pub extern crate libc;
 
-use std::{ffi::{OsStr, OsString}, io::prelude::*, mem};
+use std::{ffi::{OsStr, OsString}, io::{self, prelude::*}, mem};
 use time::Timespec;
 use uuid::Uuid;
 
@@ -64,6 +65,7 @@ pub trait DeviceMut: Device + Write {}
 
 /// An abstract inode structure.
 pub trait Inode {
+    fn generation_number(&self) -> Option<u64>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -104,11 +106,38 @@ pub struct DirectoryEntry<InodeAddr: Into<u64> = u64> {
     pub offset: u64,
 }
 
+#[derive(Debug)]
+pub enum Error {
+    BadFd,
+    NoEntity,
+    Other(i32),
+    Io(io::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Error::NoEntity => writeln!(formatter, "no such file or directory"),
+            Error::BadFd => writeln!(formatter, "bad file descriptor"),
+            Error::Io(err) => writeln!(formatter, "i/o error: `{}`", err),
+            Error::Other(n) => writeln!(formatter, "other ({})", n),
+        }
+    }
+}
+
+impl From<io::Error> for Error {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
+
 // TODO: Add some kind of Result type.
 /// An abstract filesystem. Typically implemented by the backend.
 pub trait Filesystem<D: Device> {
     /// An inode address. u32 on ext2.
-    type InodeAddr: Into<u64>;
+    type InodeAddr: Into<u64> + Copy;
 
     /// An inode structure, capable of retrieving inode information.
     type InodeStruct: Inode;
@@ -116,7 +145,7 @@ pub trait Filesystem<D: Device> {
     /// A file handle, reading (and possibly writing, with FilesystemMut).
     type FileHandle;
 
-    /// A directory handle.
+    /// A directory handle. May or may not be equal to FileHandle.
     type DirHandle;
 
     // TODO: Support mounting multiple devices as one filesystem, for filesystems that support it.
@@ -124,30 +153,36 @@ pub trait Filesystem<D: Device> {
     fn mount(_device: D) -> Self;
 
     /// Load an inode structure from the filesystem. For example, on ext2, the address 2 would load the root directory.
-    fn load_inode(&mut self, address: Self::InodeAddr) -> Self::InodeStruct;
+    fn load_inode(&mut self, address: Self::InodeAddr) -> Result<Self::InodeStruct>;
 
     /// Open a file from an inode address.
-    fn open_file(&mut self, inode: Self::InodeAddr) -> Self::FileHandle;
+    fn open_file(&mut self, inode: Self::InodeAddr) -> Result<Self::FileHandle>;
 
     /// Read bytes from a file.
-    fn read(&mut self, fh: &Self::FileHandle, offset: u64, buffer: &mut [u8]) -> usize;
+    fn read(&mut self, fh: &Self::FileHandle, offset: u64, buffer: &mut [u8]) -> Result<usize>;
 
     /// Close an opened file. The filesystem implementation will ensure that unread bytes get
     /// flushed before closing.
     fn close_file(&mut self, file: Self::FileHandle);
 
     /// Open a directory from an inode address.
-    fn open_directory(&mut self, address: Self::InodeAddr) -> Self::DirHandle;
+    fn open_directory(&mut self, address: Self::InodeAddr) -> Result<Self::DirHandle>;
 
     /// Get an entry from a directory.
-    fn read_directory(&mut self, directory: &Self::DirHandle, offset: i64) -> DirectoryEntry;
+    fn read_directory(&mut self, directory: &Self::DirHandle, offset: i64) -> Result<Option<DirectoryEntry>>;
 
     /// Get a directory entry from a directory inode and a name.
-    fn lookup_direntry(&mut self, parent: Self::InodeAddr, name: &OsStr) -> DirectoryEntry;
+    fn lookup_direntry(&mut self, parent: Self::InodeAddr, name: &OsStr) -> Result<DirectoryEntry>;
 
     /// Close an opened directory.
     fn close_directory(&mut self, dir: Self::DirHandle);
 
     /// Get a file's attributes, typically called from stat(2).
-    fn getattrs(&mut self, inode: Self::InodeAddr) -> Attributes<Self::InodeAddr>;
+    fn getattrs(&mut self, addr: Self::InodeAddr) -> Result<Attributes<Self::InodeAddr>> {
+        let inode = self.load_inode(addr)?;
+        Ok(self.inode_attrs(addr, &inode))
+    }
+
+    /// Get the attributes of an inode.
+    fn inode_attrs(&mut self, addr: Self::InodeAddr, inode: &Self::InodeStruct) -> Attributes<Self::InodeAddr>;
 }
