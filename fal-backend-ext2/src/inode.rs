@@ -114,7 +114,7 @@ impl InodeType {
     }
 }
 
-impl From<InodeType> for fs_core::FileType {
+impl From<InodeType> for fal::FileType {
     fn from(inode_type: InodeType) -> Self {
         match inode_type {
             InodeType::File => Self::RegularFile,
@@ -132,16 +132,16 @@ impl From<InodeType> for fs_core::FileType {
 impl Inode {
     const DIRECT_PTR_COUNT: usize = 12;
 
-    pub fn load<R: fs_core::Device>(
+    pub fn load<R: fal::Device>(
         filesystem: &Filesystem<R>,
         inode_address: u32,
-    ) -> fs_core::Result<Self> {
+    ) -> fal::Result<Self> {
         if inode_address == 0 {
-            return Err(fs_core::Error::NoEntity);
+            return Err(fal::Error::NoEntity);
         }
 
         if !block_group::inode_exists(inode_address, filesystem)? {
-            return Err(fs_core::Error::NoEntity);
+            return Err(fal::Error::NoEntity);
         }
 
         let block_group_index =
@@ -171,7 +171,7 @@ impl Inode {
             [inode_index_in_block * inode_size..inode_index_in_block * inode_size + inode_size];
         Ok(Self::parse(inode_bytes))
     }
-    pub fn store<D: fs_core::DeviceMut>(
+    pub fn store<D: fal::DeviceMut>(
         this: &Self,
         filesystem: &mut Filesystem<D>,
         inode_address: u32,
@@ -314,7 +314,7 @@ impl Inode {
     fn entry_count(block_size: u64) -> usize {
         block_size as usize / mem::size_of::<u32>()
     }
-    fn read_singly<D: fs_core::Device>(
+    fn read_singly<D: fal::Device>(
         filesystem: &Filesystem<D>,
         singly_baddr: u32,
         rel_baddr: u32,
@@ -327,7 +327,7 @@ impl Inode {
             index * mem::size_of::<u32>(),
         ))
     }
-    fn read_doubly<D: fs_core::Device>(
+    fn read_doubly<D: fal::Device>(
         filesystem: &Filesystem<D>,
         doubly_baddr: u32,
         rel_baddr: u32,
@@ -342,7 +342,7 @@ impl Inode {
 
         Self::read_singly(filesystem, singly, singly_rel_baddr)
     }
-    fn read_triply<D: fs_core::Device>(
+    fn read_triply<D: fal::Device>(
         filesystem: &Filesystem<D>,
         triply_baddr: u32,
         rel_baddr: u32,
@@ -360,7 +360,7 @@ impl Inode {
 
         Self::read_doubly(filesystem, doubly, doubly_rel_baddr)
     }
-    fn absolute_baddr<D: fs_core::Device>(
+    fn absolute_baddr<D: fal::Device>(
         &self,
         filesystem: &Filesystem<D>,
         rel_baddr: u32,
@@ -384,7 +384,7 @@ impl Inode {
             panic!("Read exceeding maximum ext2 file size.");
         })
     }
-    pub fn read_block_to<D: fs_core::Device>(
+    pub fn read_block_to<D: fal::Device>(
         &self,
         rel_baddr: u32,
         filesystem: &Filesystem<D>,
@@ -396,7 +396,7 @@ impl Inode {
         let abs_baddr = self.absolute_baddr(filesystem, rel_baddr)?;
         read_block_to(filesystem, abs_baddr, buffer)
     }
-    pub fn write_block<D: fs_core::DeviceMut>(
+    pub fn write_block<D: fal::DeviceMut>(
         &self,
         rel_baddr: u32,
         filesystem: &Filesystem<D>,
@@ -408,7 +408,7 @@ impl Inode {
         let abs_baddr = self.absolute_baddr(filesystem, rel_baddr)?;
         write_block(filesystem, abs_baddr, buffer)
     }
-    pub fn read<D: fs_core::Device>(
+    pub fn read<D: fal::Device>(
         &self,
         filesystem: &Filesystem<D>,
         offset: u64,
@@ -478,7 +478,7 @@ impl Inode {
 
         Ok(bytes_read)
     }
-    pub fn write<D: fs_core::DeviceMut>(
+    pub fn write<D: fal::DeviceMut>(
         &self,
         filesystem: &mut Filesystem<D>,
         offset: u64,
@@ -546,7 +546,7 @@ impl Inode {
 
         Ok(())
     }
-    fn raw_dir_entries<'a, D: fs_core::Device>(
+    fn raw_dir_entries<'a, D: fal::Device>(
         &'a self,
         filesystem: &'a Filesystem<D>,
     ) -> io::Result<RawDirIterator<'a, D>> {
@@ -562,7 +562,7 @@ impl Inode {
             finished: false,
         })
     }
-    pub fn dir_entries<'a, D: fs_core::Device>(
+    pub fn dir_entries<'a, D: fal::Device>(
         &'a self,
         filesystem: &'a Filesystem<D>,
     ) -> io::Result<DirIterator<'a, D>> {
@@ -570,7 +570,7 @@ impl Inode {
             raw: self.raw_dir_entries(filesystem)?,
         })
     }
-    pub fn with_symlink_target<D: fs_core::Device, F: FnOnce(io::Result<&[u8]>) -> ()>(
+    pub fn with_symlink_target<D: fal::Device, F: FnOnce(io::Result<&[u8]>) -> ()>(
         &self,
         filesystem: &mut Filesystem<D>,
         handler: F,
@@ -607,7 +607,7 @@ impl Inode {
         }
     }
 
-    pub fn remove<D: fs_core::DeviceMut>(
+    pub fn remove<D: fal::DeviceMut>(
         &self,
         filesystem: &mut Filesystem<D>,
         inode: u32,
@@ -617,11 +617,11 @@ impl Inode {
         // Frees the inode and its owned blocks.
         block_group::free_inode(inode, filesystem)
     }
-    pub fn remove_entry<D: fs_core::DeviceMut>(
+    pub fn remove_entry<D: fal::DeviceMut>(
         &self,
         filesystem: &mut Filesystem<D>,
         name: &OsStr,
-    ) -> fs_core::Result<()> {
+    ) -> fal::Result<()> {
         // Remove the entry by setting the length of the entry with matching name to zero, and
         // append the length of that entry to the previous (if any).
 
@@ -631,7 +631,7 @@ impl Inode {
             .find(|(_, (entry, _))| entry.name == name)
         {
             Some(x) => x,
-            None => return Err(fs_core::Error::NoEntity),
+            None => return Err(fal::Error::NoEntity),
         };
 
         if index > 0 {
@@ -669,17 +669,17 @@ impl Inode {
         Ok(())
     }
 }
-pub struct RawDirIterator<'a, D: fs_core::Device> {
+pub struct RawDirIterator<'a, D: fal::Device> {
     filesystem: &'a Filesystem<D>,
     inode_struct: &'a Inode,
     current_entry_offset: u64,
     entry_bytes: Vec<u8>,
     finished: bool,
 }
-pub struct DirIterator<'a, D: fs_core::Device> {
+pub struct DirIterator<'a, D: fal::Device> {
     raw: RawDirIterator<'a, D>,
 }
-impl<'a, D: fs_core::Device> Iterator for RawDirIterator<'a, D> {
+impl<'a, D: fal::Device> Iterator for RawDirIterator<'a, D> {
     type Item = (DirEntry, u64);
     fn next(&mut self) -> Option<Self::Item> {
         if self.finished {
@@ -743,7 +743,7 @@ impl<'a, D: fs_core::Device> Iterator for RawDirIterator<'a, D> {
         }
     }
 }
-impl<'a, D: fs_core::Device> Iterator for DirIterator<'a, D> {
+impl<'a, D: fal::Device> Iterator for DirIterator<'a, D> {
     type Item = DirEntry;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -818,7 +818,7 @@ impl DirEntry {
         Self::serialize_raw(this, superblock, bytes);
         bytes[8..8 + this.name.len()].copy_from_slice(&os_str_to_bytes(&this.name));
     }
-    pub fn ty<D: fs_core::Device>(&self, filesystem: &Filesystem<D>) -> fs_core::Result<InodeType> {
+    pub fn ty<D: fal::Device>(&self, filesystem: &Filesystem<D>) -> fal::Result<InodeType> {
         Ok(match self.type_indicator {
             Some(ty) => ty,
             None => Inode::load(filesystem, self.inode)?.ty,

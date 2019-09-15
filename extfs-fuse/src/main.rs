@@ -1,9 +1,8 @@
 use clap::{crate_authors, crate_version, App, Arg, SubCommand};
 use std::{ffi::OsString, fs::OpenOptions};
 
-mod filesystem;
-
-use filesystem::{FuseFilesystem, Options};
+use fal_backend_ext2::Filesystem;
+use fal_frontend_fuse::{FuseFilesystem, Options};
 
 fn main() {
     env_logger::init();
@@ -43,7 +42,7 @@ fn main() {
             .open(device)
             .expect("Failed to open filesystem device");
 
-        let filesystem = FuseFilesystem::<extfs::Filesystem<std::fs::File>>::init(file, options)
+        let filesystem = FuseFilesystem::<Filesystem<std::fs::File>>::init(file, options)
             .expect("Failed to initialize the driver");
 
         if let Some(options_str) = matches.value_of("OPTIONS") {

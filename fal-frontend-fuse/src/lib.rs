@@ -1,20 +1,16 @@
 use std::{
-    collections::HashMap,
     convert::{TryFrom, TryInto},
     ffi::OsStr,
     fs::File,
     io,
 };
 
-use extfs::{
-    fs_core::{FileHandle as _, Filesystem as _, Inode as _},
-    inode::InodeType,
-    Filesystem, Inode,
-};
 use fuse::{
-    FileAttr, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, Request,
+    ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, Request,
 };
 use time::Timespec;
+
+use fal::Inode;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AccessTime {
@@ -71,19 +67,13 @@ impl Options {
     }
 }
 
-struct FileHandle {
-    inode: u32,
-    inode_struct: Inode,
-    position: u64,
-}
-
-pub struct FuseFilesystem<Backend: fs_core::Filesystem<File>> {
+pub struct FuseFilesystem<Backend: fal::Filesystem<File>> {
     inner: Backend,
     options: Options,
 }
 
-fn fuse_filetype(ty: extfs::fs_core::FileType) -> fuse::FileType {
-    use fs_core::FileType;
+fn fuse_filetype(ty: fal::FileType) -> fuse::FileType {
+    use fal::FileType;
 
     match ty {
         FileType::BlockDevice => fuse::FileType::BlockDevice,
@@ -96,7 +86,7 @@ fn fuse_filetype(ty: extfs::fs_core::FileType) -> fuse::FileType {
     }
 }
 
-fn fuse_attr<InodeAddr: Into<u64>>(attrs: fs_core::Attributes<InodeAddr>) -> fuse::FileAttr {
+fn fuse_attr<InodeAddr: Into<u64>>(attrs: fal::Attributes<InodeAddr>) -> fuse::FileAttr {
     fuse::FileAttr {
         atime: attrs.access_time,
         blocks: attrs.block_count,
@@ -115,7 +105,7 @@ fn fuse_attr<InodeAddr: Into<u64>>(attrs: fs_core::Attributes<InodeAddr>) -> fus
     }
 }
 
-impl<Backend: fs_core::Filesystem<File>> FuseFilesystem<Backend> {
+impl<Backend: fal::Filesystem<File>> FuseFilesystem<Backend> {
     pub fn init(device: File, options: Options) -> io::Result<Self> {
         Ok(Self {
             inner: Backend::mount(device),
@@ -124,7 +114,7 @@ impl<Backend: fs_core::Filesystem<File>> FuseFilesystem<Backend> {
     }
 }
 
-fn fuse_inode_to_extfs_inode<InodeAddr: From<u32> + TryFrom<u64> + Eq>(
+fn fuse_inode_to_fs_inode<InodeAddr: From<u32> + TryFrom<u64> + Eq>(
     fuse_inode: u64,
 ) -> Option<InodeAddr> {
     InodeAddr::try_from(fuse_inode).ok().map(|fuse_inode| {
@@ -135,22 +125,22 @@ fn fuse_inode_to_extfs_inode<InodeAddr: From<u32> + TryFrom<u64> + Eq>(
         }
     })
 }
-fn fuse_inode_from_extfs_inode(extfs_inode: u32) -> u64 {
-    if extfs_inode == 2 {
+fn fuse_inode_from_fs_inode<InodeAddr: Into<u64> + Copy>(fs_inode: InodeAddr) -> u64 {
+    if fs_inode.into() == 2 {
         1
     } else {
-        extfs_inode as u64
+        fs_inode.into()
     }
 }
 
-impl<Backend: fs_core::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend> {
+impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend> {
     fn init(&mut self, _req: &Request) -> Result<(), libc::c_int> {
         Ok(())
     }
     fn destroy(&mut self, _req: &Request) {}
 
     fn getattr(&mut self, _req: &Request, fuse_inode: u64, reply: ReplyAttr) {
-        let inode = match fuse_inode_to_extfs_inode(fuse_inode) {
+        let inode = match fuse_inode_to_fs_inode(fuse_inode) {
             Some(inode) => inode,
             None => {
                 reply.error(libc::EOVERFLOW);
@@ -162,10 +152,10 @@ impl<Backend: fs_core::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Bac
             Ok(attrs) => fuse_attr(attrs),
             Err(err) => {
                 match err {
-                    extfs::fs_core::Error::NoEntity => reply.error(libc::ENOENT),
-                    extfs::fs_core::Error::Io(_) => reply.error(libc::EIO),
-                    extfs::fs_core::Error::BadFd => unreachable!(),
-                    extfs::fs_core::Error::Other(_) => panic!(),
+                    fal::Error::NoEntity => reply.error(libc::ENOENT),
+                    fal::Error::Io(_) => reply.error(libc::EIO),
+                    fal::Error::BadFd => unreachable!(),
+                    fal::Error::Other(_) => panic!(),
                 }
                 return;
             }
@@ -176,7 +166,7 @@ impl<Backend: fs_core::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Bac
         reply.attr(&validity_timeout, &file_attributes);
     }
     fn lookup(&mut self, _req: &Request, parent_inode: u64, name: &OsStr, reply: ReplyEntry) {
-        let parent_inode = match fuse_inode_to_extfs_inode(parent_inode) {
+        let parent_inode = match fuse_inode_to_fs_inode(parent_inode) {
             Some(inode) => inode,
             None => {
                 reply.error(libc::EOVERFLOW);
@@ -188,10 +178,10 @@ impl<Backend: fs_core::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Bac
             Ok(entry) => entry,
             Err(err) => {
                 match err {
-                    fs_core::Error::BadFd => unreachable!(),
-                    fs_core::Error::NoEntity => reply.error(libc::ENOENT),
-                    fs_core::Error::Io(_) => reply.error(libc::EIO),
-                    extfs::fs_core::Error::Other(_) => panic!(),
+                    fal::Error::BadFd => unreachable!(),
+                    fal::Error::NoEntity => reply.error(libc::ENOENT),
+                    fal::Error::Io(_) => reply.error(libc::EIO),
+                    fal::Error::Other(_) => panic!(),
                 }
                 return;
             }
@@ -201,10 +191,10 @@ impl<Backend: fs_core::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Bac
             Ok(inode_struct) => inode_struct,
             Err(err) => {
                 match err {
-                    fs_core::Error::BadFd => unreachable!(),
-                    fs_core::Error::NoEntity => reply.error(libc::ENOENT),
-                    fs_core::Error::Io(_) => reply.error(libc::EIO),
-                    extfs::fs_core::Error::Other(_) => panic!(),
+                    fal::Error::BadFd => unreachable!(),
+                    fal::Error::NoEntity => reply.error(libc::ENOENT),
+                    fal::Error::Io(_) => reply.error(libc::EIO),
+                    fal::Error::Other(_) => panic!(),
                 };
                 return;
             }
@@ -222,7 +212,7 @@ impl<Backend: fs_core::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Bac
         ); // TODO: generation_number?
     }
     fn opendir(&mut self, _req: &Request, fuse_inode: u64, _flags: u32, reply: ReplyOpen) {
-        let inode = match fuse_inode_to_extfs_inode(fuse_inode) {
+        let inode = match fuse_inode_to_fs_inode(fuse_inode) {
             Some(inode) => inode,
             None => {
                 reply.error(libc::EOVERFLOW);
@@ -233,10 +223,10 @@ impl<Backend: fs_core::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Bac
             Ok(fh) => fh,
             Err(err) => {
                 match err {
-                    fs_core::Error::BadFd => reply.error(libc::EBADF),
-                    fs_core::Error::NoEntity => reply.error(libc::ENOENT),
-                    fs_core::Error::Io(_) => reply.error(libc::EIO),
-                    fs_core::Error::Other(_) => panic!(),
+                    fal::Error::BadFd => reply.error(libc::EBADF),
+                    fal::Error::NoEntity => reply.error(libc::ENOENT),
+                    fal::Error::Io(_) => reply.error(libc::EIO),
+                    fal::Error::Other(_) => panic!(),
                 }
                 return;
             }
@@ -251,7 +241,7 @@ impl<Backend: fs_core::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Bac
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
-        /*let inode = match fuse_inode_to_extfs_inode(fuse_inode) {
+        /*let inode = match fuse_inode_to_fs_inode(fuse_inode) {
             Some(inode) => inode,
             None => {
                 reply.error(libc::EOVERFLOW);
@@ -261,7 +251,7 @@ impl<Backend: fs_core::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Bac
         match self.inner.read_directory(fh, offset) {
             Ok(Some(entry)) => {
                 reply.add(
-                    entry.inode.into(),
+                    fuse_inode_from_fs_inode(entry.inode),
                     entry.offset as i64,
                     fuse_filetype(entry.filetype),
                     entry.name,
@@ -270,10 +260,10 @@ impl<Backend: fs_core::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Bac
             Ok(None) => (),
             Err(err) => {
                 match err {
-                    fs_core::Error::BadFd => reply.error(libc::EBADF),
-                    fs_core::Error::NoEntity => reply.error(libc::ENOENT),
-                    fs_core::Error::Io(_) => reply.error(libc::EIO),
-                    fs_core::Error::Other(_) => panic!(),
+                    fal::Error::BadFd => reply.error(libc::EBADF),
+                    fal::Error::NoEntity => reply.error(libc::ENOENT),
+                    fal::Error::Io(_) => reply.error(libc::EIO),
+                    fal::Error::Other(_) => panic!(),
                 }
                 return;
             }
@@ -293,7 +283,7 @@ impl<Backend: fs_core::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Bac
         reply.ok();
     }
     fn open(&mut self, _req: &Request, fuse_inode: u64, _flags: u32, reply: ReplyOpen) {
-        let inode = match fuse_inode_to_extfs_inode(fuse_inode) {
+        let inode = match fuse_inode_to_fs_inode(fuse_inode) {
             Some(inode) => inode,
             None => {
                 reply.error(libc::EOVERFLOW);
@@ -304,10 +294,10 @@ impl<Backend: fs_core::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Bac
             Ok(fh) => fh,
             Err(err) => {
                 match err {
-                    fs_core::Error::BadFd => reply.error(libc::EBADF),
-                    fs_core::Error::NoEntity => reply.error(libc::ENOENT),
-                    fs_core::Error::Io(_) => reply.error(libc::EIO),
-                    fs_core::Error::Other(_) => panic!(),
+                    fal::Error::BadFd => reply.error(libc::EBADF),
+                    fal::Error::NoEntity => reply.error(libc::ENOENT),
+                    fal::Error::Io(_) => reply.error(libc::EIO),
+                    fal::Error::Other(_) => panic!(),
                 }
                 return;
             }
@@ -323,7 +313,7 @@ impl<Backend: fs_core::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Bac
         size: u32,
         reply: ReplyData,
     ) {
-        let inode = match fuse_inode_to_extfs_inode(fuse_inode) {
+        let inode = match fuse_inode_to_fs_inode(fuse_inode) {
             Some(inode) => inode,
             None => {
                 reply.error(libc::EOVERFLOW);
@@ -366,7 +356,7 @@ impl<Backend: fs_core::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Bac
         reply.ok();
     }
     fn readlink(&mut self, _req: &Request, fuse_inode: u64, reply: ReplyData) {
-        let inode = match fuse_inode_to_extfs_inode(fuse_inode) {
+        let inode = match fuse_inode_to_fs_inode(fuse_inode) {
             Some(inode) => inode,
             None => {
                 reply.error(libc::EOVERFLOW);
@@ -377,10 +367,10 @@ impl<Backend: fs_core::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Bac
             Ok(data) => data,
             Err(err) => {
                 match err {
-                    fs_core::Error::BadFd => reply.error(libc::EBADF),
-                    fs_core::Error::NoEntity => reply.error(libc::ENOENT),
-                    fs_core::Error::Io(_) => reply.error(libc::EIO),
-                    fs_core::Error::Other(_) => panic!(),
+                    fal::Error::BadFd => reply.error(libc::EBADF),
+                    fal::Error::NoEntity => reply.error(libc::ENOENT),
+                    fal::Error::Io(_) => reply.error(libc::EIO),
+                    fal::Error::Other(_) => panic!(),
                 }
                 return;
             }
@@ -388,7 +378,7 @@ impl<Backend: fs_core::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Bac
         reply.data(&data);
     }
     fn unlink(&mut self, _req: &Request, fuse_parent: u64, name: &OsStr, reply: ReplyEmpty) {
-        let parent = match fuse_inode_to_extfs_inode(fuse_parent) {
+        let parent = match fuse_inode_to_fs_inode(fuse_parent) {
             Some(parent) => parent,
             None => {
                 reply.error(libc::EOVERFLOW);

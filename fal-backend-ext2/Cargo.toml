@@ -1,9 +1,9 @@
 [package]
-name = "betterfs"
+name = "fal-backend-ext2"
 version = "0.1.0"
 authors = ["4lDO2 <4lDO2@protonmail.com>"]
 edition = "2018"
 
 [dependencies]
-fs-core = { path = "../fs-core", version = "0.1" }
 uuid = "0.7"
+fal = { path = "../fal", version = "0.1" }

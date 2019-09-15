@@ -1,9 +1,10 @@
 [package]
-name = "extfs"
+name = "fal"
 version = "0.1.0"
 authors = ["4lDO2 <4lDO2@protonmail.com>"]
 edition = "2018"
 
 [dependencies]
+libc = "0.2"
 uuid = "0.7"
-fs-core = { path = "../fs-core", version = "0.1" }
+time = "0.1"

@@ -1,8 +1,9 @@
 [workspace]
 members = [
-    "betterfs",
-    "extfs",
+    "fal-backend-btrfs",
+    "fal-backend-ext2",
+    "fal-frontend-fuse",
     "extfs-fuse",
     "extfs-redox",
-    "fs-core",
+    "fal",
 ]
