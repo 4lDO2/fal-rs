@@ -113,11 +113,26 @@ impl InodeType {
     }
 }
 
+impl From<InodeType> for fs_core::FileType {
+    fn from(inode_type: InodeType) -> Self {
+        match inode_type {
+            InodeType::File => Self::RegularFile,
+            InodeType::Dir => Self::Directory,
+            InodeType::Symlink => Self::Symlink,
+            InodeType::BlockDev => Self::BlockDevice,
+            InodeType::UnixSock => Self::Socket,
+            InodeType::CharDev => Self::CharacterDevice,
+            InodeType::Fifo => Self::NamedPipe,
+            InodeType::Unknown => panic!(),
+        }
+    }
+}
+
 impl Inode {
     const DIRECT_PTR_COUNT: usize = 12;
 
     pub fn load<R: fs_core::Device>(
-        filesystem: &mut Filesystem<R>,
+        filesystem: &Filesystem<R>,
         inode_address: u32,
     ) -> io::Result<Self> {
         if inode_address == 0 { return Err(io::Error::new(io::ErrorKind::NotFound, "no inode address (was 0)")) }
@@ -641,5 +656,8 @@ impl DirEntry {
     pub fn serialize(this: &Self, superblock: &Superblock, bytes: &mut [u8]) {
         Self::serialize_raw(this, superblock, bytes);
         bytes[8..8 + this.name.len()].copy_from_slice(&os_str_to_bytes(&this.name));
+    }
+    pub fn ty<D: fs_core::Device>(&self, filesystem: &Filesystem<D>) -> InodeType {
+        self.type_indicator.unwrap_or_else(|| Inode::load(filesystem, self.inode).unwrap().ty)
     }
 }

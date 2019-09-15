@@ -1,6 +1,6 @@
 pub extern crate time;
 
-use std::{io::prelude::*, mem};
+use std::{ffi::OsString, io::prelude::*, mem};
 use time::Timespec;
 use uuid::Uuid;
 
@@ -97,17 +97,27 @@ pub struct Attributes<InodeAddr: Into<u64> = u64> {
     pub flags: u32,
 }
 
+pub struct DirectoryEntry<InodeAddr: Into<u64> = u64> {
+    pub name: OsString,
+    pub filetype: FileType,
+    pub inode: InodeAddr,
+    pub offset: u64,
+}
+
 // TODO: Add some kind of Result type.
 /// An abstract filesystem. Typically implemented by the backend.
-pub trait Filesystem<'a, D: Device> {
+pub trait Filesystem<D: Device> {
     /// An inode address. u32 on ext2.
     type InodeAddr: Into<u64>;
 
     /// An inode structure, capable of retrieving inode information.
     type InodeStruct: Inode;
 
-    /// A file handle, capable of reading and seeking.
-    type FileHandle: Read + Seek + 'a;
+    /// A file handle, reading (and possibly writing, with FilesystemMut).
+    type FileHandle;
+
+    /// A directory handle.
+    type DirHandle;
 
     // TODO: Support mounting multiple devices as one filesystem, for filesystems that support it.
     /// Mount the filesystem from a device.
@@ -117,11 +127,23 @@ pub trait Filesystem<'a, D: Device> {
     fn load_inode(&mut self, address: Self::InodeAddr) -> Self::InodeStruct;
 
     /// Open a file from an inode address.
-    fn open_file(&'a mut self, inode: Self::InodeAddr) -> Self::FileHandle;
+    fn open_file(&mut self, inode: Self::InodeAddr) -> Self::FileHandle;
+
+    /// Read bytes from a file.
+    fn read(&mut self, fh: &Self::FileHandle, offset: u64, buffer: &mut [u8]) -> usize;
 
     /// Close an opened file. The filesystem implementation will ensure that unread bytes get
     /// flushed before closing.
     fn close_file(&mut self, file: Self::FileHandle);
+
+    /// Open a directory from an inode address.
+    fn open_directory(&mut self, address: Self::InodeAddr) -> Self::DirHandle;
+
+    /// Get an entry from a directory.
+    fn read_directory(&mut self, directory: &Self::DirHandle, offset: i64) -> DirectoryEntry;
+
+    /// Close an opened directory.
+    fn close_directory(&mut self, dir: Self::DirHandle);
 
     /// Get a file's attributes, typically called from stat(2).
     fn getattrs(&mut self, inode: Self::InodeAddr) -> Attributes<Self::InodeAddr>;
