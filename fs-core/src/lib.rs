@@ -106,6 +106,10 @@ pub struct DirectoryEntry<InodeAddr: Into<u64> = u64> {
     pub offset: u64,
 }
 
+pub trait FileHandle {
+    fn fd(&self) -> u64;
+}
+
 #[derive(Debug)]
 pub enum Error {
     BadFd,
@@ -142,12 +146,6 @@ pub trait Filesystem<D: Device> {
     /// An inode structure, capable of retrieving inode information.
     type InodeStruct: Inode;
 
-    /// A file handle, reading (and possibly writing, with FilesystemMut).
-    type FileHandle;
-
-    /// A directory handle. May or may not be equal to FileHandle.
-    type DirHandle;
-
     // TODO: Support mounting multiple devices as one filesystem, for filesystems that support it.
     /// Mount the filesystem from a device.
     fn mount(_device: D) -> Self;
@@ -156,26 +154,26 @@ pub trait Filesystem<D: Device> {
     fn load_inode(&mut self, address: Self::InodeAddr) -> Result<Self::InodeStruct>;
 
     /// Open a file from an inode address.
-    fn open_file(&mut self, inode: Self::InodeAddr) -> Result<Self::FileHandle>;
+    fn open_file(&mut self, inode: Self::InodeAddr) -> Result<u64>;
 
     /// Read bytes from a file.
-    fn read(&mut self, fh: &Self::FileHandle, offset: u64, buffer: &mut [u8]) -> Result<usize>;
+    fn read(&mut self, fh: u64, offset: u64, buffer: &mut [u8]) -> Result<usize>;
 
     /// Close an opened file. The filesystem implementation will ensure that unread bytes get
     /// flushed before closing.
-    fn close_file(&mut self, file: Self::FileHandle);
+    fn close_file(&mut self, file: u64);
 
     /// Open a directory from an inode address.
-    fn open_directory(&mut self, address: Self::InodeAddr) -> Result<Self::DirHandle>;
+    fn open_directory(&mut self, address: Self::InodeAddr) -> Result<u64>;
 
     /// Get an entry from a directory.
-    fn read_directory(&mut self, directory: &Self::DirHandle, offset: i64) -> Result<Option<DirectoryEntry>>;
+    fn read_directory(&mut self, directory: u64, offset: i64) -> Result<Option<DirectoryEntry>>;
 
     /// Get a directory entry from a directory inode and a name.
     fn lookup_direntry(&mut self, parent: Self::InodeAddr, name: &OsStr) -> Result<DirectoryEntry>;
 
     /// Close an opened directory.
-    fn close_directory(&mut self, dir: Self::DirHandle);
+    fn close_directory(&mut self, dir: u64);
 
     /// Get a file's attributes, typically called from stat(2).
     fn getattrs(&mut self, addr: Self::InodeAddr) -> Result<Attributes<Self::InodeAddr>> {
@@ -185,4 +183,6 @@ pub trait Filesystem<D: Device> {
 
     /// Get the attributes of an inode.
     fn inode_attrs(&mut self, addr: Self::InodeAddr, inode: &Self::InodeStruct) -> Attributes<Self::InodeAddr>;
+
+    fn fh_inode(&self, fh: u64) -> &'_ Self::InodeStruct;
 }

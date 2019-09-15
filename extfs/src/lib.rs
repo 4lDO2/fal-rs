@@ -149,11 +149,15 @@ pub struct FileHandle {
     inode: Inode,
 }
 
+impl fs_core::FileHandle for FileHandle {
+    fn fd(&self) -> u64 {
+        self.fh
+    }
+}
+
 impl<D: fs_core::Device> fs_core::Filesystem<D> for Filesystem<D> {
     type InodeAddr = u32;
     type InodeStruct = Inode;
-    type FileHandle = FileHandle;
-    type DirHandle = FileHandle;
 
     fn mount(mut device: D) -> Self {
         Self {
@@ -166,7 +170,7 @@ impl<D: fs_core::Device> fs_core::Filesystem<D> for Filesystem<D> {
     fn load_inode(&mut self, addr: Self::InodeAddr) -> fs_core::Result<Self::InodeStruct> {
         Ok(Inode::load(self, addr)?)
     }
-    fn open_file(&mut self, addr: Self::InodeAddr) -> fs_core::Result<FileHandle> {
+    fn open_file(&mut self, addr: Self::InodeAddr) -> fs_core::Result<u64> {
         let fh = FileHandle {
             inode_addr: addr,
             fh: self.last_fh,
@@ -175,24 +179,31 @@ impl<D: fs_core::Device> fs_core::Filesystem<D> for Filesystem<D> {
         self.fhs.insert(self.last_fh, fh);
         self.last_fh += 1;
 
-        Ok(fh)
+        Ok(fh.fh)
     }
-    fn read(&mut self, fh: &FileHandle, offset: u64, buffer: &mut [u8]) -> fs_core::Result<usize> {
-        Ok(fh.inode.read(self, offset, buffer)?)
+    fn read(&mut self, fh: u64, offset: u64, buffer: &mut [u8]) -> fs_core::Result<usize> {
+        match self.fhs.get(&fh) {
+            Some(fh) => Ok(fh.inode.read(self, offset, buffer)?),
+            None => Err(fs_core::Error::BadFd),
+        }
     }
-    fn close_file(&mut self, fh: Self::FileHandle) {
+    fn close_file(&mut self, fh: u64) {
         // FIXME: Flush before closing.
-        self.fhs.remove(&fh.fh);
+        self.fhs.remove(&fh);
     }
     fn getattrs(&mut self, inode_addr: u32) -> fs_core::Result<fs_core::Attributes<u32>> {
         let inode = Inode::load(self, inode_addr)?;
 
         Ok(inode_attrs(&inode, inode_addr, &self.superblock))
     }
-    fn open_directory(&mut self, inode: u32) -> fs_core::Result<FileHandle> {
+    fn open_directory(&mut self, inode: u32) -> fs_core::Result<u64> {
         self.open_file(inode)
     }
-    fn read_directory(&mut self, handle: &FileHandle, offset: i64) -> fs_core::Result<Option<fs_core::DirectoryEntry>> {
+    fn read_directory(&mut self, fh: u64, offset: i64) -> fs_core::Result<Option<fs_core::DirectoryEntry>> {
+        let handle = match self.fhs.get(&fh) {
+            Some(handle) => handle,
+            None => return Err(fs_core::Error::BadFd),
+        };
         Ok(match handle.inode.dir_entries(self)?.enumerate().skip(offset as usize).next() {
             Some((offset, entry)) => Some(fs_core::DirectoryEntry {
                 filetype: entry.ty(self)?.into(),
@@ -214,10 +225,13 @@ impl<D: fs_core::Device> fs_core::Filesystem<D> for Filesystem<D> {
             offset: offset as u64,
         })
     }
-    fn close_directory(&mut self, handle: FileHandle) {
+    fn close_directory(&mut self, handle: u64) {
         self.close_file(handle)
     }
     fn inode_attrs(&mut self, addr: u32, inode: &Inode) -> fs_core::Attributes<u32> {
         inode_attrs(inode, addr, &self.superblock)
+    }
+    fn fh_inode(&self, fh: u64) -> &'_ Inode {
+        &self.fhs[&fh].inode
     }
 }

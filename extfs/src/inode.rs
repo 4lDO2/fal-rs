@@ -449,7 +449,7 @@ impl Inode {
 
         Ok(())
     }
-    fn raw_dir_entries<'a, D: fs_core::Device>(&'a self, filesystem: &'a mut Filesystem<D>) -> io::Result<RawDirIterator<'a, D>> {
+    fn raw_dir_entries<'a, D: fs_core::Device>(&'a self, filesystem: &'a Filesystem<D>) -> io::Result<RawDirIterator<'a, D>> {
         if self.ty != InodeType::Dir {
             // TODO: ENOTDIR
             return Err(io::Error::from(io::ErrorKind::InvalidInput));
@@ -462,7 +462,7 @@ impl Inode {
             finished: false,
         })
     }
-    pub fn dir_entries<'a, D: fs_core::Device>(&'a self, filesystem: &'a mut Filesystem<D>) -> io::Result<DirIterator<'a, D>> {
+    pub fn dir_entries<'a, D: fs_core::Device>(&'a self, filesystem: &'a Filesystem<D>) -> io::Result<DirIterator<'a, D>> {
         Ok(DirIterator { raw: self.raw_dir_entries(filesystem)? })
     }
     pub fn with_symlink_target<D: fs_core::Device, F: FnOnce(io::Result<&[u8]>) -> ()>(&self, filesystem: &mut Filesystem<D>, handler: F) {
@@ -539,7 +539,7 @@ impl Inode {
     }
 }
 pub struct RawDirIterator<'a, D: fs_core::Device> {
-    filesystem: &'a mut Filesystem<D>,
+    filesystem: &'a Filesystem<D>,
     inode_struct: &'a Inode,
     current_entry_offset: u64,
     entry_bytes: Vec<u8>,
