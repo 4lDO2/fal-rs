@@ -1,7 +1,7 @@
 use crate::{read_block, read_block_to_raw, read_u16, read_u32, superblock, Filesystem};
 use std::{
     convert::TryFrom,
-    io::{self, prelude::*},
+    io,
 };
 
 #[derive(Debug)]
@@ -25,7 +25,7 @@ pub fn block_offset(superblock: &superblock::Superblock, offset: u64) -> u32 {
     (offset % superblock.block_size) as u32
 }
 pub fn load_block_group_descriptor<D: fs_core::Device>(
-    filesystem: &mut crate::Filesystem<D>,
+    filesystem: &Filesystem<D>,
     index: u32,
 ) -> io::Result<BlockGroupDescriptor> {
     let bgdt_first_block = block_address(
@@ -63,7 +63,7 @@ pub fn inode_index_inside_group(superblock: &superblock::Superblock, inode: u32)
 }
 pub fn inode_exists<D: fs_core::Device>(
     inode: u32,
-    filesystem: &mut Filesystem<D>,
+    filesystem: &Filesystem<D>,
 ) -> io::Result<bool> {
     if inode == 0 {
         return Ok(false);
@@ -94,7 +94,7 @@ pub fn free_inode<D: fs_core::DeviceMut>(_inode: u32, _filesystem: &mut Filesyst
 }
 pub fn block_exists<D: fs_core::Device>(
     baddr: u32,
-    filesystem: &mut Filesystem<D>,
+    filesystem: &Filesystem<D>,
 ) -> io::Result<bool> {
     let group_index = baddr / filesystem.superblock.blocks_per_group;
     let index_inside_group = baddr % filesystem.superblock.blocks_per_group;

@@ -23,7 +23,7 @@ pub use superblock::Superblock;
 pub use fs_core::{read_u8, read_u16, read_u32, read_u64, read_uuid, write_u8, write_u16, write_u32, write_u64, write_uuid};
 
 fn read_block_to<D: fs_core::Device>(
-    filesystem: &mut Filesystem<D>,
+    filesystem: &Filesystem<D>,
     block_address: u32,
     buffer: &mut [u8],
 ) -> io::Result<()> {
@@ -31,7 +31,7 @@ fn read_block_to<D: fs_core::Device>(
     read_block_to_raw(filesystem, block_address, buffer)
 }
 fn read_block_to_raw<D: fs_core::Device>(
-    filesystem: &mut Filesystem<D>,
+    filesystem: &Filesystem<D>,
     block_address: u32,
     buffer: &mut [u8],
 ) -> io::Result<()> {
@@ -42,7 +42,7 @@ fn read_block_to_raw<D: fs_core::Device>(
     Ok(())
 }
 fn read_block<D: fs_core::Device>(
-    filesystem: &mut Filesystem<D>,
+    filesystem: &Filesystem<D>,
     block_address: u32,
 ) -> io::Result<Box<[u8]>> {
     let mut vector = vec![0; filesystem.superblock.block_size.try_into().unwrap()];
@@ -107,19 +107,20 @@ pub struct Filesystem<D: fs_core::Device> {
 
 impl fs_core::Inode for Inode {}
 
-#[derive(Clone, Copy, Debug, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RawFileHandle {
-    size: u64,
     offset: u64,
     fh: u64,
+    inode: Inode,
 }
 impl RawFileHandle {
-    fn read<D: fs_core::Device>(&self, filesystem: &Filesystem<D>, buf: &mut [u8]) -> io::Result<usize> {
-        unimplemented!()
+    fn size(&self, superblock: &Superblock) -> u64 {
+        self.inode.size(superblock)
     }
-}
-impl Seek for RawFileHandle {
-    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+    fn read<D: fs_core::Device>(&self, filesystem: &Filesystem<D>, buf: &mut [u8]) -> io::Result<usize> {
+        self.inode.read(filesystem, self.offset, buf)
+    }
+    fn seek(&mut self, superblock: &Superblock, pos: SeekFrom) -> io::Result<u64> {
         match pos {
             SeekFrom::Current(offset) => self.offset = (self.offset as i64 + offset) as u64,
             SeekFrom::Start(offset) => self.offset = offset as u64,
@@ -127,7 +128,7 @@ impl Seek for RawFileHandle {
                 if offset != 0 {
                     return Err(io::ErrorKind::UnexpectedEof.into())
                 }
-                self.offset = self.size;
+                self.offset = self.size(superblock);
             }
         }
         Ok(self.offset)
@@ -146,7 +147,7 @@ impl<'a, D: fs_core::Device> Read for FileHandle<'a, D> {
 }
 impl<'a, D: fs_core::Device> Seek for FileHandle<'a, D> {
     fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
-        self.raw.seek(position)
+        self.raw.seek(&self.filesystem.superblock, position)
     }
 }
 
@@ -169,8 +170,8 @@ impl<'a, D: fs_core::Device + 'a> fs_core::Filesystem<'a, D> for Filesystem<D> {
     fn open_file(&'a mut self, addr: Self::InodeAddr) -> FileHandle<'a, D> {
         let fh = RawFileHandle {
             offset: 0,
-            size: Inode::load(self, addr).unwrap().size(&self.superblock),
             fh: self.last_fh,
+            inode: Inode::load(self, addr).unwrap(),
         };
         self.fhs.insert(self.last_fh, fh);
         self.last_fh += 1;

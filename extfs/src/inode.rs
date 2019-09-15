@@ -14,7 +14,7 @@ pub const ROOT: u32 = 2;
 
 pub const BASE_INODE_SIZE: u64 = 128;
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Inode {
     pub ty: InodeType,
     pub permissions: u16,
@@ -41,7 +41,7 @@ pub struct Inode {
     pub os_specific_2: [u8; 12], // TODO: Support 32-bit gids and uids.
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum InodeType {
     Unknown,
     Fifo,
@@ -279,13 +279,13 @@ impl Inode {
     fn entry_count(block_size: u64) -> usize {
         block_size as usize / mem::size_of::<u32>()
     }
-    fn read_singly<D: fs_core::Device>(filesystem: &mut Filesystem<D>, singly_baddr: u32, rel_baddr: u32) -> io::Result<u32> {
+    fn read_singly<D: fs_core::Device>(filesystem: &Filesystem<D>, singly_baddr: u32, rel_baddr: u32) -> io::Result<u32> {
         let singly_indirect_block_bytes = read_block(filesystem, singly_baddr)?;
         let index = rel_baddr as usize - Self::DIRECT_PTR_COUNT;
 
         Ok(read_u32(&singly_indirect_block_bytes, index * mem::size_of::<u32>()))
     }
-    fn read_doubly<D: fs_core::Device>(filesystem: &mut Filesystem<D>, doubly_baddr: u32, rel_baddr: u32) -> io::Result<u32> {
+    fn read_doubly<D: fs_core::Device>(filesystem: &Filesystem<D>, doubly_baddr: u32, rel_baddr: u32) -> io::Result<u32> {
         let entry_count = Self::entry_count(filesystem.superblock.block_size);
 
         let doubly_indirect_block_bytes = read_block(filesystem, doubly_baddr)?;
@@ -296,7 +296,7 @@ impl Inode {
 
         Self::read_singly(filesystem, singly, singly_rel_baddr)
     }
-    fn read_triply<D: fs_core::Device>(filesystem: &mut Filesystem<D>, triply_baddr: u32, rel_baddr: u32) -> io::Result<u32> {
+    fn read_triply<D: fs_core::Device>(filesystem: &Filesystem<D>, triply_baddr: u32, rel_baddr: u32) -> io::Result<u32> {
         let entry_count = Self::entry_count(filesystem.superblock.block_size);
 
         let triply_indirect_block_bytes = read_block(filesystem, triply_baddr)?;
@@ -307,7 +307,7 @@ impl Inode {
 
         Self::read_doubly(filesystem, doubly, doubly_rel_baddr)
     }
-    fn absolute_baddr<D: fs_core::Device>(&self, filesystem: &mut Filesystem<D>, rel_baddr: u32) -> io::Result<u32> {
+    fn absolute_baddr<D: fs_core::Device>(&self, filesystem: &Filesystem<D>, rel_baddr: u32) -> io::Result<u32> {
         let entry_count = Self::entry_count(filesystem.superblock.block_size) as u32;
 
         let direct_size = Self::DIRECT_PTR_COUNT as u32;
@@ -327,21 +327,23 @@ impl Inode {
             panic!("Read exceeding maximum ext2 file size.");
         })
     }
-    pub fn read_block_to<D: fs_core::Device>(&self, rel_baddr: u32, filesystem: &mut Filesystem<D>, buffer: &mut [u8]) -> io::Result<()> {
+    pub fn read_block_to<D: fs_core::Device>(&self, rel_baddr: u32, filesystem: &Filesystem<D>, buffer: &mut [u8]) -> io::Result<()> {
         if u64::from(rel_baddr) >= self.size_in_blocks(&filesystem.superblock) {
             return Err(io::ErrorKind::UnexpectedEof.into())
         }
         let abs_baddr = self.absolute_baddr(filesystem, rel_baddr)?;
         read_block_to(filesystem, abs_baddr, buffer)
     }
-    pub fn write_block<D: fs_core::DeviceMut>(&self, rel_baddr: u32, filesystem: &mut Filesystem<D>, buffer: &[u8]) -> io::Result<()> {
+    pub fn write_block<D: fs_core::DeviceMut>(&self, rel_baddr: u32, filesystem: &Filesystem<D>, buffer: &[u8]) -> io::Result<()> {
         if u64::from(rel_baddr) >= self.size_in_blocks(&filesystem.superblock) {
             return Err(io::ErrorKind::UnexpectedEof.into())
         }
         let abs_baddr = self.absolute_baddr(filesystem, rel_baddr)?;
         write_block(filesystem, abs_baddr, buffer)
     }
-    pub fn read<D: fs_core::Device>(&self, filesystem: &mut Filesystem<D>, offset: u64, mut buffer: &mut [u8]) -> io::Result<()> {
+    pub fn read<D: fs_core::Device>(&self, filesystem: &Filesystem<D>, offset: u64, mut buffer: &mut [u8]) -> io::Result<usize> {
+        let mut bytes_read = 0;
+
         let off_from_rel_block = offset % filesystem.superblock.block_size;
         let rel_baddr_start = offset / filesystem.superblock.block_size;
 
@@ -354,10 +356,12 @@ impl Inode {
             let end = std::cmp::min(buffer.len(), usize::try_from(filesystem.superblock.block_size).unwrap() - off_from_rel_block_usize);
             buffer[..end].copy_from_slice(&block_bytes[off_from_rel_block_usize..off_from_rel_block_usize + end]);
 
+            bytes_read += end;
+
             if u64::try_from(buffer.len()).unwrap() >= off_from_rel_block {
-                return self.read(filesystem, round_up(offset, filesystem.superblock.block_size), &mut buffer[end..]);
+                return self.read(filesystem, round_up(offset, filesystem.superblock.block_size), &mut buffer[end..]).map(|b| b + bytes_read)
             } else {
-                return Ok(())
+                return Ok(bytes_read)
             }
         }
 
@@ -369,6 +373,8 @@ impl Inode {
 
             buffer[..usize::try_from(filesystem.superblock.block_size).unwrap()].copy_from_slice(&block_bytes);
 
+            bytes_read += block_bytes.len();
+
             buffer = &mut buffer[usize::try_from(filesystem.superblock.block_size).unwrap()..];
             current_rel_baddr += 1;
         }
@@ -377,9 +383,10 @@ impl Inode {
             self.read_block_to(current_rel_baddr, filesystem, &mut block_bytes)?;
             let buffer_len = buffer.len();
             buffer.copy_from_slice(&block_bytes[..buffer_len]);
+            bytes_read += buffer_len;
         }
 
-        Ok(())
+        Ok(bytes_read)
     }
     pub fn write<D: fs_core::DeviceMut>(&self, filesystem: &mut Filesystem<D>, offset: u64, mut buffer: &[u8]) -> io::Result<()> {
         let off_from_rel_block = offset % filesystem.superblock.block_size;
