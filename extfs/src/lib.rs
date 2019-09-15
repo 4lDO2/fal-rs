@@ -164,6 +164,7 @@ impl fs_core::Inode for Inode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FileHandle {
     fh: u64,
+    offset: u64,
     inode_addr: u32,
     inode: Inode,
 }
@@ -194,6 +195,7 @@ impl<D: fs_core::Device> fs_core::Filesystem<D> for Filesystem<D> {
             inode_addr: addr,
             fh: self.last_fh,
             inode: Inode::load(self, addr)?,
+            offset: 0,
         };
         self.fhs.insert(self.last_fh, fh);
         self.last_fh += 1;
@@ -232,14 +234,18 @@ impl<D: fs_core::Device> fs_core::Filesystem<D> for Filesystem<D> {
                 .inode
                 .dir_entries(self)?
                 .enumerate()
-                .skip(offset as usize)
+                .skip(self.fhs[&fh].offset as usize + offset as usize)
                 .next()
             {
-                Some((offset, entry)) => Some(fs_core::DirectoryEntry {
-                    filetype: entry.ty(self)?.into(),
-                    name: entry.name,
-                    inode: entry.inode.into(),
-                    offset: offset as u64,
+                Some((offset, entry)) => Some({
+                    let entry = fs_core::DirectoryEntry {
+                        filetype: entry.ty(self)?.into(),
+                        name: entry.name,
+                        inode: entry.inode.into(),
+                        offset: offset as u64,
+                    };
+                    self.fhs.get_mut(&fh).unwrap().offset = offset as u64 + 1;
+                    entry
                 }),
                 None => None,
             },

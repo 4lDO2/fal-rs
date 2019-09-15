@@ -269,7 +269,8 @@ impl fuse::Filesystem for FuseFilesystem {
                 return;
             }
         }
-        reply.ok()
+        dbg!(offset);
+        reply.ok();
     }
     fn releasedir(
         &mut self,
