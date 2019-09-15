@@ -363,25 +363,19 @@ impl fuse::Filesystem for FuseFilesystem {
                 return;
             }
         };
-        if !extfs::block_group::inode_exists(inode, &mut self.inner).unwrap() {
-            reply.error(libc::ENOENT);
-            return;
-        }
-        let inode_struct = match Inode::load(&mut self.inner, inode) {
-            Ok(inode_struct) => inode_struct,
-            Err(_) => {
-                reply.error(libc::EIO);
+        let data = match self.inner.readlink(inode) {
+            Ok(data) => data,
+            Err(err) => {
+                match err {
+                    fs_core::Error::BadFd => reply.error(libc::EBADF),
+                    fs_core::Error::NoEntity => reply.error(libc::ENOENT),
+                    fs_core::Error::Io(_) => reply.error(libc::EIO),
+                    fs_core::Error::Other(_) => panic!(),
+                }
                 return;
             }
         };
-        if inode_struct.ty != InodeType::Symlink {
-            reply.error(libc::EINVAL);
-            return;
-        }
-        inode_struct.with_symlink_target(&mut self.inner, |result| match result {
-            Ok(data) => reply.data(data),
-            Err(_) => reply.error(libc::EIO),
-        });
+        reply.data(&data);
     }
     fn unlink(&mut self, _req: &Request, fuse_parent: u64, name: &OsStr, reply: ReplyEmpty) {
         let parent = match fuse_inode_to_extfs_inode(fuse_parent) {

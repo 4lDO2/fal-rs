@@ -192,5 +192,9 @@ pub trait Filesystem<D: Device> {
         inode: &Self::InodeStruct,
     ) -> Attributes<Self::InodeAddr>;
 
+    /// Read a symlink.
+    fn readlink(&mut self, inode: Self::InodeAddr) -> Result<Box<[u8]>>;
+
+    /// Retrieve the inode struct stored internally by the filesystem backend.
     fn fh_inode(&self, fh: u64) -> &'_ Self::InodeStruct;
 }

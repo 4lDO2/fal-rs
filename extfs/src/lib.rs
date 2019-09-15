@@ -278,4 +278,21 @@ impl<D: fs_core::Device> fs_core::Filesystem<D> for Filesystem<D> {
     fn fh_inode(&self, fh: u64) -> &'_ Inode {
         &self.fhs[&fh].inode
     }
+    fn readlink(&mut self, inode: u32) -> fs_core::Result<Box<[u8]>> {
+        let mut location = None;
+        let mut error = None;
+
+        Inode::load(self, inode)?.with_symlink_target(self, |result| {
+            match result {
+                Ok(data) => location = Some(data.to_owned()),
+                Err(err) => error = Some(err),
+            }
+        });
+
+        if let Some(err) = error {
+            return Err(err.into());
+        }
+
+        Ok(location.unwrap().into_boxed_slice())
+    }
 }
