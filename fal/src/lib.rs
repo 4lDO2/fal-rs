@@ -122,6 +122,16 @@ pub enum Error {
     Other(i32),
     Io(io::Error),
 }
+impl Error {
+    pub fn errno(&self) -> i32 {
+        match self {
+            Self::BadFd => libc::EBADF,
+            Self::NoEntity => libc::ENOENT,
+            Self::Other(n) => *n,
+            Self::Io(_) => libc::EIO,
+        }
+    }
+}
 
 impl std::fmt::Display for Error {
     fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -146,10 +156,13 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// An abstract filesystem. Typically implemented by the backend.
 pub trait Filesystem<D: Device> {
     /// An inode address. u32 on ext2.
-    type InodeAddr: From<u32> + Into<u64> + Copy + TryFrom<u64> + Eq;
+    type InodeAddr: From<u32> + Into<u64> + Copy + TryFrom<u64> + Eq + std::fmt::Debug; 
 
     /// An inode structure, capable of retrieving inode information.
     type InodeStruct: Inode;
+
+    /// The root inode address (for example 2 on ext2/3/4).
+    fn root_inode(&self) -> Self::InodeAddr;
 
     // TODO: Support mounting multiple devices as one filesystem, for filesystems that support it.
     /// Mount the filesystem from a device.
@@ -206,4 +219,7 @@ pub trait Filesystem<D: Device> {
 
     /// Retrieve the inode struct stored internally by the filesystem backend.
     fn fh_inode(&self, fh: u64) -> &'_ Self::InodeStruct;
+
+    /// Retrieve the current offset of a file handle.
+    fn fh_offset(&self, fh: u64) -> u64;
 }

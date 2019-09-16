@@ -14,7 +14,7 @@ fn main() {
 
     let scheme = RedoxFilesystem::<fal_backend_ext2::Filesystem<File>>::init(file);
 
-    println!("{:?}", scheme.inner.superblock);
+    println!("{:?}", scheme.inner.lock().unwrap().superblock);
 
     loop {
         let mut packet = Packet::default();

@@ -177,6 +177,11 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
     type InodeAddr = u32;
     type InodeStruct = Inode;
 
+    #[inline]
+    fn root_inode(&self) -> u32 {
+        2
+    }
+
     fn mount(mut device: D) -> Self {
         Self {
             superblock: Superblock::parse(&mut device).unwrap(),
@@ -290,5 +295,8 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         }
 
         Ok(location.unwrap().into_boxed_slice())
+    }
+    fn fh_offset(&self, fh: u64) -> u64 {
+        self.fhs[&fh].offset
     }
 }
