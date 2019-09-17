@@ -69,7 +69,7 @@ impl DeviceMut for std::fs::File {}
 pub trait DeviceMut: Device + Write {}
 
 /// An abstract inode structure.
-pub trait Inode {
+pub trait Inode: Clone {
     type InodeAddr;
 
     fn generation_number(&self) -> Option<u64>;

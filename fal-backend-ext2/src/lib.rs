@@ -254,7 +254,6 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
                         inode: entry.inode.into(),
                         offset: offset as u64,
                     };
-                    self.fhs.get_mut(&fh).unwrap().offset = offset as u64 + 1;
                     entry
                 }),
                 None => None,
@@ -266,10 +265,10 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         parent: u32,
         name: &OsStr,
     ) -> fal::Result<fal::DirectoryEntry<u32>> {
-        let (offset, entry) = dbg!(self.load_inode(parent)?)
+        let (offset, entry) = self.load_inode(parent)?
             .dir_entries(self)?
             .enumerate()
-            .find(|(_, entry)| dbg!(&entry.name) == name)
+            .find(|(_, entry)| &entry.name == name)
             .unwrap();
 
         Ok(fal::DirectoryEntry {
