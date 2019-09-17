@@ -206,7 +206,7 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
             &validity_timeout,
             &fuse_attr(
                 self.inner
-                    .inode_attrs(entry.inode.try_into().unwrap(), &inode_struct),
+                    .inode_attrs(&inode_struct),
             ),
             inode_struct.generation_number().unwrap_or(0),
         ); // TODO: generation_number?
@@ -241,18 +241,21 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
-        /*let inode = match fuse_inode_to_fs_inode(fuse_inode) {
+        let inode: Backend::InodeAddr = match fuse_inode_to_fs_inode(fuse_inode) {
             Some(inode) => inode,
             None => {
                 reply.error(libc::EOVERFLOW);
                 return;
             }
-        };*/
+        };
+
+        assert_eq!(inode, self.inner.inode_attrs(self.inner.fh_inode(fh)).inode);
+
         match self.inner.read_directory(fh, offset) {
             Ok(Some(entry)) => {
                 reply.add(
                     fuse_inode_from_fs_inode(entry.inode),
-                    entry.offset as i64,
+                    0,
                     fuse_filetype(entry.filetype),
                     entry.name,
                 );
@@ -268,7 +271,6 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
                 return;
             }
         }
-        dbg!(offset);
         reply.ok();
     }
     fn releasedir(
@@ -313,7 +315,7 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
         size: u32,
         reply: ReplyData,
     ) {
-        let inode = match fuse_inode_to_fs_inode(fuse_inode) {
+        let inode: Backend::InodeAddr = match fuse_inode_to_fs_inode(fuse_inode) {
             Some(inode) => inode,
             None => {
                 reply.error(libc::EOVERFLOW);
@@ -330,8 +332,12 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
             }
         };
 
+
         let inode_struct = self.inner.fh_inode(fh);
-        let inode_size = self.inner.inode_attrs(inode, inode_struct).size;
+
+        assert_eq!(inode, self.inner.inode_attrs(inode_struct).inode);
+
+        let inode_size = self.inner.inode_attrs(inode_struct).size;
 
         // This will effectively be the size, but possibly reduced to prevent overflow.
         let bytes_to_read = std::cmp::min(offset + u64::from(size), inode_size) - offset;
