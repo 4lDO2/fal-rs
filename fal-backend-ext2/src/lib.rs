@@ -122,7 +122,7 @@ pub struct Filesystem<D: fal::Device> {
     last_fh: u64,
 }
 
-fn inode_attrs(inode: &Inode, addr: u32, superblock: &Superblock) -> fal::Attributes<u32> {
+fn inode_attrs(inode: &Inode, superblock: &Superblock) -> fal::Attributes<u32> {
     fal::Attributes {
         access_time: Timespec {
             sec: inode.last_access_time.into(),
@@ -145,7 +145,7 @@ fn inode_attrs(inode: &Inode, addr: u32, superblock: &Superblock) -> fal::Attrib
         flags: inode.flags,
         group_id: inode.gid.into(),
         hardlink_count: inode.hard_link_count.into(),
-        inode: addr.into(),
+        inode: inode.addr,
         permissions: inode.permissions,
         rdev: 0,
         size: inode.size(&superblock),
@@ -154,8 +154,15 @@ fn inode_attrs(inode: &Inode, addr: u32, superblock: &Superblock) -> fal::Attrib
 }
 
 impl fal::Inode for Inode {
+    type InodeAddr = u32;
+
+    #[inline]
     fn generation_number(&self) -> Option<u64> {
         Some(self.generation_number.into())
+    }
+    #[inline]
+    fn addr(&self) -> u32 {
+        self.addr
     }
 }
 
@@ -218,7 +225,7 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
     fn getattrs(&mut self, inode_addr: u32) -> fal::Result<fal::Attributes<u32>> {
         let inode = Inode::load(self, inode_addr)?;
 
-        Ok(inode_attrs(&inode, inode_addr, &self.superblock))
+        Ok(inode_attrs(&inode, &self.superblock))
     }
     fn open_directory(&mut self, inode: u32) -> fal::Result<u64> {
         self.open_file(inode)
@@ -275,8 +282,8 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
     fn close_directory(&mut self, handle: u64) {
         self.close_file(handle)
     }
-    fn inode_attrs(&self, addr: u32, inode: &Inode) -> fal::Attributes<u32> {
-        inode_attrs(inode, addr, &self.superblock)
+    fn inode_attrs(&self, inode: &Inode) -> fal::Attributes<u32> {
+        inode_attrs(inode, &self.superblock)
     }
     fn fh_inode(&self, fh: u64) -> &'_ Inode {
         &self.fhs[&fh].inode

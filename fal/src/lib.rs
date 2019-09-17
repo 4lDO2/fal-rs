@@ -70,7 +70,10 @@ pub trait DeviceMut: Device + Write {}
 
 /// An abstract inode structure.
 pub trait Inode {
+    type InodeAddr;
+
     fn generation_number(&self) -> Option<u64>;
+    fn addr(&self) -> Self::InodeAddr;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -204,13 +207,12 @@ pub trait Filesystem<D: Device> {
     /// Get a file's attributes, typically called from stat(2).
     fn getattrs(&mut self, addr: Self::InodeAddr) -> Result<Attributes<Self::InodeAddr>> {
         let inode = self.load_inode(addr)?;
-        Ok(self.inode_attrs(addr, &inode))
+        Ok(self.inode_attrs(&inode))
     }
 
     /// Get the attributes of an inode.
     fn inode_attrs(
         &self,
-        addr: Self::InodeAddr,
         inode: &Self::InodeStruct,
     ) -> Attributes<Self::InodeAddr>;
 

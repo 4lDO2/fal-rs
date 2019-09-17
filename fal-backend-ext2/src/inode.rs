@@ -17,6 +17,7 @@ pub const BASE_INODE_SIZE: u64 = 128;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Inode {
+    pub addr: u32,
     pub ty: InodeType,
     pub permissions: u16,
     pub uid: u16,
@@ -169,7 +170,7 @@ impl Inode {
         let containing_block = read_block(filesystem, containing_block_index)?;
         let inode_bytes = &containing_block
             [inode_index_in_block * inode_size..inode_index_in_block * inode_size + inode_size];
-        Ok(Self::parse(inode_bytes))
+        Ok(Self::parse(inode_address, inode_bytes))
     }
     pub fn store<D: fal::DeviceMut>(
         this: &Self,
@@ -216,10 +217,11 @@ impl Inode {
 
         write_block(filesystem, containing_block_index, &containing_block)
     }
-    pub fn parse(bytes: &[u8]) -> Self {
+    pub fn parse(addr: u32, bytes: &[u8]) -> Self {
         let (ty, permissions) = InodeType::from_type_and_perm(read_u16(bytes, 0));
 
         Self {
+            addr,
             ty: ty.unwrap(),
             permissions,
             uid: read_u16(bytes, 2),
