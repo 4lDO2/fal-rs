@@ -18,7 +18,9 @@ impl<Backend: fal::Filesystem<File>> RedoxFilesystem<Backend> {
             Some(component) => match component {
                 Component::Normal(name) => {
                     dbg!(component);
+                    dbg!(parent);
                     let entry = self.inner().lookup_direntry(parent, name).unwrap();
+                    dbg!(entry.inode);
                     self.lookup_dir_raw(components, entry.inode)
                 }
                 _ => panic!("Unsupported component type: {:?}", component),
@@ -68,6 +70,7 @@ impl<Backend: fal::Filesystem<File>> Scheme for RedoxFilesystem<Backend> {
 
             let entry = self.inner().read_directory(fh as u64, 0).unwrap().unwrap();
             contents.push(&entry.name);
+            contents.push("\n");
 
             let offset = self.inner().fh_offset(fh as u64) as usize;
             let len = std::cmp::min(buf.len(), contents.len() - offset);

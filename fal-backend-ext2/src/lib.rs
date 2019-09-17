@@ -266,10 +266,10 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         parent: u32,
         name: &OsStr,
     ) -> fal::Result<fal::DirectoryEntry<u32>> {
-        let (offset, entry) = Inode::load(self, parent)?
+        let (offset, entry) = dbg!(self.load_inode(parent)?)
             .dir_entries(self)?
             .enumerate()
-            .find(|(_, entry)| entry.name == name)
+            .find(|(_, entry)| dbg!(&entry.name) == name)
             .unwrap();
 
         Ok(fal::DirectoryEntry {
