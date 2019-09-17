@@ -33,6 +33,14 @@ impl<Backend: fal::Filesystem<File>> RedoxFilesystem<Backend> {
     }
 
     pub fn lookup_dir(&self, path: &Path) -> Backend::InodeAddr {
+        {
+            let mutex = Mutex::new(());
+            let _guard1 = mutex.lock().unwrap();
+            {
+                let _guard2 = mutex.lock().unwrap();
+            }
+        }
+
         self.lookup_dir_raw(path.components(), self.inner().root_inode())
     }
 }
