@@ -7,7 +7,7 @@ use std::{
 
 use crate::{
     block_group, div_round_up, os_str_to_bytes, os_string_from_bytes, read_block, read_block_to,
-    read_u16, read_u32, read_u8, round_up, superblock::Superblock, write_block, write_u16,
+    read_u16, read_u32, read_u8, round_up, superblock::{OsId, Superblock}, write_block, write_u16,
     write_u32, write_u8, Filesystem,
 };
 
@@ -20,13 +20,13 @@ pub struct Inode {
     pub addr: u32,
     pub ty: InodeType,
     pub permissions: u16,
-    pub uid: u16,
+    pub uid: u32,
     pub size_low: u32,
     pub last_access_time: u32,
     pub creation_time: u32,
     pub last_modification_time: u32,
     pub deletion_time: u32,
-    pub gid: u16,
+    pub gid: u32,
     pub hard_link_count: u16,
     pub disk_sector_count: u32,
     pub flags: u32,
@@ -164,7 +164,7 @@ impl Inode {
         let containing_block = read_block(filesystem, containing_block_index)?;
         let inode_bytes = &containing_block
             [inode_index_in_block * inode_size..inode_index_in_block * inode_size + inode_size];
-        Ok(Self::parse(inode_address, inode_bytes))
+        Ok(Self::parse(&filesystem.superblock, inode_address, inode_bytes))
     }
     pub fn store<D: fal::DeviceMut>(
         this: &Self,
@@ -212,20 +212,36 @@ impl Inode {
             &containing_block,
         )?)
     }
-    pub fn parse(addr: u32, bytes: &[u8]) -> Self {
+    pub fn parse(superblock: &Superblock, addr: u32, bytes: &[u8]) -> Self {
         let (ty, permissions) = InodeType::from_type_and_perm(read_u16(bytes, 0));
+
+        let os_specific_2 = {
+            let mut os_specific_bytes = [0u8; 12];
+            os_specific_bytes.copy_from_slice(&bytes[116..128]);
+            os_specific_bytes
+        };
+        let gid_low = read_u16(bytes, 24);
+        let uid_low = read_u16(bytes, 2);
+
+        let (gid_high, uid_high) = match superblock.os_id {
+            OsId::Linux | OsId::Hurd => (read_u16(&os_specific_2, 122), read_u16(&os_specific_2, 120)),
+            _ => (0, 0),
+        };
+
+        let gid = gid_low as u32 | ((gid_high as u32) << 16);
+        let uid = uid_low as u32 | ((uid_high as u32) << 16);
 
         Self {
             addr,
             ty: ty.unwrap(),
             permissions,
-            uid: read_u16(bytes, 2),
+            uid,
             size_low: read_u32(bytes, 4),
             last_access_time: read_u32(bytes, 8),
             creation_time: read_u32(bytes, 12),
             last_modification_time: read_u32(bytes, 16),
             deletion_time: read_u32(bytes, 20),
-            gid: read_u16(bytes, 24),
+            gid,
             hard_link_count: read_u16(bytes, 26),
             disk_sector_count: read_u32(bytes, 28),
             flags: read_u32(bytes, 32),
@@ -247,11 +263,7 @@ impl Inode {
             extended_atribute_block: read_u32(bytes, 104),
             size_high_or_acl: read_u32(bytes, 108),
             fragment_baddr: read_u32(bytes, 112),
-            os_specific_2: {
-                let mut os_specific_bytes = [0u8; 12];
-                os_specific_bytes.copy_from_slice(&bytes[116..128]);
-                os_specific_bytes
-            },
+            os_specific_2,
         }
     }
     pub fn serialize(this: &Inode, superblock: &Superblock, buffer: &mut [u8]) {
@@ -260,13 +272,13 @@ impl Inode {
             0,
             InodeType::to_type_and_perm((this.ty, this.permissions)),
         );
-        write_u16(buffer, 2, this.uid);
+        write_u16(buffer, 2, this.uid as u16);
         write_u32(buffer, 4, this.size_low);
         write_u32(buffer, 8, this.last_access_time);
         write_u32(buffer, 12, this.creation_time);
         write_u32(buffer, 16, this.last_modification_time);
         write_u32(buffer, 20, this.deletion_time);
-        write_u16(buffer, 24, this.gid);
+        write_u16(buffer, 24, this.gid as u16);
         write_u16(buffer, 26, this.hard_link_count);
         write_u32(buffer, 28, this.disk_sector_count);
         write_u32(buffer, 32, this.flags);
@@ -287,6 +299,7 @@ impl Inode {
 
         assert!(u64::from(superblock.inode_size()) <= superblock.block_size);
 
+        // TODO: Serialize the os specific high uid and gid.
         buffer[116..128].copy_from_slice(&this.os_specific_2);
 
         for byte in &mut buffer[BASE_INODE_SIZE.try_into().unwrap()..] {
