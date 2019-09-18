@@ -186,6 +186,8 @@ impl RoFeatureFlags {
 }
 
 fn log2_round_up<T: From<u8> + AddAssign + ShrAssign + Eq>(mut t: T) -> T {
+    if t == 1.into() { return 0.into(); }
+
     let mut count = 0.into();
 
     while t != 1.into() {
@@ -457,7 +459,7 @@ mod tests {
     #[test]
     fn log2_round_up() {
         assert_eq!(super::log2_round_up(1024), 10);
-        assert_eq!(super::log2_round_up(1), 1);
+        assert_eq!(super::log2_round_up(1), 0);
         assert_eq!(super::log2_round_up(65536), 16);
     }
 }
