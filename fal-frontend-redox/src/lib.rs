@@ -49,17 +49,12 @@ fn syscall_result<T: std::fmt::Debug>(fal_result: fal::Result<T>) -> syscall::Re
 impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
 
     fn open(&mut self, path: &[u8], flags: usize, uid: u32, gid: u32) -> syscall::Result<usize> {
-        dbg!(OsStr::from_bytes(path), flags, uid, gid);
         let path = Path::new(OsStr::from_bytes(path));
         let file_inode = self.lookup_dir(&path);
 
-        dbg!(file_inode);
-
         if flags & syscall::flag::O_DIRECTORY == 0 {
-            dbg!();
             self.inner().open_file(file_inode).map_err(|err| syscall_error(err)).map(|fd| fd as usize)
         } else {
-            dbg!();
             self.inner().open_directory(file_inode).map_err(|err| syscall_error(err)).map(|fd| fd as usize)
         }
     }
@@ -84,9 +79,7 @@ impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
             }
 
             let offset = self.inner().fh_offset(fh as u64) as usize;
-            dbg!(offset);
             let len = std::cmp::min(buf.len(), contents.len() - offset);
-            dbg!(len);
 
             if offset >= contents.len() {
                 return Ok(0);
@@ -95,12 +88,10 @@ impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
             buf[..len].copy_from_slice(&contents.as_bytes()[offset..offset + len]);
             self.inner().set_fh_offset(fh as u64, offset as u64 + len as u64);
 
-            dbg!(&contents);
-            dbg!(OsStr::from_bytes(&buf[..len]));
-
             Ok(len)
         } else {
             let offset = self.inner().fh_offset(fh as u64);
+            dbg!(offset);
             dbg!(syscall_result(self.inner().read(fh as u64, offset, buf)))
         }
     }
