@@ -119,12 +119,12 @@ impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
     fn write(&mut self, id: usize, buf: &[u8]) -> syscall::Result<usize> { dbg!(Ok(0)) }
 
     fn seek(&mut self, fh: usize, pos: usize, whence: usize) -> syscall::Result<usize> {
-        let mut offset = 0;
+        let mut offset = self.inner().fh_offset(fh as u64);
 
         match whence {
             syscall::flag::SEEK_SET => offset = pos as u64,
             syscall::flag::SEEK_END => unimplemented!(),
-            syscall::flag::SEEK_CUR => unimplemented!(),
+            syscall::flag::SEEK_CUR => offset += pos as u64,
             _ => return syscall_result(Err(fal::Error::Overflow)),
         }
         Ok(offset as usize)
