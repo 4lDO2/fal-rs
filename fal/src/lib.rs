@@ -124,6 +124,8 @@ pub enum Error {
     NoEntity,
     Overflow,
     Invalid,
+    IsDirectory,
+    NotDirectory,
     Other(i32),
     Io(io::Error),
 }
@@ -135,6 +137,8 @@ impl Error {
             Self::Other(n) => *n,
             Self::Overflow => libc::EOVERFLOW,
             Self::Invalid => libc::EINVAL,
+            Self::IsDirectory => libc::EISDIR,
+            Self::NotDirectory => libc::ENOTDIR,
             Self::Io(_) => libc::EIO,
         }
     }
@@ -150,6 +154,8 @@ impl std::fmt::Display for Error {
             Error::Overflow => writeln!(formatter, "overflow"),
             Error::Invalid => writeln!(formatter, "invalid argument"),
             Error::Io(err) => writeln!(formatter, "i/o error: `{}`", err),
+            Error::IsDirectory => writeln!(formatter, "is directory"),
+            Error::NotDirectory => writeln!(formatter, "not directory"),
             Error::Other(n) => writeln!(formatter, "other ({})", n),
         }
     }
@@ -188,9 +194,9 @@ pub trait Filesystem<D: Device> {
     /// Read bytes from a file.
     fn read(&mut self, fh: u64, offset: u64, buffer: &mut [u8]) -> Result<usize>;
 
-    /// Close an opened file. The filesystem implementation will ensure that unread bytes get
+    /// Close an opened file or directory. The filesystem implementation will ensure that unread bytes get
     /// flushed before closing.
-    fn close_file(&mut self, file: u64);
+    fn close(&mut self, file: u64) -> Result<()>;
 
     /// Open a directory from an inode address.
     fn open_directory(&mut self, address: Self::InodeAddr) -> Result<u64>;
@@ -208,9 +214,6 @@ pub trait Filesystem<D: Device> {
         parent: Self::InodeAddr,
         name: &OsStr,
     ) -> Result<DirectoryEntry<Self::InodeAddr>>;
-
-    /// Close an opened directory.
-    fn close_directory(&mut self, dir: u64);
 
     /// Get a file's attributes, typically called from stat(2).
     fn getattrs(&mut self, addr: Self::InodeAddr) -> Result<Attributes<Self::InodeAddr>> {

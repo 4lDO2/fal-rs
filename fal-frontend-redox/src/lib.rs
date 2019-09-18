@@ -97,14 +97,7 @@ impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
     }
 
     fn close(&mut self, fh: usize) -> syscall::Result<usize> {
-        // TODO: Unify close_file and close_dir.
-        let inode = self.inner().fh_inode(fh as u64).clone();
-        if let fal::FileType::Directory = self.inner().inode_attrs(&inode).filetype {
-            self.inner().close_directory(fh as u64);
-        } else {
-            self.inner().close_file(fh as u64);
-        }
-        Ok(0)
+        syscall_result(self.inner.close(fh as u64).map(|_| 0))
     }
     fn chmod(&mut self, path: &[u8], mode: u16, uid: u32, gid: u32) -> syscall::Result<usize> { dbg!(OsStr::from_bytes(path), mode, uid, gid); dbg!(Ok(0)) }
     fn rmdir(&mut self, path: &[u8], uid: u32, gid: u32) -> syscall::Result<usize> { dbg!(OsStr::from_bytes(path), uid, gid); dbg!(Ok(0)) }

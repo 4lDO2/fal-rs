@@ -122,6 +122,35 @@ pub struct Filesystem<D: fal::Device> {
     last_fh: u64,
 }
 
+#[derive(Debug, PartialEq)]
+enum Open {
+    File,
+    Directory,
+}
+
+impl<D: fal::Device> Filesystem<D> {
+    fn open(&mut self, addr: u32, ty: Open) -> fal::Result<u64> {
+        let fh = FileHandle {
+            inode_addr: addr,
+            fh: self.last_fh,
+            inode: Inode::load(self, addr)?,
+            offset: 0,
+        };
+
+        if ty == Open::File && fh.inode.ty == inode::InodeType::Dir {
+            return Err(fal::Error::IsDirectory);
+        }
+        if ty == Open::Directory && fh.inode.ty == inode::InodeType::File {
+            return Err(fal::Error::NotDirectory);
+        }
+
+        self.fhs.insert(self.last_fh, fh);
+        self.last_fh += 1;
+
+        Ok(fh.fh)
+    }
+}
+
 fn inode_attrs(inode: &Inode, superblock: &Superblock) -> fal::Attributes<u32> {
     fal::Attributes {
         access_time: Timespec {
@@ -201,37 +230,39 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         Ok(Inode::load(self, addr)?)
     }
     fn open_file(&mut self, addr: Self::InodeAddr) -> fal::Result<u64> {
-        let fh = FileHandle {
-            inode_addr: addr,
-            fh: self.last_fh,
-            inode: Inode::load(self, addr)?,
-            offset: 0,
-        };
-        self.fhs.insert(self.last_fh, fh);
-        self.last_fh += 1;
-
-        Ok(fh.fh)
+        self.open(addr, Open::File)
     }
     fn read(&mut self, fh: u64, offset: u64, buffer: &mut [u8]) -> fal::Result<usize> {
         if self.fhs.get(&fh).is_some() {
-            let bytes_read = self.fhs[&fh].inode.read(self, offset, buffer)?;
+            let inode: inode::Inode = self.fhs[&fh].inode;
+
+            if inode.ty == inode::InodeType::Dir {
+                return Err(fal::Error::IsDirectory);
+            }
+
+            let bytes_read = inode.read(self, offset, buffer)?;
+
             self.fhs.get_mut(&fh).unwrap().offset += bytes_read as u64;
+
             Ok(bytes_read)
         } else {
             Err(fal::Error::BadFd)
         }
     }
-    fn close_file(&mut self, fh: u64) {
+    fn close(&mut self, fh: u64) -> fal::Result<()> {
         // FIXME: Flush before closing.
-        self.fhs.remove(&fh);
+        match self.fhs.remove(&fh) {
+            Some(_) => Ok(()),
+            None => Err(fal::Error::BadFd),
+        }
     }
     fn getattrs(&mut self, inode_addr: u32) -> fal::Result<fal::Attributes<u32>> {
-        let inode = Inode::load(self, inode_addr)?;
+        let inode = self.load_inode(inode_addr)?;
 
         Ok(inode_attrs(&inode, &self.superblock))
     }
     fn open_directory(&mut self, inode: u32) -> fal::Result<u64> {
-        self.open_file(inode)
+        self.open(inode, Open::Directory)
     }
     fn read_directory(
         &mut self,
@@ -242,6 +273,11 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
             Some(handle) => handle,
             None => return Err(fal::Error::BadFd),
         };
+
+        if handle.inode.ty != inode::InodeType::Dir {
+            return Err(fal::Error::NotDirectory);
+        }
+
         Ok(
             match handle
                 .inode
@@ -268,7 +304,13 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         parent: u32,
         name: &OsStr,
     ) -> fal::Result<fal::DirectoryEntry<u32>> {
-        let (offset, entry) = match self.load_inode(parent)?
+        let inode = self.load_inode(parent)?;
+
+        if inode.ty != inode::InodeType::Dir {
+            return Err(fal::Error::NotDirectory);
+        }
+
+        let (offset, entry) = match inode
             .dir_entries(self)?
             .enumerate()
             .find(|(_, entry)| &entry.name == name) {
@@ -283,9 +325,6 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
             offset: offset as u64,
         })
     }
-    fn close_directory(&mut self, handle: u64) {
-        self.close_file(handle)
-    }
     fn inode_attrs(&self, inode: &Inode) -> fal::Attributes<u32> {
         inode_attrs(inode, &self.superblock)
     }
@@ -296,7 +335,13 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         let mut location = None;
         let mut error = None;
 
-        Inode::load(self, inode)?.with_symlink_target(self, |result| match result {
+        let inode = Inode::load(self, inode)?;
+
+        if inode.ty != inode::InodeType::Symlink {
+            return Err(fal::Error::Invalid);
+        }
+
+        inode.with_symlink_target(self, |result| match result {
             Ok(data) => location = Some(data.to_owned()),
             Err(err) => error = Some(err),
         });
