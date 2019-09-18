@@ -6,7 +6,7 @@ use std::{
 };
 
 use fuse::{
-    ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, Request,
+    ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs, Request,
 };
 use time::Timespec;
 
@@ -256,7 +256,7 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
         _flags: u32,
         reply: ReplyEmpty,
     ) {
-        self.inner.close_directory(fh);
+        self.inner.close(fh);
         reply.ok();
     }
     fn open(&mut self, _req: &Request, fuse_inode: u64, _flags: u32, reply: ReplyOpen) {
@@ -328,7 +328,7 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
         _flush: bool,
         reply: ReplyEmpty,
     ) {
-        self.inner.close_file(fh);
+        self.inner.close(fh).unwrap();
         reply.ok();
     }
     fn readlink(&mut self, _req: &Request, fuse_inode: u64, reply: ReplyData) {
@@ -347,6 +347,10 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
             }
         };
         reply.data(&data);
+    }
+    fn statfs(&mut self, _req: &Request, _inode: u64, reply: ReplyStatfs) {
+        let stat: fal::FsAttributes = self.inner.filesystem_attrs();
+        reply.statfs(stat.total_blocks.into(), stat.free_blocks.into(), stat.available_blocks.into(), stat.inode_count, stat.free_inodes, stat.block_size, stat.max_fname_len, stat.block_size);
     }
     fn unlink(&mut self, _req: &Request, fuse_parent: u64, name: &OsStr, reply: ReplyEmpty) {
         let parent = match fuse_inode_to_fs_inode(fuse_parent) {

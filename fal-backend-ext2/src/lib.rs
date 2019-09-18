@@ -360,4 +360,16 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
     fn set_fh_offset(&mut self, fh: u64, offset: u64) {
         self.fhs.get_mut(&fh).unwrap().offset = offset;
     }
+
+    fn filesystem_attrs(&self) -> fal::FsAttributes {
+        fal::FsAttributes {
+            block_size: self.superblock.block_size as u32,
+            free_blocks: self.superblock.unalloc_block_count,
+            available_blocks: self.superblock.unalloc_block_count, // TODO: What role does reserved_block_count have?
+            free_inodes: self.superblock.unalloc_inode_count.into(),
+            inode_count: self.superblock.inode_count.into(),
+            total_blocks: self.superblock.block_count,
+            max_fname_len: 255,
+        }
+    }
 }

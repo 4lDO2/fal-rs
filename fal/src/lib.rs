@@ -107,6 +107,19 @@ pub struct Attributes<InodeAddr: Into<u64>> {
     pub flags: u32,
 }
 
+pub struct FsAttributes {
+    pub block_size: u32, // TODO: Fundamental FS block size (struct statvfs.f_frsize)?
+
+    pub total_blocks: u32,
+    pub free_blocks: u32,
+    pub available_blocks: u32,
+    
+    pub inode_count: u64,
+    pub free_inodes: u64,
+
+    pub max_fname_len: u32,
+}
+
 pub struct DirectoryEntry<InodeAddr: Into<u64>> {
     pub name: OsString,
     pub filetype: FileType,
@@ -238,4 +251,7 @@ pub trait Filesystem<D: Device> {
 
     /// Set the current offset of a file handle.
     fn set_fh_offset(&mut self, fh: u64, offset: u64);
+
+    /// Get the statvfs of the filesystem.
+    fn filesystem_attrs(&self) -> FsAttributes;
 }

@@ -155,7 +155,21 @@ impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
         Ok(0)
     }
 
-    fn fstatvfs(&mut self, id: usize, stat: &mut syscall::StatVfs) -> syscall::Result<usize> { dbg!(id, stat); dbg!(Ok(0)) }
+    fn fstatvfs(&mut self, _id: usize, stat: &mut syscall::StatVfs) -> syscall::Result<usize> {
+        // FIXME: This functions is probably about a single file, but this function returns the
+        // stat of the entire fs.
+
+        let fs_attrs: fal::FsAttributes = self.inner.filesystem_attrs();
+
+        *stat = syscall::StatVfs {
+            f_bavail: fs_attrs.available_blocks.into(),
+            f_bfree: fs_attrs.free_blocks.into(),
+            f_blocks: fs_attrs.total_blocks.into(),
+            f_bsize: fs_attrs.block_size,
+        };
+        Ok(0)
+    }
+
     fn fsync(&mut self, id: usize) -> syscall::Result<usize> { dbg!(id); dbg!(Ok(0)) }
     fn ftruncate(&mut self, id: usize, len: usize) -> syscall::Result<usize> { dbg!(id, len); dbg!(Ok(0)) }
     fn futimens(&mut self, id: usize, times: &[syscall::TimeSpec]) -> syscall::Result<usize> { dbg!(id, times); dbg!(Ok(0)) }
