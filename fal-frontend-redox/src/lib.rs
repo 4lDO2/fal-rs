@@ -23,6 +23,7 @@ impl<Backend: fal::Filesystem<File>> RedoxFilesystem<Backend> {
                     dbg!(entry.inode);
                     self.lookup_dir_raw(components, entry.inode)
                 }
+                Component::RootDir => self.lookup_dir_raw(components, parent), // ignore Component::RootDir
                 _ => panic!("Unsupported component type: {:?}", component),
             }
             None => parent,
