@@ -75,8 +75,10 @@ impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
             let mut offset = 0;
 
             while let Some(entry) = self.inner().read_directory(fh as u64, offset).unwrap() {
+                if offset != 0 {
+                    contents.push("\n");
+                }
                 contents.push(&entry.name);
-                contents.push("\n");
                 offset += 1;
             }
 
