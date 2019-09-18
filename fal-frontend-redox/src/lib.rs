@@ -41,8 +41,8 @@ impl<Backend: fal::Filesystem<File>> RedoxFilesystem<Backend> {
 fn syscall_error(fal_error: fal::Error) -> syscall::error::Error {
     syscall::error::Error::new(fal_error.errno())
 }
-fn syscall_result<T>(fal_result: fal::Result<T>) -> syscall::Result<T> {
-    fal_result.map_err(|err| syscall_error(err))
+fn syscall_result<T: std::fmt::Debug>(fal_result: fal::Result<T>) -> syscall::Result<T> {
+    dbg!(fal_result).map_err(|err| syscall_error(err))
 }
 
 impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {

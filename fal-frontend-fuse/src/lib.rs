@@ -151,12 +151,7 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
         let file_attributes = match self.inner.getattrs(inode) {
             Ok(attrs) => fuse_attr(attrs),
             Err(err) => {
-                match err {
-                    fal::Error::NoEntity => reply.error(libc::ENOENT),
-                    fal::Error::Io(_) => reply.error(libc::EIO),
-                    fal::Error::BadFd => unreachable!(),
-                    fal::Error::Other(_) => panic!(),
-                }
+                reply.error(err.errno());
                 return;
             }
         };
@@ -177,12 +172,7 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
         let entry = match self.inner.lookup_direntry(parent_inode, name) {
             Ok(entry) => entry,
             Err(err) => {
-                match err {
-                    fal::Error::BadFd => unreachable!(),
-                    fal::Error::NoEntity => reply.error(libc::ENOENT),
-                    fal::Error::Io(_) => reply.error(libc::EIO),
-                    fal::Error::Other(_) => panic!(),
-                }
+                reply.error(err.errno());
                 return;
             }
         };
@@ -190,12 +180,7 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
         let inode_struct = match self.inner.load_inode(entry.inode.try_into().unwrap()) {
             Ok(inode_struct) => inode_struct,
             Err(err) => {
-                match err {
-                    fal::Error::BadFd => unreachable!(),
-                    fal::Error::NoEntity => reply.error(libc::ENOENT),
-                    fal::Error::Io(_) => reply.error(libc::EIO),
-                    fal::Error::Other(_) => panic!(),
-                };
+                reply.error(err.errno());
                 return;
             }
         };
@@ -222,12 +207,7 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
         let fh = match self.inner.open_directory(inode) {
             Ok(fh) => fh,
             Err(err) => {
-                match err {
-                    fal::Error::BadFd => reply.error(libc::EBADF),
-                    fal::Error::NoEntity => reply.error(libc::ENOENT),
-                    fal::Error::Io(_) => reply.error(libc::EIO),
-                    fal::Error::Other(_) => panic!(),
-                }
+                reply.error(err.errno());
                 return;
             }
         };
@@ -262,12 +242,7 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
             }
             Ok(None) => (),
             Err(err) => {
-                match err {
-                    fal::Error::BadFd => reply.error(libc::EBADF),
-                    fal::Error::NoEntity => reply.error(libc::ENOENT),
-                    fal::Error::Io(_) => reply.error(libc::EIO),
-                    fal::Error::Other(_) => panic!(),
-                }
+                reply.error(err.errno());
                 return;
             }
         }
@@ -295,12 +270,7 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
         let fh = match self.inner.open_file(inode) {
             Ok(fh) => fh,
             Err(err) => {
-                match err {
-                    fal::Error::BadFd => reply.error(libc::EBADF),
-                    fal::Error::NoEntity => reply.error(libc::ENOENT),
-                    fal::Error::Io(_) => reply.error(libc::EIO),
-                    fal::Error::Other(_) => panic!(),
-                }
+                reply.error(err.errno());
                 return;
             }
         };
@@ -372,12 +342,7 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
         let data = match self.inner.readlink(inode) {
             Ok(data) => data,
             Err(err) => {
-                match err {
-                    fal::Error::BadFd => reply.error(libc::EBADF),
-                    fal::Error::NoEntity => reply.error(libc::ENOENT),
-                    fal::Error::Io(_) => reply.error(libc::EIO),
-                    fal::Error::Other(_) => panic!(),
-                }
+                reply.error(err.errno());
                 return;
             }
         };

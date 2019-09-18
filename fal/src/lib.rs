@@ -122,6 +122,8 @@ pub trait FileHandle {
 pub enum Error {
     BadFd,
     NoEntity,
+    Overflow,
+    Invalid,
     Other(i32),
     Io(io::Error),
 }
@@ -131,16 +133,22 @@ impl Error {
             Self::BadFd => libc::EBADF,
             Self::NoEntity => libc::ENOENT,
             Self::Other(n) => *n,
+            Self::Overflow => libc::EOVERFLOW,
+            Self::Invalid => libc::EINVAL,
             Self::Io(_) => libc::EIO,
         }
     }
 }
+
+impl std::error::Error for Error {}
 
 impl std::fmt::Display for Error {
     fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             Error::NoEntity => writeln!(formatter, "no such file or directory"),
             Error::BadFd => writeln!(formatter, "bad file descriptor"),
+            Error::Overflow => writeln!(formatter, "overflow"),
+            Error::Invalid => writeln!(formatter, "invalid argument"),
             Error::Io(err) => writeln!(formatter, "i/o error: `{}`", err),
             Error::Other(n) => writeln!(formatter, "other ({})", n),
         }

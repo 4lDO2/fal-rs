@@ -176,12 +176,9 @@ impl Inode {
         this: &Self,
         filesystem: &mut Filesystem<D>,
         inode_address: u32,
-    ) -> io::Result<()> {
+    ) -> fal::Result<()> {
         if inode_address == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                "no inode address (was 0)",
-            ));
+            return Err(fal::Error::Invalid);
         }
 
         debug_assert!(block_group::inode_exists(inode_address, filesystem)?);
@@ -215,7 +212,7 @@ impl Inode {
 
         Self::serialize(this, &filesystem.superblock, inode_bytes);
 
-        write_block(filesystem, containing_block_index, &containing_block)
+        Ok(write_block(filesystem, containing_block_index, &containing_block)?)
     }
     pub fn parse(addr: u32, bytes: &[u8]) -> Self {
         let (ty, permissions) = InodeType::from_type_and_perm(read_u16(bytes, 0));
@@ -391,31 +388,31 @@ impl Inode {
         rel_baddr: u32,
         filesystem: &Filesystem<D>,
         buffer: &mut [u8],
-    ) -> io::Result<()> {
+    ) -> fal::Result<()> {
         if u64::from(rel_baddr) >= self.size_in_blocks(&filesystem.superblock) {
-            return Err(io::ErrorKind::UnexpectedEof.into());
+            return Err(fal::Error::Overflow);
         }
         let abs_baddr = self.absolute_baddr(filesystem, rel_baddr)?;
-        read_block_to(filesystem, abs_baddr, buffer)
+        Ok(read_block_to(filesystem, abs_baddr, buffer)?)
     }
     pub fn write_block<D: fal::DeviceMut>(
         &self,
         rel_baddr: u32,
         filesystem: &Filesystem<D>,
         buffer: &[u8],
-    ) -> io::Result<()> {
+    ) -> fal::Result<()> {
         if u64::from(rel_baddr) >= self.size_in_blocks(&filesystem.superblock) {
-            return Err(io::ErrorKind::UnexpectedEof.into());
+            return Err(fal::Error::Overflow);
         }
         let abs_baddr = self.absolute_baddr(filesystem, rel_baddr)?;
-        write_block(filesystem, abs_baddr, buffer)
+        Ok(write_block(filesystem, abs_baddr, buffer)?)
     }
     pub fn read<D: fal::Device>(
         &self,
         filesystem: &Filesystem<D>,
         offset: u64,
         mut buffer: &mut [u8],
-    ) -> io::Result<usize> {
+    ) -> fal::Result<usize> {
         let mut bytes_read = 0;
 
         let off_from_rel_block = offset % filesystem.superblock.block_size;
@@ -431,6 +428,7 @@ impl Inode {
                 filesystem,
                 &mut block_bytes,
             )?;
+            dbg!();
 
             let off_from_rel_block_usize = usize::try_from(off_from_rel_block).unwrap();
             let end = std::cmp::min(
@@ -453,6 +451,7 @@ impl Inode {
                     )
                     .map(|b| b + bytes_read);
             } else {
+                dbg!();
                 return Ok(bytes_read);
             }
         }
@@ -485,7 +484,7 @@ impl Inode {
         filesystem: &mut Filesystem<D>,
         offset: u64,
         mut buffer: &[u8],
-    ) -> io::Result<()> {
+    ) -> fal::Result<()> {
         let off_from_rel_block = offset % filesystem.superblock.block_size;
         let rel_baddr_start = offset / filesystem.superblock.block_size;
 
@@ -572,7 +571,7 @@ impl Inode {
             raw: self.raw_dir_entries(filesystem)?,
         })
     }
-    pub fn with_symlink_target<D: fal::Device, F: FnOnce(io::Result<&[u8]>) -> ()>(
+    pub fn with_symlink_target<D: fal::Device, F: FnOnce(fal::Result<&[u8]>) -> ()>(
         &self,
         filesystem: &mut Filesystem<D>,
         handler: F,
