@@ -213,9 +213,12 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         Ok(fh.fh)
     }
     fn read(&mut self, fh: u64, offset: u64, buffer: &mut [u8]) -> fal::Result<usize> {
-        match self.fhs.get(&fh) {
-            Some(fh) => Ok(fh.inode.read(self, offset, buffer)?),
-            None => Err(fal::Error::BadFd),
+        if self.fhs.get(&fh).is_some() {
+            let bytes_read = self.fhs[&fh].inode.read(self, offset, buffer)?;
+            self.fhs.get_mut(&fh).unwrap().offset += bytes_read as u64;
+            Ok(bytes_read)
+        } else {
+            Err(fal::Error::BadFd)
         }
     }
     fn close_file(&mut self, fh: u64) {

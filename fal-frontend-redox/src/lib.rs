@@ -87,7 +87,7 @@ impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
             Ok(len)
         } else {
             let offset = self.inner().fh_offset(fh as u64);
-            syscall_result(self.inner().read(fh as u64, offset, buf))
+            dbg!(syscall_result(self.inner().read(fh as u64, offset, buf)))
         }
     }
 
