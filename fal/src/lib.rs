@@ -139,6 +139,7 @@ pub enum Error {
     Invalid,
     IsDirectory,
     NotDirectory,
+    AccessDenied,
     Other(i32),
     Io(io::Error),
 }
@@ -152,6 +153,7 @@ impl Error {
             Self::Invalid => libc::EINVAL,
             Self::IsDirectory => libc::EISDIR,
             Self::NotDirectory => libc::ENOTDIR,
+            Self::AccessDenied => libc::EACCES,
             Self::Io(_) => libc::EIO,
         }
     }
@@ -169,6 +171,7 @@ impl std::fmt::Display for Error {
             Error::Io(err) => writeln!(formatter, "i/o error: `{}`", err),
             Error::IsDirectory => writeln!(formatter, "is directory"),
             Error::NotDirectory => writeln!(formatter, "not directory"),
+            Error::AccessDenied => writeln!(formatter, "access denied"),
             Error::Other(n) => writeln!(formatter, "other ({})", n),
         }
     }
@@ -251,4 +254,32 @@ pub trait Filesystem<D: Device> {
 
     /// Get the statvfs of the filesystem.
     fn filesystem_attrs(&self) -> FsAttributes;
+}
+#[derive(Debug)]
+pub struct Permissions {
+    pub read: bool,
+    pub write: bool,
+    pub execute: bool,
+}
+
+/// Parse a single octal digit of permissions into three booleans.
+pub fn mask_permissions(mask: u8) -> Permissions {
+    Permissions {
+        read: mask & 0o4 != 0,
+        write: mask & 0o2 != 0,
+        execute: mask & 0o1 != 0,
+    }
+}
+/// Check which permissions a user of a certain group has on a file with the specified attributes.
+pub fn check_permissions<A: Into<u64>>(uid: u32, gid: u32, attrs: &Attributes<A>) -> Permissions {
+    if attrs.user_id == uid {
+        let user_mask = (attrs.permissions & 0o700) >> 6;
+        mask_permissions(user_mask as u8)
+    } else if attrs.group_id == gid {
+        let group_mask = (attrs.permissions & 0o070) >> 3;
+        mask_permissions(group_mask as u8)
+    } else {
+        let others_mask = attrs.permissions & 0o007;
+        mask_permissions(others_mask as u8)
+    }
 }

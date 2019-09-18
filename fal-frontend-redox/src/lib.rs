@@ -10,6 +10,7 @@ use std::{
 use fal::Filesystem;
 use syscall::SchemeMut;
 
+#[derive(Debug)]
 pub struct RedoxFilesystem<Backend> {
     pub inner: Backend,
 }
@@ -58,6 +59,19 @@ impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
     fn open(&mut self, path: &[u8], flags: usize, uid: u32, gid: u32) -> syscall::Result<usize> {
         let path = Path::new(OsStr::from_bytes(path));
         let file_inode = self.lookup_dir(&path);
+
+        let inode_struct = syscall_result(self.inner.load_inode(file_inode))?;
+        let permissions = fal::check_permissions(uid, gid, &self.inner.inode_attrs(&inode_struct));
+
+        if ((flags & syscall::flag::O_RDONLY != 0) || flags & syscall::flag::O_RDWR != 0) && !permissions.read {
+            return syscall_result(Err(fal::Error::AccessDenied));
+        }
+        if flags & syscall::flag::O_RDWR != 0 && !permissions.write {
+            return syscall_result(Err(fal::Error::AccessDenied));
+        }
+        if flags & syscall::flag::O_EXCL != 0 && !permissions.execute {
+            return syscall_result(Err(fal::Error::AccessDenied));
+        }
 
         if flags & syscall::flag::O_DIRECTORY == 0 {
             self.inner()
