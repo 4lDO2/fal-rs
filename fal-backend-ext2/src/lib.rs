@@ -220,7 +220,7 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
 
     fn mount(mut device: D) -> Self {
         Self {
-            superblock: Superblock::parse(&mut device).unwrap(),
+            superblock: Superblock::load(&mut device).unwrap(),
             device: Mutex::new(device),
             fhs: HashMap::new(),
             last_fh: 0,

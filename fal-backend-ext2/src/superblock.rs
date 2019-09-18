@@ -417,7 +417,7 @@ impl Superblock {
         }
     }
 
-    pub fn store<D: fal::DeviceMut>(&self, device: D) -> io::Result<()> {
+    pub fn store<D: fal::DeviceMut>(&self, mut device: D) -> io::Result<()> {
         device.seek(SeekFrom::Start(SUPERBLOCK_OFFSET)).unwrap();
 
         let mut block_bytes = [0u8; 1024];
