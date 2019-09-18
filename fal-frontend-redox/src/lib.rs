@@ -117,7 +117,19 @@ impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
     fn unlink(&mut self, path: &[u8], uid: u32, gid: u32) -> syscall::Result<usize> { dbg!(Ok(0)) }
     fn dup(&mut self, old_id: usize, buf: &[u8]) -> syscall::Result<usize> { dbg!(Ok(0)) }
     fn write(&mut self, id: usize, buf: &[u8]) -> syscall::Result<usize> { dbg!(Ok(0)) }
-    fn seek(&mut self, id: usize, pos: usize, whence: usize) -> syscall::Result<usize> { dbg!(Ok(0)) }
+
+    fn seek(&mut self, fh: usize, pos: usize, whence: usize) -> syscall::Result<usize> {
+        let mut offset = 0;
+
+        match whence {
+            syscall::flag::SEEK_SET => offset = pos as u64,
+            syscall::flag::SEEK_END => unimplemented!(),
+            syscall::flag::SEEK_CUR => unimplemented!(),
+            _ => return syscall_result(Err(fal::Error::Overflow)),
+        }
+        Ok(offset as usize)
+    }
+
     fn fchmod(&mut self, id: usize, mode: u16) -> syscall::Result<usize> { dbg!(Ok(0)) }
     fn fchown(&mut self, id: usize, uid: u32, gid: u32) -> syscall::Result<usize> { dbg!(Ok(0)) }
     fn fcntl(&mut self, id: usize, cmd: usize, arg: usize) -> syscall::Result<usize> { dbg!(Ok(0)) }
