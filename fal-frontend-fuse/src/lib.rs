@@ -253,10 +253,12 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
         _flags: u32,
         reply: ReplyEmpty,
     ) {
-        self.inner.close(fh);
-        reply.ok();
+        match self.inner.close(fh) {
+            Ok(()) => reply.ok(),
+            Err(err) => reply.error(err.errno()),
+        }
     }
-    fn open(&mut self, _req: &Request, fuse_inode: u64, _flags: u32, reply: ReplyOpen) {
+    fn open(&mut self, req: &Request, fuse_inode: u64, flags: u32, reply: ReplyOpen) {
         let inode = match fuse_inode_to_fs_inode(fuse_inode) {
             Some(inode) => inode,
             None => {
@@ -264,6 +266,24 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
                 return;
             }
         };
+
+        let inode_struct = self.inner.load_inode(inode).unwrap();
+        let attrs = self.inner.inode_attrs(&inode_struct);
+        let permissions = fal::check_permissions(req.uid(), req.gid(), &attrs);
+
+        if ((flags & libc::O_RDONLY as u32 != 0) || flags & libc::O_RDWR as u32 != 0) && !permissions.read {
+            reply.error(libc::EACCES);
+            return
+        }
+        if flags & libc::O_RDWR as u32 != 0 && !permissions.write {
+            reply.error(libc::EACCES);
+            return
+        }
+        if flags & libc::O_EXCL as u32 != 0 && !permissions.execute {
+            reply.error(libc::EACCES);
+            return
+        }
+
         let fh = match self.inner.open_file(inode) {
             Ok(fh) => fh,
             Err(err) => {
