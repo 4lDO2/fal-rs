@@ -1,4 +1,11 @@
-use std::{convert::TryInto, ffi::{OsStr, OsString}, fs::File, path::{Path, Component, Components}, os::unix::ffi::OsStrExt, sync::{Mutex, MutexGuard}};
+use std::{
+    convert::TryInto,
+    ffi::{OsStr, OsString},
+    fs::File,
+    os::unix::ffi::OsStrExt,
+    path::{Component, Components, Path},
+    sync::{Mutex, MutexGuard},
+};
 
 use fal::Filesystem;
 use syscall::SchemeMut;
@@ -13,7 +20,11 @@ impl<Backend: fal::Filesystem<File>> RedoxFilesystem<Backend> {
             inner: Backend::mount(device).into(),
         }
     }
-    fn lookup_dir_raw(&mut self, mut components: Components<'_>, parent: Backend::InodeAddr) -> Backend::InodeAddr {
+    fn lookup_dir_raw(
+        &mut self,
+        mut components: Components<'_>,
+        parent: Backend::InodeAddr,
+    ) -> Backend::InodeAddr {
         match components.next() {
             Some(component) => match component {
                 Component::Normal(name) => {
@@ -22,7 +33,7 @@ impl<Backend: fal::Filesystem<File>> RedoxFilesystem<Backend> {
                 }
                 Component::RootDir => self.lookup_dir_raw(components, parent), // ignore Component::RootDir
                 _ => panic!("Unsupported component type: {:?}", component),
-            }
+            },
             None => parent,
         }
     }
@@ -44,18 +55,23 @@ fn syscall_result<T>(fal_result: fal::Result<T>) -> syscall::Result<T> {
 }
 
 impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
-
     fn open(&mut self, path: &[u8], flags: usize, uid: u32, gid: u32) -> syscall::Result<usize> {
         let path = Path::new(OsStr::from_bytes(path));
         let file_inode = self.lookup_dir(&path);
 
         if flags & syscall::flag::O_DIRECTORY == 0 {
-            self.inner().open_file(file_inode).map_err(|err| syscall_error(err)).map(|fd| fd as usize)
+            self.inner()
+                .open_file(file_inode)
+                .map_err(|err| syscall_error(err))
+                .map(|fd| fd as usize)
         } else {
-            self.inner().open_directory(file_inode).map_err(|err| syscall_error(err)).map(|fd| fd as usize)
+            self.inner()
+                .open_directory(file_inode)
+                .map_err(|err| syscall_error(err))
+                .map(|fd| fd as usize)
         }
     }
-    
+
     fn read(&mut self, fh: usize, buf: &mut [u8]) -> syscall::Result<usize> {
         let inode = self.inner.fh_inode(fh as u64).clone();
 
@@ -81,7 +97,8 @@ impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
             }
 
             buf[..len].copy_from_slice(&contents.as_bytes()[offset..offset + len]);
-            self.inner().set_fh_offset(fh as u64, offset as u64 + len as u64);
+            self.inner()
+                .set_fh_offset(fh as u64, offset as u64 + len as u64);
 
             Ok(len)
         } else {
@@ -91,7 +108,7 @@ impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
 
             let buf_end = std::cmp::min(buf.len(), file_size as usize);
             let buf = &mut buf[..buf_end];
-            
+
             syscall_result(self.inner().read(fh as u64, offset, buf))
         }
     }
@@ -99,11 +116,26 @@ impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
     fn close(&mut self, fh: usize) -> syscall::Result<usize> {
         syscall_result(self.inner.close(fh as u64).map(|_| 0))
     }
-    fn chmod(&mut self, path: &[u8], mode: u16, uid: u32, gid: u32) -> syscall::Result<usize> { dbg!(OsStr::from_bytes(path), mode, uid, gid); dbg!(Ok(0)) }
-    fn rmdir(&mut self, path: &[u8], uid: u32, gid: u32) -> syscall::Result<usize> { dbg!(OsStr::from_bytes(path), uid, gid); dbg!(Ok(0)) }
-    fn unlink(&mut self, path: &[u8], uid: u32, gid: u32) -> syscall::Result<usize> { dbg!(OsStr::from_bytes(path), uid, gid); dbg!(Ok(0)) }
-    fn dup(&mut self, old_id: usize, buf: &[u8]) -> syscall::Result<usize> { dbg!(old_id, buf.len()); dbg!(Ok(0)) }
-    fn write(&mut self, id: usize, buf: &[u8]) -> syscall::Result<usize> { dbg!(id, buf.len()); dbg!(Ok(0)) }
+    fn chmod(&mut self, path: &[u8], mode: u16, uid: u32, gid: u32) -> syscall::Result<usize> {
+        dbg!(OsStr::from_bytes(path), mode, uid, gid);
+        dbg!(Ok(0))
+    }
+    fn rmdir(&mut self, path: &[u8], uid: u32, gid: u32) -> syscall::Result<usize> {
+        dbg!(OsStr::from_bytes(path), uid, gid);
+        dbg!(Ok(0))
+    }
+    fn unlink(&mut self, path: &[u8], uid: u32, gid: u32) -> syscall::Result<usize> {
+        dbg!(OsStr::from_bytes(path), uid, gid);
+        dbg!(Ok(0))
+    }
+    fn dup(&mut self, old_id: usize, buf: &[u8]) -> syscall::Result<usize> {
+        dbg!(old_id, buf.len());
+        dbg!(Ok(0))
+    }
+    fn write(&mut self, id: usize, buf: &[u8]) -> syscall::Result<usize> {
+        dbg!(id, buf.len());
+        dbg!(Ok(0))
+    }
 
     fn seek(&mut self, fh: usize, pos: usize, whence: usize) -> syscall::Result<usize> {
         let mut offset = self.inner().fh_offset(fh as u64);
@@ -117,14 +149,38 @@ impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
         Ok(offset as usize)
     }
 
-    fn fchmod(&mut self, id: usize, mode: u16) -> syscall::Result<usize> { dbg!(id, mode); dbg!(Ok(0)) }
-    fn fchown(&mut self, id: usize, uid: u32, gid: u32) -> syscall::Result<usize> { dbg!(id, uid, gid); dbg!(Ok(0)) }
-    fn fcntl(&mut self, id: usize, cmd: usize, arg: usize) -> syscall::Result<usize> { dbg!(id, cmd, arg); dbg!(Ok(0)) }
-    fn fevent(&mut self, id: usize, flags: usize) -> syscall::Result<usize> { dbg!(id, flags); dbg!(Ok(0)) }
-    fn fmap(&mut self, id: usize, map: &syscall::Map) -> syscall::Result<usize> { dbg!(id, map); dbg!(Ok(0)) }
-    fn funmap(&mut self, address: usize) -> syscall::Result<usize> { dbg!(address); dbg!(Ok(0)) }
-    fn fpath(&mut self, id: usize, buf: &mut [u8]) -> syscall::Result<usize> { dbg!(id, buf.len()); dbg!(Ok(0)) }
-    fn frename(&mut self, id: usize, path: &[u8], uid: u32, gid: u32) -> syscall::Result<usize> { dbg!(id, OsStr::from_bytes(path), uid, gid); dbg!(Ok(0)) }
+    fn fchmod(&mut self, id: usize, mode: u16) -> syscall::Result<usize> {
+        dbg!(id, mode);
+        dbg!(Ok(0))
+    }
+    fn fchown(&mut self, id: usize, uid: u32, gid: u32) -> syscall::Result<usize> {
+        dbg!(id, uid, gid);
+        dbg!(Ok(0))
+    }
+    fn fcntl(&mut self, id: usize, cmd: usize, arg: usize) -> syscall::Result<usize> {
+        dbg!(id, cmd, arg);
+        dbg!(Ok(0))
+    }
+    fn fevent(&mut self, id: usize, flags: usize) -> syscall::Result<usize> {
+        dbg!(id, flags);
+        dbg!(Ok(0))
+    }
+    fn fmap(&mut self, id: usize, map: &syscall::Map) -> syscall::Result<usize> {
+        dbg!(id, map);
+        dbg!(Ok(0))
+    }
+    fn funmap(&mut self, address: usize) -> syscall::Result<usize> {
+        dbg!(address);
+        dbg!(Ok(0))
+    }
+    fn fpath(&mut self, id: usize, buf: &mut [u8]) -> syscall::Result<usize> {
+        dbg!(id, buf.len());
+        dbg!(Ok(0))
+    }
+    fn frename(&mut self, id: usize, path: &[u8], uid: u32, gid: u32) -> syscall::Result<usize> {
+        dbg!(id, OsStr::from_bytes(path), uid, gid);
+        dbg!(Ok(0))
+    }
 
     fn fstat(&mut self, id: usize, stat: &mut syscall::Stat) -> syscall::Result<usize> {
         let inode = self.inner().fh_inode(id as u64).clone();
@@ -145,7 +201,8 @@ impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
                 fal::FileType::Symlink => syscall::MODE_SYMLINK,
                 fal::FileType::NamedPipe | fal::FileType::Socket => syscall::MODE_FIFO, // TODO: right?
                 fal::FileType::CharacterDevice | fal::FileType::BlockDevice => syscall::MODE_CHR, // TODO: right?
-            } & syscall::MODE_TYPE) | (attrs.permissions & syscall::MODE_PERM), // TODO: setuid/setgid
+            } & syscall::MODE_TYPE)
+                | (attrs.permissions & syscall::MODE_PERM), // TODO: setuid/setgid
             st_mtime: attrs.modification_time.sec as u64,
             st_mtime_nsec: attrs.modification_time.nsec as u32,
             st_nlink: attrs.hardlink_count.try_into().unwrap(),
@@ -170,7 +227,16 @@ impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
         Ok(0)
     }
 
-    fn fsync(&mut self, id: usize) -> syscall::Result<usize> { dbg!(id); dbg!(Ok(0)) }
-    fn ftruncate(&mut self, id: usize, len: usize) -> syscall::Result<usize> { dbg!(id, len); dbg!(Ok(0)) }
-    fn futimens(&mut self, id: usize, times: &[syscall::TimeSpec]) -> syscall::Result<usize> { dbg!(id, times); dbg!(Ok(0)) }
+    fn fsync(&mut self, id: usize) -> syscall::Result<usize> {
+        dbg!(id);
+        dbg!(Ok(0))
+    }
+    fn ftruncate(&mut self, id: usize, len: usize) -> syscall::Result<usize> {
+        dbg!(id, len);
+        dbg!(Ok(0))
+    }
+    fn futimens(&mut self, id: usize, times: &[syscall::TimeSpec]) -> syscall::Result<usize> {
+        dbg!(id, times);
+        dbg!(Ok(0))
+    }
 }

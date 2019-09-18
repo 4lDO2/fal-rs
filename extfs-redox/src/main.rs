@@ -1,4 +1,8 @@
-use std::{fs::{File, OpenOptions}, io::prelude::*, mem};
+use std::{
+    fs::{File, OpenOptions},
+    io::prelude::*,
+    mem,
+};
 
 use syscall::{data::Packet, SchemeMut};
 
@@ -10,7 +14,8 @@ fn main() {
     let file = OpenOptions::new()
         .read(true)
         .write(false)
-        .open(std::env::args().nth(1).unwrap()).unwrap();
+        .open(std::env::args().nth(1).unwrap())
+        .unwrap();
 
     let mut scheme = RedoxFilesystem::<fal_backend_ext2::Filesystem<File>>::init(file);
 

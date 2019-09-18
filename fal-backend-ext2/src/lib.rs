@@ -313,7 +313,8 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         let (offset, entry) = match inode
             .dir_entries(self)?
             .enumerate()
-            .find(|(_, entry)| &entry.name == name) {
+            .find(|(_, entry)| &entry.name == name)
+        {
             Some(inode) => inode,
             None => return Err(fal::Error::NoEntity),
         };

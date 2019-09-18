@@ -113,7 +113,7 @@ pub struct FsAttributes {
     pub total_blocks: u32,
     pub free_blocks: u32,
     pub available_blocks: u32,
-    
+
     pub inode_count: u64,
     pub free_inodes: u64,
 
@@ -186,7 +186,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// An abstract filesystem. Typically implemented by the backend.
 pub trait Filesystem<D: Device> {
     /// An inode address. u32 on ext2.
-    type InodeAddr: From<u32> + Into<u64> + Copy + TryFrom<u64> + Eq + std::fmt::Debug; 
+    type InodeAddr: From<u32> + Into<u64> + Copy + TryFrom<u64> + Eq + std::fmt::Debug;
 
     /// An inode structure, capable of retrieving inode information.
     type InodeStruct: Inode;
@@ -235,10 +235,7 @@ pub trait Filesystem<D: Device> {
     }
 
     /// Get the attributes of an inode.
-    fn inode_attrs(
-        &self,
-        inode: &Self::InodeStruct,
-    ) -> Attributes<Self::InodeAddr>;
+    fn inode_attrs(&self, inode: &Self::InodeStruct) -> Attributes<Self::InodeAddr>;
 
     /// Read a symlink.
     fn readlink(&mut self, inode: Self::InodeAddr) -> Result<Box<[u8]>>;

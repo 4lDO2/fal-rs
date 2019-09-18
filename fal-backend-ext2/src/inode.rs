@@ -206,7 +206,11 @@ impl Inode {
 
         Self::serialize(this, &filesystem.superblock, inode_bytes);
 
-        Ok(write_block(filesystem, containing_block_index, &containing_block)?)
+        Ok(write_block(
+            filesystem,
+            containing_block_index,
+            &containing_block,
+        )?)
     }
     pub fn parse(addr: u32, bytes: &[u8]) -> Self {
         let (ty, permissions) = InodeType::from_type_and_perm(read_u16(bytes, 0));

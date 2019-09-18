@@ -189,10 +189,7 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
 
         reply.entry(
             &validity_timeout,
-            &fuse_attr(
-                self.inner
-                    .inode_attrs(&inode_struct),
-            ),
+            &fuse_attr(self.inner.inode_attrs(&inode_struct)),
             inode_struct.generation_number().unwrap_or(0),
         ); // TODO: generation_number?
     }
@@ -302,7 +299,6 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
             }
         };
 
-
         let inode_struct = self.inner.fh_inode(fh);
 
         assert_eq!(inode, self.inner.inode_attrs(inode_struct).inode);
@@ -350,7 +346,16 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
     }
     fn statfs(&mut self, _req: &Request, _inode: u64, reply: ReplyStatfs) {
         let stat: fal::FsAttributes = self.inner.filesystem_attrs();
-        reply.statfs(stat.total_blocks.into(), stat.free_blocks.into(), stat.available_blocks.into(), stat.inode_count, stat.free_inodes, stat.block_size, stat.max_fname_len, stat.block_size);
+        reply.statfs(
+            stat.total_blocks.into(),
+            stat.free_blocks.into(),
+            stat.available_blocks.into(),
+            stat.inode_count,
+            stat.free_inodes,
+            stat.block_size,
+            stat.max_fname_len,
+            stat.block_size,
+        );
     }
     fn unlink(&mut self, _req: &Request, fuse_parent: u64, name: &OsStr, reply: ReplyEmpty) {
         let parent = match fuse_inode_to_fs_inode(fuse_parent) {
