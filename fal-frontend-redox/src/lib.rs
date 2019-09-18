@@ -87,6 +87,10 @@ impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
             let len = std::cmp::min(buf.len(), contents.len() - offset);
             dbg!(len);
 
+            if offset >= contents.len() {
+                return Ok(0);
+            }
+
             buf[..len].copy_from_slice(&contents.as_bytes()[offset..offset + len]);
             self.inner().set_fh_offset(fh as u64, offset as u64 + len as u64);
 
