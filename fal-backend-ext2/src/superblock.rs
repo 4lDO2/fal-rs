@@ -1,4 +1,4 @@
-use crate::{div_round_up, read_u16, read_u32, read_u8, write_u16, write_u32, read_uuid, Uuid};
+use crate::{div_round_up, read_u16, read_u32, read_u8, write_u8, write_u16, write_u32, write_uuid, read_uuid, Uuid};
 
 use std::{
     ffi::CString,
@@ -87,31 +87,31 @@ impl OptionalFeatureFlags {
             dir_hash_index: raw & Self::DIR_HASH_INDEX_BIT != 0,
         }
     }
-    pub fn _into_raw(self) -> u32 {
+    pub fn into_raw(this: Self) -> u32 {
         let mut raw = 0;
-        if self.preallocate_dir_blocks {
+        if this.preallocate_dir_blocks {
             raw |= Self::PREALLOCATE_DIR_BLOCKS_BIT;
         }
-        if self.afs_server_inodes {
+        if this.afs_server_inodes {
             raw |= Self::AFS_SERVER_INODES_BIT;
         }
-        if self.has_journal {
+        if this.has_journal {
             raw |= Self::HAS_JOURNAL_BIT;
         }
-        if self.inode_extended_attributes {
+        if this.inode_extended_attributes {
             raw |= Self::INODE_EXTENDED_ATTRIBUTES_BIT;
         }
-        if self.growable {
+        if this.growable {
             raw |= Self::GROWABLE_BIT;
         }
-        if self.dir_hash_index {
+        if this.dir_hash_index {
             raw |= Self::DIR_HASH_INDEX_BIT
         }
         raw
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct RequiredFeatureFlags {
     pub compression: bool,
     pub dir_type: bool,
@@ -133,25 +133,25 @@ impl RequiredFeatureFlags {
             journal_device: raw & Self::JOURNAL_DEVICE_BIT != 0,
         }
     }
-    pub fn _into_raw(self) -> u32 {
+    pub fn into_raw(this: Self) -> u32 {
         let mut raw = 0;
-        if self.compression {
+        if this.compression {
             raw |= Self::COMPRESSION_BIT;
         }
-        if self.dir_type {
+        if this.dir_type {
             raw |= Self::DIR_TYPE_BIT;
         }
-        if self.replay_journal_mandatory {
+        if this.replay_journal_mandatory {
             raw |= Self::REPLAY_JOURNAL_MANDATORY_BIT;
         }
-        if self.journal_device {
+        if this.journal_device {
             raw |= Self::JOURNAL_DEVICE_BIT
         }
         raw
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct RoFeatureFlags {
     pub sparse_super: bool,
     pub extended_file_size: bool,
@@ -170,15 +170,15 @@ impl RoFeatureFlags {
             bst_dir_contents: raw & Self::BST_DIR_CONTENTS_BIT != 0,
         }
     }
-    pub fn _into_raw(self) -> u32 {
+    pub fn into_raw(this: Self) -> u32 {
         let mut raw = 0;
-        if self.sparse_super {
+        if this.sparse_super {
             raw |= Self::SPARSE_SUPER_BIT;
         }
-        if self.extended_file_size {
+        if this.extended_file_size {
             raw |= Self::EXTENDED_FILE_SIZE_BIT;
         }
-        if self.bst_dir_contents {
+        if this.bst_dir_contents {
             raw |= Self::BST_DIR_CONTENTS_BIT
         }
         raw
@@ -199,13 +199,16 @@ fn log2_round_up<T: From<u8> + AddAssign + ShrAssign + Eq>(mut t: T) -> T {
 }
 
 impl Superblock {
-    /// Parse the super block.
-    pub fn parse<R: Read + Seek>(mut device: R) -> io::Result<Self> {
+    /// Load and parse the super block.
+    pub fn load<R: Read + Seek>(mut device: R) -> io::Result<Self> {
         device.seek(SeekFrom::Start(SUPERBLOCK_OFFSET)).unwrap();
 
         let mut block_bytes = [0u8; 1024];
         device.read_exact(&mut block_bytes)?;
 
+        Ok(Self::parse(&block_bytes))
+    }
+    pub fn parse(block_bytes: &[u8]) -> Self {
         let inode_count = read_u32(&block_bytes, 0);
         let block_count = read_u32(&block_bytes, 4);
         let reserved_block_count = read_u32(&block_bytes, 8);
@@ -306,7 +309,7 @@ impl Superblock {
             None
         };
 
-        Ok(Superblock {
+        Superblock {
             inode_count,
             block_count,
             reserved_block_count,
@@ -332,7 +335,7 @@ impl Superblock {
             reserver_uid,
             reserver_gid,
             extended,
-        })
+        }
     }
     /// Serialize the basic part of the superblock. The buffer must fit exactly one block.
     pub fn serialize_basic(&self, buffer: &mut [u8]) {
@@ -365,7 +368,64 @@ impl Superblock {
 
     /// Serialize the extended part of the superblock. The same buffer used for serialize_basic
     /// should be used here, as this functions writes to buffer[84..].
-    pub fn serialize_extended(&self, buffer: &mut [u8]) {}
+    pub fn serialize_extended(&self, buffer: &mut [u8]) {
+        let extended: &SuperblockExtension = self.extended.as_ref().unwrap();
+
+        write_u32(buffer, 84, extended.first_nonreserved_inode);
+        write_u16(buffer, 88, extended.inode_struct_size);
+        write_u16(buffer, 90, extended.superblock_block_group);
+        write_u32(buffer, 92, OptionalFeatureFlags::into_raw(extended.opt_features_present));
+        write_u32(buffer, 96, RequiredFeatureFlags::into_raw(extended.req_features_present));
+
+        write_u32(buffer, 100, RoFeatureFlags::into_raw(extended.req_features_for_rw));
+        write_uuid(buffer, 104, &extended.fs_id);
+
+        {
+            if let Some(vol_name) = extended.vol_name.as_ref() {
+                let vol_name_bytes = vol_name.as_bytes();
+                assert_eq!(vol_name_bytes[15], 0);
+                buffer[120..136].copy_from_slice(&vol_name_bytes);
+            } else {
+                buffer[120] = 0;
+            }
+        }
+
+        {
+            if let Some(last_mount_path) = extended.last_mount_path.as_ref() {
+                let path_bytes = last_mount_path.as_bytes();
+                assert_eq!(path_bytes[63], 0);
+                buffer[136..200].copy_from_slice(&path_bytes);
+            } else {
+                buffer[136] = 0;
+            }
+        }
+
+        write_u32(buffer, 200, extended.compression_algorithms);
+        write_u8(buffer, 204, extended.file_prealloc_block_count);
+        write_u8(buffer, 205, extended.dir_prealloc_block_count);
+
+        write_uuid(buffer, 208, &extended.journal_id);
+        write_u32(buffer, 224, extended.journal_inode);
+        write_u32(buffer, 228, extended.journal_device);
+        write_u32(buffer, 232, extended.orphan_inode_head_list);
+    }
+
+    fn serialize(&self, buffer: &mut [u8]) {
+        self.serialize_basic(buffer);
+        if self.major_version > 1 {
+            self.serialize_extended(buffer);
+        }
+    }
+
+    pub fn store<D: fal::DeviceMut>(&self, device: D) -> io::Result<()> {
+        device.seek(SeekFrom::Start(SUPERBLOCK_OFFSET)).unwrap();
+
+        let mut block_bytes = [0u8; 1024];
+        self.serialize(&mut block_bytes);
+        device.write_all(&block_bytes)?;
+
+        Ok(())
+    }
 
     pub fn block_group_count(&self) -> u32 {
         let from_block_count = div_round_up(self.block_count, self.blocks_per_group);
