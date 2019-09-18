@@ -90,7 +90,13 @@ impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
 
             Ok(len)
         } else {
+            let inode = self.inner().fh_inode(fh as u64).clone();
+            let file_size = self.inner().inode_attrs(&inode).size;
             let offset = self.inner().fh_offset(fh as u64);
+
+            let buf_end = std::cmp::min(buf.len(), file_size as usize);
+            let buf = &mut buf[..buf_end];
+            
             dbg!(offset);
             dbg!(syscall_result(self.inner().read(fh as u64, offset, buf)))
         }
