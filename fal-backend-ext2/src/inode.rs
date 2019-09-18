@@ -45,7 +45,6 @@ pub struct Inode {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum InodeType {
-    Unknown,
     Fifo,
     CharDev,
     Dir,
@@ -61,7 +60,6 @@ impl InodeType {
     pub fn from_type_and_perm(raw: u16) -> (Option<Self>, u16) {
         (
             match raw & Self::TYPE_MASK {
-                0x0000 => Some(InodeType::Unknown),
                 0x1000 => Some(InodeType::Fifo),
                 0x2000 => Some(InodeType::CharDev),
                 0x4000 => Some(InodeType::Dir),
@@ -78,7 +76,6 @@ impl InodeType {
         assert_eq!(perm & Self::PERM_MASK, perm);
 
         (match this {
-            InodeType::Unknown => 0x0000,
             InodeType::Fifo => 0x1000,
             InodeType::CharDev => 0x2000,
             InodeType::Dir => 0x4000,
@@ -90,7 +87,6 @@ impl InodeType {
     }
     pub fn from_direntry_ty_indicator(indicator: u8) -> Option<Self> {
         match indicator {
-            0 => Some(InodeType::Unknown),
             1 => Some(InodeType::File),
             2 => Some(InodeType::Dir),
             3 => Some(InodeType::CharDev),
@@ -103,7 +99,6 @@ impl InodeType {
     }
     pub fn to_direntry_ty_indicator(this: Self) -> u8 {
         match this {
-            InodeType::Unknown => 0,
             InodeType::File => 1,
             InodeType::Dir => 2,
             InodeType::CharDev => 3,
@@ -125,7 +120,6 @@ impl From<InodeType> for fal::FileType {
             InodeType::UnixSock => Self::Socket,
             InodeType::CharDev => Self::CharacterDevice,
             InodeType::Fifo => Self::NamedPipe,
-            InodeType::Unknown => panic!(),
         }
     }
 }
@@ -650,7 +644,7 @@ impl Inode {
 
         entry.total_entry_size = 0;
         entry.inode = 0;
-        entry.type_indicator = Some(InodeType::Unknown);
+        entry.type_indicator = Some(InodeType::File);
         entry.name = OsString::new();
 
         let mut bytes = [0u8; 8];
