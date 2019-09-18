@@ -88,6 +88,7 @@ impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
             dbg!(len);
 
             buf[..len].copy_from_slice(&contents.as_bytes()[offset..offset + len]);
+            self.inner().set_fh_offset(fh as u64, offset as u64 + len as u64);
 
             dbg!(&contents);
             dbg!(OsStr::from_bytes(&buf[..len]));

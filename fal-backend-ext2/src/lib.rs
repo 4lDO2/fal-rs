@@ -307,7 +307,12 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
 
         Ok(location.unwrap().into_boxed_slice())
     }
+    #[inline]
     fn fh_offset(&self, fh: u64) -> u64 {
         self.fhs[&fh].offset
+    }
+    #[inline]
+    fn set_fh_offset(&mut self, fh: u64, offset: u64) {
+        self.fhs.get_mut(&fh).unwrap().offset = offset;
     }
 }

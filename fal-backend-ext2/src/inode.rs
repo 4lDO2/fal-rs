@@ -428,7 +428,6 @@ impl Inode {
                 filesystem,
                 &mut block_bytes,
             )?;
-            dbg!();
 
             let off_from_rel_block_usize = usize::try_from(off_from_rel_block).unwrap();
             let end = std::cmp::min(
@@ -451,7 +450,6 @@ impl Inode {
                     )
                     .map(|b| b + bytes_read);
             } else {
-                dbg!();
                 return Ok(bytes_read);
             }
         }

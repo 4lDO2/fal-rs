@@ -232,4 +232,7 @@ pub trait Filesystem<D: Device> {
 
     /// Retrieve the current offset of a file handle.
     fn fh_offset(&self, fh: u64) -> u64;
+
+    /// Set the current offset of a file handle.
+    fn set_fh_offset(&mut self, fh: u64, offset: u64);
 }
