@@ -1,8 +1,9 @@
-use crate::{div_round_up, read_u16, read_u32, read_u8, read_uuid, Uuid};
+use crate::{div_round_up, read_u16, read_u32, read_u8, write_u16, write_u32, read_uuid, Uuid};
 
 use std::{
     ffi::CString,
     io::{self, prelude::*, SeekFrom},
+    ops::{AddAssign, ShrAssign},
 };
 
 pub const SUPERBLOCK_OFFSET: u64 = 1024;
@@ -184,7 +185,19 @@ impl RoFeatureFlags {
     }
 }
 
+fn log2_round_up<T: From<u8> + AddAssign + ShrAssign + Eq>(mut t: T) -> T {
+    let mut count = 0.into();
+
+    while t != 1.into() {
+        t >>= 1.into();
+        count += 1.into();
+    }
+
+    count
+}
+
 impl Superblock {
+    /// Parse the super block.
     pub fn parse<R: Read + Seek>(mut device: R) -> io::Result<Self> {
         device.seek(SeekFrom::Start(SUPERBLOCK_OFFSET)).unwrap();
 
@@ -319,8 +332,39 @@ impl Superblock {
             extended,
         })
     }
-    pub fn serialize_basic(&self, buffer: &mut [u8]) {}
+    /// Serialize the basic part of the superblock. The buffer must fit exactly one block.
+    pub fn serialize_basic(&self, buffer: &mut [u8]) {
+        write_u32(buffer, 0, self.inode_count);
+        write_u32(buffer, 4, self.block_count);
+        write_u32(buffer, 8, self.reserved_block_count);
+        write_u32(buffer, 12, self.unalloc_block_count);
+        write_u32(buffer, 16, self.unalloc_inode_count);
+        write_u32(buffer, 20, self.superblock_block_num);
+        write_u32(buffer, 24, log2_round_up(self.block_size as u32) - log2_round_up(1024));
+        write_u32(buffer, 28, log2_round_up(self.fragment_size as u32) - log2_round_up(1024));
+        write_u32(buffer, 32, self.blocks_per_group);
+        write_u32(buffer, 36, self.fragments_per_group);
+        write_u32(buffer, 40, self.inodes_per_group);
+        write_u32(buffer, 44, self.last_mount_time);
+        write_u32(buffer, 48, self.last_write_time);
+        write_u16(buffer, 52, self.mounts_since_fsck);
+        write_u16(buffer, 54, self.mounts_left_before_fsck);
+        write_u16(buffer, 56, SIGNATURE);
+        write_u16(buffer, 58, FilesystemState::serialize(self.fs_state));
+        write_u16(buffer, 60, ErrorHandlingMethod::serialize(self.error_handling));
+        write_u16(buffer, 62, self.minor_version);
+        write_u32(buffer, 64, self.last_fsck_time);
+        write_u32(buffer, 68, self.interval_between_forced_fscks);
+        write_u32(buffer, 72, OsId::serialize(self.os_id));
+        write_u32(buffer, 76, self.major_version);
+        write_u16(buffer, 80, self.reserver_uid);
+        write_u16(buffer, 82, self.reserver_gid);
+    }
+
+    /// Serialize the extended part of the superblock. The same buffer used for serialize_basic
+    /// should be used here, as this functions writes to buffer[84..].
     pub fn serialize_extended(&self, buffer: &mut [u8]) {}
+
     pub fn block_group_count(&self) -> u32 {
         let from_block_count = div_round_up(self.block_count, self.blocks_per_group);
         let from_inode_count = div_round_up(self.inode_count, self.inodes_per_group);
@@ -334,7 +378,7 @@ impl Superblock {
             .unwrap_or(128)
     }
 }
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum FilesystemState {
     Clean = 1,
     HasErrors = 2,
@@ -347,8 +391,14 @@ impl FilesystemState {
             _ => None,
         }
     }
+    pub fn serialize(this: Self) -> u16 {
+        match this {
+            Self::Clean => 1,
+            Self::HasErrors => 2,
+        }
+    }
 }
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum ErrorHandlingMethod {
     IgnoreError = 1,
     RemountAsRo = 2,
@@ -363,9 +413,16 @@ impl ErrorHandlingMethod {
             _ => None,
         }
     }
+    pub fn serialize(this: Self) -> u16 {
+        match this {
+            Self::IgnoreError => 1,
+            Self::RemountAsRo => 2,
+            Self::KernelPanic => 3,
+        }
+    }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum OsId {
     Linux = 0,
     Hurd = 1,
@@ -383,5 +440,24 @@ impl OsId {
             4 => Some(OsId::OtherBsds),
             _ => None,
         }
+    }
+    pub fn serialize(this: Self) -> u32 {
+        match this {
+            Self::Linux => 0,
+            Self::Hurd => 1,
+            Self::Masix => 2,
+            Self::FreeBsd => 3,
+            Self::OtherBsds => 4,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn log2_round_up() {
+        assert_eq!(super::log2_round_up(1024), 10);
+        assert_eq!(super::log2_round_up(1), 1);
+        assert_eq!(super::log2_round_up(65536), 16);
     }
 }
