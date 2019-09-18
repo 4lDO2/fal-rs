@@ -72,10 +72,16 @@ impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
             // UNOPTIMIZED
             let mut contents = OsString::new();
 
-            let entry = self.inner().read_directory(fh as u64, 0).unwrap().unwrap();
-            contents.push(&entry.name);
+            let mut offset = 0;
+
+            while let Some(entry) = self.inner().read_directory(fh as u64, offset).unwrap() {
+                contents.push(&entry.name);
+                contents.push("\n");
+                offset += 1;
+            }
 
             let offset = self.inner().fh_offset(fh as u64) as usize;
+            dbg!(offset);
             let len = std::cmp::min(buf.len(), contents.len() - offset);
             dbg!(len);
 
