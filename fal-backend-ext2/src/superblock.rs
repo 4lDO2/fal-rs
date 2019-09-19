@@ -19,7 +19,7 @@ pub struct Superblock {
     pub unalloc_block_count: u32,
     pub unalloc_inode_count: u32,
     pub superblock_block_num: u32,
-    pub block_size: u64,
+    pub block_size: u32,
     pub fragment_size: u64,
     pub blocks_per_group: u32,
     pub fragments_per_group: u32,

@@ -37,7 +37,7 @@ fn read_block_to_raw<D: fal::Device>(
     buffer: &mut [u8],
 ) -> io::Result<()> {
     filesystem.device.lock().unwrap().seek(SeekFrom::Start(
-        block_address as u64 * filesystem.superblock.block_size,
+        block_address as u64 * u64::from(filesystem.superblock.block_size),
     ))?;
     filesystem.device.lock().unwrap().read_exact(buffer)?;
     Ok(())
@@ -56,7 +56,7 @@ fn write_block_raw<D: fal::DeviceMut>(
     buffer: &[u8],
 ) -> io::Result<()> {
     filesystem.device.lock().unwrap().seek(SeekFrom::Start(
-        block_address as u64 * filesystem.superblock.block_size,
+        block_address as u64 * u64::from(filesystem.superblock.block_size),
     ))?;
     filesystem.device.lock().unwrap().write_all(buffer)?;
     Ok(())
@@ -151,7 +151,7 @@ impl<D: fal::Device> Filesystem<D> {
     }
 }
 
-fn inode_attrs(inode: &Inode, superblock: &Superblock) -> fal::Attributes<u32> {
+fn inode_attrs(inode: &Inode) -> fal::Attributes<u32> {
     fal::Attributes {
         access_time: Timespec {
             sec: inode.last_access_time.into(),
@@ -170,14 +170,14 @@ fn inode_attrs(inode: &Inode, superblock: &Superblock) -> fal::Attributes<u32> {
             nsec: 0,
         },
         filetype: inode.ty.into(),
-        block_count: div_round_up(inode.size(&superblock), superblock.block_size),
+        block_count: inode.size_in_blocks(),
         flags: inode.flags,
         group_id: inode.gid.into(),
         hardlink_count: inode.hard_link_count.into(),
         inode: inode.addr,
         permissions: inode.permissions,
         rdev: 0,
-        size: inode.size(&superblock),
+        size: inode.size,
         user_id: inode.uid.into(),
     }
 }
@@ -259,7 +259,7 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
     fn getattrs(&mut self, inode_addr: u32) -> fal::Result<fal::Attributes<u32>> {
         let inode = self.load_inode(inode_addr)?;
 
-        Ok(inode_attrs(&inode, &self.superblock))
+        Ok(inode_attrs(&inode))
     }
     fn open_directory(&mut self, inode: u32) -> fal::Result<u64> {
         self.open(inode, Open::Directory)
@@ -327,7 +327,7 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         })
     }
     fn inode_attrs(&self, inode: &Inode) -> fal::Attributes<u32> {
-        inode_attrs(inode, &self.superblock)
+        inode_attrs(inode)
     }
     fn fh_inode(&self, fh: u64) -> &'_ Inode {
         &self.fhs[&fh].inode
