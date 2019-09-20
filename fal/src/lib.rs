@@ -129,7 +129,14 @@ pub struct DirectoryEntry<InodeAddr: Into<u64>> {
 }
 
 pub trait FileHandle {
-    fn fd(&self) -> u64;
+    type InodeStruct: Inode;
+
+    fn fh(&self) -> u64;
+
+    fn offset(&self) -> u64;
+    fn set_offset(&mut self, offset: u64);
+
+    fn inode(&self) -> &Self::InodeStruct;
 }
 
 #[derive(Debug)]
@@ -195,6 +202,8 @@ pub trait Filesystem<D: Device> {
     /// An inode structure, capable of retrieving inode information.
     type InodeStruct: Inode;
 
+    type FileHandle: FileHandle;
+
     /// The root inode address (for example 2 on ext2/3/4).
     fn root_inode(&self) -> Self::InodeAddr;
 
@@ -235,14 +244,11 @@ pub trait Filesystem<D: Device> {
     /// Read a symlink.
     fn readlink(&mut self, inode: Self::InodeAddr) -> Result<Box<[u8]>>;
 
-    /// Retrieve the inode struct stored internally by the filesystem backend.
-    fn fh_inode(&self, fh: u64) -> &'_ Self::InodeStruct;
+    /// Retrieve a reference to data about an open file handle.
+    fn fh(&self, fh: u64) -> &Self::FileHandle;
 
-    /// Retrieve the current offset of a file handle.
-    fn fh_offset(&self, fh: u64) -> u64;
-
-    /// Set the current offset of a file handle.
-    fn set_fh_offset(&mut self, fh: u64, offset: u64);
+    /// Retrieve a mutable reference to file handle data.
+    fn fh_mut(&mut self, fh: u64) -> &mut Self::FileHandle;
 
     /// Get the statvfs of the filesystem.
     fn filesystem_attrs(&self) -> FsAttributes;

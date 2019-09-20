@@ -7,7 +7,7 @@ use std::{
     sync::{Mutex, MutexGuard},
 };
 
-use fal::{Filesystem, Inode};
+use fal::{FileHandle, Filesystem, Inode};
 use syscall::SchemeMut;
 
 #[derive(Debug)]
@@ -87,7 +87,7 @@ impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
     }
 
     fn read(&mut self, fh: usize, buf: &mut [u8]) -> syscall::Result<usize> {
-        let inode = self.inner.fh_inode(fh as u64).clone();
+        let inode = self.inner.fh(fh as u64).inode().clone();
 
         if inode.attrs().filetype == fal::FileType::Directory {
             // UNOPTIMIZED
@@ -103,7 +103,7 @@ impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
                 offset += 1;
             }
 
-            let offset = self.inner().fh_offset(fh as u64) as usize;
+            let offset = self.inner().fh(fh as u64).offset() as usize;
             let len = std::cmp::min(buf.len(), contents.len() - offset);
 
             if offset >= contents.len() {
@@ -112,13 +112,13 @@ impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
 
             buf[..len].copy_from_slice(&contents.as_bytes()[offset..offset + len]);
             self.inner()
-                .set_fh_offset(fh as u64, offset as u64 + len as u64);
+                .fh_mut(fh as u64).set_offset(offset as u64 + len as u64);
 
             Ok(len)
         } else {
-            let inode = self.inner().fh_inode(fh as u64).clone();
+            let inode = self.inner().fh(fh as u64).inode().clone();
             let file_size = inode.attrs().size;
-            let offset = self.inner().fh_offset(fh as u64);
+            let offset = self.inner().fh(fh as u64).offset();
 
             let buf_end = std::cmp::min(buf.len(), file_size as usize);
             let buf = &mut buf[..buf_end];
@@ -152,7 +152,7 @@ impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
     }
 
     fn seek(&mut self, fh: usize, pos: usize, whence: usize) -> syscall::Result<usize> {
-        let mut offset = self.inner().fh_offset(fh as u64);
+        let mut offset = self.inner().fh(fh as u64).offset();
 
         match whence {
             syscall::flag::SEEK_SET => offset = pos as u64,
@@ -197,7 +197,7 @@ impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
     }
 
     fn fstat(&mut self, id: usize, stat: &mut syscall::Stat) -> syscall::Result<usize> {
-        let inode = self.inner().fh_inode(id as u64).clone();
+        let inode = self.inner().fh(id as u64).inode().clone();
         let attrs: fal::Attributes<_> = inode.attrs();
 
         *stat = syscall::Stat {

@@ -131,7 +131,6 @@ enum Open {
 impl<D: fal::Device> Filesystem<D> {
     fn open(&mut self, addr: u32, ty: Open) -> fal::Result<u64> {
         let fh = FileHandle {
-            inode_addr: addr,
             fh: self.last_fh,
             inode: self.load_inode(addr)?,
             offset: 0,
@@ -199,19 +198,37 @@ impl fal::Inode for Inode {
 pub struct FileHandle {
     fh: u64,
     offset: u64,
-    inode_addr: u32,
     inode: Inode,
 }
 
 impl fal::FileHandle for FileHandle {
-    fn fd(&self) -> u64 {
+    type InodeStruct = Inode;
+
+    #[inline]
+    fn fh(&self) -> u64 {
         self.fh
+    }
+
+    #[inline]
+    fn offset(&self) -> u64 {
+        self.offset
+    }
+
+    #[inline]
+    fn set_offset(&mut self, offset: u64) {
+        self.offset = offset;
+    }
+
+    #[inline]
+    fn inode(&self) -> &Inode {
+        &self.inode
     }
 }
 
 impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
     type InodeAddr = u32;
     type InodeStruct = Inode;
+    type FileHandle = FileHandle;
 
     #[inline]
     fn root_inode(&self) -> u32 {
@@ -321,9 +338,6 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
             offset: offset as u64,
         })
     }
-    fn fh_inode(&self, fh: u64) -> &'_ Inode {
-        &self.fhs[&fh].inode
-    }
     fn readlink(&mut self, inode: u32) -> fal::Result<Box<[u8]>> {
         let mut location = None;
         let mut error = None;
@@ -345,13 +359,13 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
 
         Ok(location.unwrap().into_boxed_slice())
     }
-    #[inline]
-    fn fh_offset(&self, fh: u64) -> u64 {
-        self.fhs[&fh].offset
+    
+    fn fh(&self, fh: u64) -> &FileHandle {
+        &self.fhs[&fh]
     }
-    #[inline]
-    fn set_fh_offset(&mut self, fh: u64, offset: u64) {
-        self.fhs.get_mut(&fh).unwrap().offset = offset;
+
+    fn fh_mut(&mut self, fh: u64) -> &mut FileHandle {
+        self.fhs.get_mut(&fh).unwrap()
     }
 
     fn filesystem_attrs(&self) -> fal::FsAttributes {
