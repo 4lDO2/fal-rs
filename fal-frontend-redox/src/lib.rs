@@ -72,6 +72,9 @@ impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
         if flags & syscall::flag::O_EXCL != 0 && !permissions.execute {
             return syscall_result(Err(fal::Error::AccessDenied));
         }
+        if flags & syscall::flag::O_WRONLY != 0 && !permissions.write {
+            return syscall_result(Err(fal::Error::AccessDenied));
+        }
 
         if flags & syscall::flag::O_DIRECTORY == 0 {
             self.inner()
@@ -119,10 +122,6 @@ impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
             let inode = self.inner().fh(fh as u64).inode().clone();
             let file_size = inode.attrs().size;
             let offset = self.inner().fh(fh as u64).offset();
-
-            if inode.attrs().filetype == fal::FileType::Directory {
-                return syscall_result(Err(fal::Error::IsDirectory));
-            }
 
             let buf_end = std::cmp::min(buf.len(), file_size as usize);
             let buf = &mut buf[..buf_end];

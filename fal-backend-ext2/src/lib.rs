@@ -136,9 +136,6 @@ impl<D: fal::Device> Filesystem<D> {
             offset: 0,
         };
 
-        if ty == Open::File && fh.inode.ty == inode::InodeType::Dir {
-            return Err(fal::Error::IsDirectory);
-        }
         if ty == Open::Directory && fh.inode.ty == inode::InodeType::File {
             return Err(fal::Error::NotDirectory);
         }
