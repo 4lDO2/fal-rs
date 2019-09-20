@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     convert::TryInto,
     ffi::{OsStr, OsString},
-    io::{self, prelude::*, SeekFrom},
+    io::{self, SeekFrom},
     ops::{Add, Div, Mul, Rem},
     os::unix::ffi::OsStrExt,
     sync::Mutex,
@@ -129,7 +129,7 @@ enum Open {
     Directory,
 }
 
-impl<D: fal::Device> Filesystem<D> {
+impl<D: fal::DeviceMut> Filesystem<D> {
     fn open(&mut self, addr: u32, ty: Open) -> fal::Result<u64> {
         let fh = FileHandle {
             fh: self.last_fh,
@@ -223,7 +223,7 @@ impl fal::FileHandle for FileHandle {
     }
 }
 
-impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
+impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
     type InodeAddr = u32;
     type InodeStruct = Inode;
     type FileHandle = FileHandle;
@@ -243,6 +243,8 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         if let Some(extended) = superblock.extended.as_mut() {
             extended.last_mount_path = Some(std::ffi::CString::new(path.as_bytes()).unwrap());
         }
+
+        superblock.store(&mut device).unwrap();
 
         Self {
             superblock,
@@ -390,6 +392,7 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
 
 impl<D: fal::DeviceMut> fal::FilesystemMut<D> for Filesystem<D> {
     fn unmount(self) {
+        dbg!("Storing filesystem superblock");
         self.superblock.store(&mut *self.device.lock().unwrap()).unwrap()
     }
 }

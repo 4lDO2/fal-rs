@@ -68,7 +68,7 @@ impl Options {
 }
 
 pub struct FuseFilesystem<Backend: fal::FilesystemMut<File>> {
-    inner: Backend,
+    inner: Option<Backend>,
     options: Options,
 }
 
@@ -108,9 +108,12 @@ fn fuse_attr<InodeAddr: Into<u64>>(attrs: fal::Attributes<InodeAddr>) -> fuse::F
 impl<Backend: fal::FilesystemMut<File>> FuseFilesystem<Backend> {
     pub fn init(device: File, path: &OsStr, options: Options) -> io::Result<Self> {
         Ok(Self {
-            inner: Backend::mount(device, path),
+            inner: Some(Backend::mount(device, path)),
             options,
         })
+    }
+    fn inner(&mut self) -> &mut Backend {
+        self.inner.as_mut().unwrap()
     }
 }
 
@@ -137,7 +140,9 @@ impl<Backend: fal::FilesystemMut<File>> fuse::Filesystem for FuseFilesystem<Back
     fn init(&mut self, _req: &Request) -> Result<(), libc::c_int> {
         Ok(())
     }
-    fn destroy(&mut self, _req: &Request) {}
+    fn destroy(&mut self, _req: &Request) {
+        fal::FilesystemMut::unmount(self.inner.take().unwrap())
+    }
 
     fn getattr(&mut self, _req: &Request, fuse_inode: u64, reply: ReplyAttr) {
         let inode = match fuse_inode_to_fs_inode(fuse_inode) {
@@ -148,7 +153,7 @@ impl<Backend: fal::FilesystemMut<File>> fuse::Filesystem for FuseFilesystem<Back
             }
         };
 
-        let file_attributes = match self.inner.load_inode(inode) {
+        let file_attributes = match self.inner().load_inode(inode) {
             Ok(inode_struct) => fuse_attr(inode_struct.attrs()),
             Err(err) => {
                 reply.error(err.errno());
@@ -169,7 +174,7 @@ impl<Backend: fal::FilesystemMut<File>> fuse::Filesystem for FuseFilesystem<Back
             }
         };
 
-        let entry = match self.inner.lookup_direntry(parent_inode, name) {
+        let entry = match self.inner().lookup_direntry(parent_inode, name) {
             Ok(entry) => entry,
             Err(err) => {
                 reply.error(err.errno());
@@ -177,7 +182,7 @@ impl<Backend: fal::FilesystemMut<File>> fuse::Filesystem for FuseFilesystem<Back
             }
         };
 
-        let inode_struct = match self.inner.load_inode(entry.inode.try_into().unwrap()) {
+        let inode_struct = match self.inner().load_inode(entry.inode.try_into().unwrap()) {
             Ok(inode_struct) => inode_struct,
             Err(err) => {
                 reply.error(err.errno());
@@ -201,7 +206,7 @@ impl<Backend: fal::FilesystemMut<File>> fuse::Filesystem for FuseFilesystem<Back
                 return;
             }
         };
-        let fh = match self.inner.open_directory(inode) {
+        let fh = match self.inner().open_directory(inode) {
             Ok(fh) => fh,
             Err(err) => {
                 reply.error(err.errno());
@@ -226,9 +231,9 @@ impl<Backend: fal::FilesystemMut<File>> fuse::Filesystem for FuseFilesystem<Back
             }
         };
 
-        assert_eq!(inode.into(), self.inner.fh(fh).inode().attrs().inode.into());
+        assert_eq!(inode.into(), self.inner().fh(fh).inode().attrs().inode.into());
 
-        match self.inner.read_directory(fh, offset) {
+        match self.inner().read_directory(fh, offset) {
             Ok(Some(entry)) => {
                 reply.add(
                     fuse_inode_from_fs_inode(entry.inode),
@@ -253,7 +258,7 @@ impl<Backend: fal::FilesystemMut<File>> fuse::Filesystem for FuseFilesystem<Back
         _flags: u32,
         reply: ReplyEmpty,
     ) {
-        match self.inner.close(fh) {
+        match self.inner().close(fh) {
             Ok(()) => reply.ok(),
             Err(err) => reply.error(err.errno()),
         }
@@ -267,7 +272,7 @@ impl<Backend: fal::FilesystemMut<File>> fuse::Filesystem for FuseFilesystem<Back
             }
         };
 
-        let inode_struct = self.inner.load_inode(inode).unwrap();
+        let inode_struct = self.inner().load_inode(inode).unwrap();
         let attrs = inode_struct.attrs();
         let permissions = fal::check_permissions(req.uid(), req.gid(), &attrs);
 
@@ -284,7 +289,7 @@ impl<Backend: fal::FilesystemMut<File>> fuse::Filesystem for FuseFilesystem<Back
             return
         }
 
-        let fh = match self.inner.open_file(inode) {
+        let fh = match self.inner().open_file(inode) {
             Ok(fh) => fh,
             Err(err) => {
                 reply.error(err.errno());
@@ -319,7 +324,7 @@ impl<Backend: fal::FilesystemMut<File>> fuse::Filesystem for FuseFilesystem<Back
             }
         };
 
-        let inode_struct = self.inner.fh(fh).inode();
+        let inode_struct = self.inner().fh(fh).inode();
 
         assert_eq!(inode.into(), inode_struct.attrs().inode.into());
 
@@ -330,7 +335,7 @@ impl<Backend: fal::FilesystemMut<File>> fuse::Filesystem for FuseFilesystem<Back
 
         let mut buffer = vec![0u8; bytes_to_read.try_into().unwrap()];
 
-        self.inner.read(fh, offset, &mut buffer).unwrap();
+        self.inner().read(fh, offset, &mut buffer).unwrap();
 
         reply.data(&buffer);
     }
@@ -344,7 +349,7 @@ impl<Backend: fal::FilesystemMut<File>> fuse::Filesystem for FuseFilesystem<Back
         _flush: bool,
         reply: ReplyEmpty,
     ) {
-        self.inner.close(fh).unwrap();
+        self.inner().close(fh).unwrap();
         reply.ok();
     }
     fn readlink(&mut self, _req: &Request, fuse_inode: u64, reply: ReplyData) {
@@ -355,7 +360,7 @@ impl<Backend: fal::FilesystemMut<File>> fuse::Filesystem for FuseFilesystem<Back
                 return;
             }
         };
-        let data = match self.inner.readlink(inode) {
+        let data = match self.inner().readlink(inode) {
             Ok(data) => data,
             Err(err) => {
                 reply.error(err.errno());
@@ -365,7 +370,7 @@ impl<Backend: fal::FilesystemMut<File>> fuse::Filesystem for FuseFilesystem<Back
         reply.data(&data);
     }
     fn statfs(&mut self, _req: &Request, _inode: u64, reply: ReplyStatfs) {
-        let stat: fal::FsAttributes = self.inner.filesystem_attrs();
+        let stat: fal::FsAttributes = self.inner().filesystem_attrs();
         reply.statfs(
             stat.total_blocks.into(),
             stat.free_blocks.into(),
@@ -385,7 +390,7 @@ impl<Backend: fal::FilesystemMut<File>> fuse::Filesystem for FuseFilesystem<Back
                 return;
             }
         };
-        let parent_struct = match self.inner.load_inode(parent) {
+        let parent_struct = match self.inner().load_inode(parent) {
             Ok(parent_struct) => parent_struct,
             Err(error) => {
                 eprintln!("Error when unlinking: loading parent struct: {}.", error);

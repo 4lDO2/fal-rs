@@ -2,7 +2,7 @@ use crate::{div_round_up, read_u16, read_u32, read_u8, write_u8, write_u16, writ
 
 use std::{
     ffi::CString,
-    io::{self, prelude::*, SeekFrom},
+    io::{self, SeekFrom},
     ops::{AddAssign, ShrAssign},
 };
 
@@ -392,9 +392,11 @@ impl Superblock {
 
         {
             if let Some(last_mount_path) = extended.last_mount_path.as_ref() {
-                let path_bytes = last_mount_path.as_bytes();
-                assert_eq!(path_bytes[63], 0);
-                buffer[136..200].copy_from_slice(&path_bytes);
+                let path = CString::new(last_mount_path.as_bytes()).unwrap();
+                let path_bytes = path.to_bytes_with_nul();
+                let len = std::cmp::min(64, path_bytes.len());
+                assert_eq!(0, path_bytes[len - 1]);
+                buffer[136..136 + len].copy_from_slice(&path_bytes);
             } else {
                 buffer[136] = 0;
             }
@@ -422,6 +424,7 @@ impl Superblock {
 
         let mut block_bytes = [0u8; 1024];
         self.serialize(&mut block_bytes);
+        self.serialize_extended(&mut block_bytes);
         device.write_all(&block_bytes)?;
 
         Ok(())
