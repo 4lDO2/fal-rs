@@ -67,7 +67,7 @@ impl Options {
     }
 }
 
-pub struct FuseFilesystem<Backend: fal::Filesystem<File>> {
+pub struct FuseFilesystem<Backend: fal::FilesystemMut<File>> {
     inner: Backend,
     options: Options,
 }
@@ -105,7 +105,7 @@ fn fuse_attr<InodeAddr: Into<u64>>(attrs: fal::Attributes<InodeAddr>) -> fuse::F
     }
 }
 
-impl<Backend: fal::Filesystem<File>> FuseFilesystem<Backend> {
+impl<Backend: fal::FilesystemMut<File>> FuseFilesystem<Backend> {
     pub fn init(device: File, path: &OsStr, options: Options) -> io::Result<Self> {
         Ok(Self {
             inner: Backend::mount(device, path),
@@ -133,7 +133,7 @@ fn fuse_inode_from_fs_inode<InodeAddr: Into<u64> + Copy>(fs_inode: InodeAddr) ->
     }
 }
 
-impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend> {
+impl<Backend: fal::FilesystemMut<File>> fuse::Filesystem for FuseFilesystem<Backend> {
     fn init(&mut self, _req: &Request) -> Result<(), libc::c_int> {
         Ok(())
     }

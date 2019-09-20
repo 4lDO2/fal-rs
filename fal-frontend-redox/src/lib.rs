@@ -15,7 +15,7 @@ pub struct RedoxFilesystem<Backend> {
     pub inner: Backend,
 }
 
-impl<Backend: fal::Filesystem<File>> RedoxFilesystem<Backend> {
+impl<Backend: fal::FilesystemMut<File>> RedoxFilesystem<Backend> {
     pub fn init(device: File, path: &OsStr) -> Self {
         Self {
             inner: Backend::mount(device, path).into(),
@@ -55,7 +55,7 @@ fn syscall_result<T>(fal_result: fal::Result<T>) -> syscall::Result<T> {
     fal_result.map_err(|err| syscall_error(err))
 }
 
-impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
+impl<Backend: fal::FilesystemMut<File>> SchemeMut for RedoxFilesystem<Backend> {
     fn open(&mut self, path: &[u8], flags: usize, uid: u32, gid: u32) -> syscall::Result<usize> {
         let path = Path::new(OsStr::from_bytes(path));
         let file_inode = self.lookup_dir(&path);

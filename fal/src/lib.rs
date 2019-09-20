@@ -260,7 +260,7 @@ pub trait Filesystem<D: Device> where Self: Sized {
     fn filesystem_attrs(&self) -> FsAttributes;
 }
 
-pub trait FilesystemMut<D: DeviceMut> where Self: Sized {
+pub trait FilesystemMut<D: DeviceMut>: Filesystem<D> where Self: Sized {
     fn unmount(self) {}
 }
 
