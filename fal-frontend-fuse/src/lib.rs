@@ -232,7 +232,7 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
             Ok(Some(entry)) => {
                 reply.add(
                     fuse_inode_from_fs_inode(entry.inode),
-                    0,
+                    entry.offset as i64 + 1,
                     fuse_filetype(entry.filetype),
                     entry.name,
                 );
