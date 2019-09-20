@@ -16,9 +16,9 @@ pub struct RedoxFilesystem<Backend> {
 }
 
 impl<Backend: fal::Filesystem<File>> RedoxFilesystem<Backend> {
-    pub fn init(device: File) -> Self {
+    pub fn init(device: File, path: &OsStr) -> Self {
         Self {
-            inner: Backend::mount(device).into(),
+            inner: Backend::mount(device, path).into(),
         }
     }
     fn lookup_dir_raw(

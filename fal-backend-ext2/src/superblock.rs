@@ -200,7 +200,7 @@ fn log2_round_up<T: From<u8> + AddAssign + ShrAssign + Eq>(mut t: T) -> T {
 
 impl Superblock {
     /// Load and parse the super block.
-    pub fn load<R: Read + Seek>(mut device: R) -> io::Result<Self> {
+    pub fn load<R: fal::Device>(device: &mut R) -> io::Result<Self> {
         device.seek(SeekFrom::Start(SUPERBLOCK_OFFSET)).unwrap();
 
         let mut block_bytes = [0u8; 1024];
@@ -417,7 +417,7 @@ impl Superblock {
         }
     }
 
-    pub fn store<D: fal::DeviceMut>(&self, mut device: D) -> io::Result<()> {
+    pub fn store<D: fal::DeviceMut>(&self, device: &mut D) -> io::Result<()> {
         device.seek(SeekFrom::Start(SUPERBLOCK_OFFSET)).unwrap();
 
         let mut block_bytes = [0u8; 1024];

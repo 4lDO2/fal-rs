@@ -17,7 +17,7 @@ fn main() {
         .open(std::env::args().nth(1).unwrap())
         .unwrap();
 
-    let mut scheme = RedoxFilesystem::<fal_backend_ext2::Filesystem<File>>::init(file);
+    let mut scheme = RedoxFilesystem::<fal_backend_ext2::Filesystem<File>>::init(file, "/".as_ref()); // TODO: Should this driver set the last mount path to "ext2:" or "/"?
 
     println!("{:?}", scheme.inner.superblock);
 

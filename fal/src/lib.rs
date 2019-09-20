@@ -63,7 +63,9 @@ pub trait Device: Read + Seek {
 }
 
 impl Device for std::fs::File {}
+impl Device for &mut std::fs::File {}
 impl DeviceMut for std::fs::File {}
+impl DeviceMut for &mut std::fs::File {}
 
 /// A read-write device.
 pub trait DeviceMut: Device + Write {}
@@ -195,7 +197,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 // TODO: Add some kind of Result type.
 /// An abstract filesystem. Typically implemented by the backend.
-pub trait Filesystem<D: Device> {
+pub trait Filesystem<D: Device> where Self: Sized {
     /// An inode address. u32 on ext2.
     type InodeAddr: From<u32> + Into<u64> + Copy + TryFrom<u64> + Eq + std::fmt::Debug;
 
@@ -208,8 +210,12 @@ pub trait Filesystem<D: Device> {
     fn root_inode(&self) -> Self::InodeAddr;
 
     // TODO: Support mounting multiple devices as one filesystem, for filesystems that support it.
-    /// Mount the filesystem from a device.
-    fn mount(_device: D) -> Self;
+    /// Mount the filesystem from a device. The path paramter is only used to change the "last
+    /// mount path" for filesystems that supports it".
+    fn mount(device: D, path: &OsStr) -> Self;
+
+    /// Unmount the filesystem.
+    fn unmount(self);
 
     /// Load an inode structure from the filesystem. For example, on ext2, the address 2 would load the root directory.
     fn load_inode(&mut self, address: Self::InodeAddr) -> Result<Self::InodeStruct>;
@@ -253,6 +259,11 @@ pub trait Filesystem<D: Device> {
     /// Get the statvfs of the filesystem.
     fn filesystem_attrs(&self) -> FsAttributes;
 }
+
+pub trait FilesystemMut<D: DeviceMut> where Self: Sized {
+    fn unmount(self) {}
+}
+
 #[derive(Debug)]
 pub struct Permissions {
     pub read: bool,

@@ -4,7 +4,9 @@ use std::{
     ffi::{OsStr, OsString},
     io::{self, prelude::*, SeekFrom},
     ops::{Add, Div, Mul, Rem},
+    os::unix::ffi::OsStrExt,
     sync::Mutex,
+    time::SystemTime,
 };
 
 use uuid::Uuid;
@@ -106,7 +108,6 @@ fn os_string_from_bytes(bytes: &[u8]) -> OsString {
 fn os_str_to_bytes(string: &OsStr) -> Vec<u8> {
     #[cfg(unix)]
     {
-        use std::os::unix::ffi::OsStrExt;
         string.as_bytes().into()
     }
     #[cfg(windows)]
@@ -115,7 +116,7 @@ fn os_str_to_bytes(string: &OsStr) -> Vec<u8> {
     }
 }
 
-pub struct Filesystem<D: fal::Device> {
+pub struct Filesystem<D> {
     pub superblock: Superblock,
     pub device: Mutex<D>,
     pub fhs: HashMap<u64, FileHandle>,
@@ -232,14 +233,27 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         2
     }
 
-    fn mount(mut device: D) -> Self {
+    fn mount(mut device: D, path: &OsStr) -> Self {
+        let mut superblock = Superblock::load(&mut device).unwrap();
+
+        superblock.last_mount_time = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs() as u32;
+        superblock.mounts_since_fsck += 1;
+        superblock.mounts_left_before_fsck -= 1;
+
+        if let Some(extended) = superblock.extended.as_mut() {
+            extended.last_mount_path = Some(std::ffi::CString::new(path.as_bytes()).unwrap());
+        }
+
         Self {
-            superblock: Superblock::load(&mut device).unwrap(),
+            superblock,
             device: Mutex::new(device),
             fhs: HashMap::new(),
             last_fh: 0,
         }
     }
+
+    fn unmount(self) {}
+
     fn load_inode(&mut self, addr: Self::InodeAddr) -> fal::Result<Self::InodeStruct> {
         Inode::load(self, addr)
     }
@@ -371,5 +385,11 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
             total_blocks: self.superblock.block_count,
             max_fname_len: 255,
         }
+    }
+}
+
+impl<D: fal::DeviceMut> fal::FilesystemMut<D> for Filesystem<D> {
+    fn unmount(self) {
+        self.superblock.store(&mut *self.device.lock().unwrap()).unwrap()
     }
 }

@@ -42,7 +42,7 @@ fn main() {
             .open(device)
             .expect("Failed to open filesystem device");
 
-        let filesystem = FuseFilesystem::<Filesystem<std::fs::File>>::init(file, options)
+        let filesystem = FuseFilesystem::<Filesystem<std::fs::File>>::init(file, mount_point.as_ref(), options)
             .expect("Failed to initialize the driver");
 
         if let Some(options_str) = matches.value_of("OPTIONS") {
