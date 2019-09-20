@@ -253,10 +253,6 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         if self.fhs.get(&fh).is_some() {
             let inode: inode::Inode = self.fhs[&fh].inode;
 
-            if inode.ty == inode::InodeType::Dir {
-                return Err(fal::Error::IsDirectory);
-            }
-
             let bytes_read = inode.read(self, offset, buffer)?;
 
             self.fhs.get_mut(&fh).unwrap().offset += bytes_read as u64;

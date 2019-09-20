@@ -120,6 +120,10 @@ impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
             let file_size = inode.attrs().size;
             let offset = self.inner().fh(fh as u64).offset();
 
+            if inode.attrs().filetype == fal::FileType::Directory {
+                return syscall_result(Err(fal::Error::IsDirectory));
+            }
+
             let buf_end = std::cmp::min(buf.len(), file_size as usize);
             let buf = &mut buf[..buf_end];
 
