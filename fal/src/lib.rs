@@ -70,10 +70,11 @@ pub trait DeviceMut: Device + Write {}
 
 /// An abstract inode structure.
 pub trait Inode: Clone {
-    type InodeAddr;
+    type InodeAddr: Into<u64> + Eq + std::fmt::Debug;
 
     fn generation_number(&self) -> Option<u64>;
     fn addr(&self) -> Self::InodeAddr;
+    fn attrs(&self) -> Attributes<Self::InodeAddr>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -230,15 +231,6 @@ pub trait Filesystem<D: Device> {
         parent: Self::InodeAddr,
         name: &OsStr,
     ) -> Result<DirectoryEntry<Self::InodeAddr>>;
-
-    /// Get a file's attributes, typically called from stat(2).
-    fn getattrs(&mut self, addr: Self::InodeAddr) -> Result<Attributes<Self::InodeAddr>> {
-        let inode = self.load_inode(addr)?;
-        Ok(self.inode_attrs(&inode))
-    }
-
-    /// Get the attributes of an inode.
-    fn inode_attrs(&self, inode: &Self::InodeStruct) -> Attributes<Self::InodeAddr>;
 
     /// Read a symlink.
     fn readlink(&mut self, inode: Self::InodeAddr) -> Result<Box<[u8]>>;

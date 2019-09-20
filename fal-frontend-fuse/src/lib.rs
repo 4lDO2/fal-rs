@@ -148,8 +148,8 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
             }
         };
 
-        let file_attributes = match self.inner.getattrs(inode) {
-            Ok(attrs) => fuse_attr(attrs),
+        let file_attributes = match self.inner.load_inode(inode) {
+            Ok(inode_struct) => fuse_attr(inode_struct.attrs()),
             Err(err) => {
                 reply.error(err.errno());
                 return;
@@ -189,7 +189,7 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
 
         reply.entry(
             &validity_timeout,
-            &fuse_attr(self.inner.inode_attrs(&inode_struct)),
+            &fuse_attr(inode_struct.attrs()),
             inode_struct.generation_number().unwrap_or(0),
         ); // TODO: generation_number?
     }
@@ -226,7 +226,7 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
             }
         };
 
-        assert_eq!(inode, self.inner.inode_attrs(self.inner.fh_inode(fh)).inode);
+        assert_eq!(inode.into(), self.inner.fh_inode(fh).attrs().inode.into());
 
         match self.inner.read_directory(fh, offset) {
             Ok(Some(entry)) => {
@@ -268,7 +268,7 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
         };
 
         let inode_struct = self.inner.load_inode(inode).unwrap();
-        let attrs = self.inner.inode_attrs(&inode_struct);
+        let attrs = inode_struct.attrs();
         let permissions = fal::check_permissions(req.uid(), req.gid(), &attrs);
 
         if ((flags & libc::O_RDONLY as u32 != 0) || flags & libc::O_RDWR as u32 != 0) && !permissions.read {
@@ -321,9 +321,9 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
 
         let inode_struct = self.inner.fh_inode(fh);
 
-        assert_eq!(inode, self.inner.inode_attrs(inode_struct).inode);
+        assert_eq!(inode.into(), inode_struct.attrs().inode.into());
 
-        let inode_size = self.inner.inode_attrs(inode_struct).size;
+        let inode_size = inode_struct.attrs().size;
 
         // This will effectively be the size, but possibly reduced to prevent overflow.
         let bytes_to_read = std::cmp::min(offset + u64::from(size), inode_size) - offset;

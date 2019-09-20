@@ -40,7 +40,7 @@ pub struct Inode {
     pub extended_atribute_block: u32,
     pub size_high_or_acl: u32,
     pub fragment_baddr: u32,
-    pub os_specific_2: [u8; 12], // TODO: Support 32-bit gids and uids.
+    pub os_specific_2: [u8; 12],
 
     block_size: u32,
 }
@@ -224,7 +224,7 @@ impl Inode {
         let uid_low = read_u16(bytes, 2);
 
         let (gid_high, uid_high) = match superblock.os_id {
-            OsId::Linux | OsId::Hurd => (read_u16(&os_specific_2, 122), read_u16(&os_specific_2, 120)),
+            OsId::Linux | OsId::Hurd => (read_u16(&os_specific_2, 4), read_u16(&os_specific_2, 6)),
             _ => (0, 0),
         };
 

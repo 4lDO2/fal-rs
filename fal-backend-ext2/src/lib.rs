@@ -133,7 +133,7 @@ impl<D: fal::Device> Filesystem<D> {
         let fh = FileHandle {
             inode_addr: addr,
             fh: self.last_fh,
-            inode: Inode::load(self, addr)?,
+            inode: self.load_inode(addr)?,
             offset: 0,
         };
 
@@ -151,36 +151,6 @@ impl<D: fal::Device> Filesystem<D> {
     }
 }
 
-fn inode_attrs(inode: &Inode) -> fal::Attributes<u32> {
-    fal::Attributes {
-        access_time: Timespec {
-            sec: inode.last_access_time.into(),
-            nsec: 0,
-        },
-        change_time: Timespec {
-            sec: inode.last_modification_time.into(),
-            nsec: 0,
-        },
-        creation_time: Timespec {
-            sec: inode.creation_time.into(),
-            nsec: 0,
-        },
-        modification_time: Timespec {
-            sec: inode.last_modification_time.into(),
-            nsec: 0,
-        },
-        filetype: inode.ty.into(),
-        block_count: inode.size_in_blocks(),
-        flags: inode.flags,
-        group_id: inode.gid.into(),
-        hardlink_count: inode.hard_link_count.into(),
-        inode: inode.addr,
-        permissions: inode.permissions,
-        rdev: 0,
-        size: inode.size,
-        user_id: inode.uid.into(),
-    }
-}
 
 impl fal::Inode for Inode {
     type InodeAddr = u32;
@@ -192,6 +162,36 @@ impl fal::Inode for Inode {
     #[inline]
     fn addr(&self) -> u32 {
         self.addr
+    }
+    fn attrs(&self) -> fal::Attributes<u32> {
+        fal::Attributes {
+            access_time: Timespec {
+                sec: self.last_access_time.into(),
+                nsec: 0,
+            },
+            change_time: Timespec {
+                sec: self.last_modification_time.into(),
+                nsec: 0,
+            },
+            creation_time: Timespec {
+                sec: self.creation_time.into(),
+                nsec: 0,
+            },
+            modification_time: Timespec {
+                sec: self.last_modification_time.into(),
+                nsec: 0,
+            },
+            filetype: self.ty.into(),
+            block_count: self.size_in_blocks(),
+            flags: self.flags,
+            group_id: self.gid.into(),
+            hardlink_count: self.hard_link_count.into(),
+            inode: self.addr,
+            permissions: self.permissions,
+            rdev: 0,
+            size: self.size,
+            user_id: self.uid.into(),
+        }
     }
 }
 
@@ -227,7 +227,7 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         }
     }
     fn load_inode(&mut self, addr: Self::InodeAddr) -> fal::Result<Self::InodeStruct> {
-        Ok(Inode::load(self, addr)?)
+        Inode::load(self, addr)
     }
     fn open_file(&mut self, addr: Self::InodeAddr) -> fal::Result<u64> {
         self.open(addr, Open::File)
@@ -255,11 +255,6 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
             Some(_) => Ok(()),
             None => Err(fal::Error::BadFd),
         }
-    }
-    fn getattrs(&mut self, inode_addr: u32) -> fal::Result<fal::Attributes<u32>> {
-        let inode = self.load_inode(inode_addr)?;
-
-        Ok(inode_attrs(&inode))
     }
     fn open_directory(&mut self, inode: u32) -> fal::Result<u64> {
         self.open(inode, Open::Directory)
@@ -326,9 +321,6 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
             offset: offset as u64,
         })
     }
-    fn inode_attrs(&self, inode: &Inode) -> fal::Attributes<u32> {
-        inode_attrs(inode)
-    }
     fn fh_inode(&self, fh: u64) -> &'_ Inode {
         &self.fhs[&fh].inode
     }
@@ -336,7 +328,7 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         let mut location = None;
         let mut error = None;
 
-        let inode = Inode::load(self, inode)?;
+        let inode = self.load_inode(inode)?;
 
         if inode.ty != inode::InodeType::Symlink {
             return Err(fal::Error::Invalid);

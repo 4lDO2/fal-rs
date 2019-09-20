@@ -7,7 +7,7 @@ use std::{
     sync::{Mutex, MutexGuard},
 };
 
-use fal::Filesystem;
+use fal::{Filesystem, Inode};
 use syscall::SchemeMut;
 
 #[derive(Debug)]
@@ -61,7 +61,7 @@ impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
         let file_inode = self.lookup_dir(&path);
 
         let inode_struct = syscall_result(self.inner.load_inode(file_inode))?;
-        let permissions = fal::check_permissions(uid, gid, &self.inner.inode_attrs(&inode_struct));
+        let permissions = fal::check_permissions(uid, gid, &inode_struct.attrs());
 
         if ((flags & syscall::flag::O_RDONLY != 0) || flags & syscall::flag::O_RDWR != 0) && !permissions.read {
             return syscall_result(Err(fal::Error::AccessDenied));
@@ -89,7 +89,7 @@ impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
     fn read(&mut self, fh: usize, buf: &mut [u8]) -> syscall::Result<usize> {
         let inode = self.inner.fh_inode(fh as u64).clone();
 
-        if self.inner().inode_attrs(&inode).filetype == fal::FileType::Directory {
+        if inode.attrs().filetype == fal::FileType::Directory {
             // UNOPTIMIZED
             let mut contents = OsString::new();
 
@@ -117,7 +117,7 @@ impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
             Ok(len)
         } else {
             let inode = self.inner().fh_inode(fh as u64).clone();
-            let file_size = self.inner().inode_attrs(&inode).size;
+            let file_size = inode.attrs().size;
             let offset = self.inner().fh_offset(fh as u64);
 
             let buf_end = std::cmp::min(buf.len(), file_size as usize);
@@ -198,11 +198,12 @@ impl<Backend: fal::Filesystem<File>> SchemeMut for RedoxFilesystem<Backend> {
 
     fn fstat(&mut self, id: usize, stat: &mut syscall::Stat) -> syscall::Result<usize> {
         let inode = self.inner().fh_inode(id as u64).clone();
-        let attrs: fal::Attributes<Backend::InodeAddr> = self.inner().inode_attrs(&inode);
+        let attrs: fal::Attributes<_> = inode.attrs();
+
         *stat = syscall::Stat {
             st_atime: attrs.access_time.sec as u64,
             st_atime_nsec: attrs.access_time.nsec as u32,
-            st_blksize: 4096, // FIXME: Add fs_stat or something which this value can be retrieved from.
+            st_blksize: self.inner.filesystem_attrs().block_size,
             st_blocks: attrs.block_count,
             st_ctime: attrs.change_time.sec as u64,
             st_ctime_nsec: attrs.change_time.nsec as u32,
