@@ -1,4 +1,5 @@
 use std::{
+    ffi::OsStr,
     fs::{File, OpenOptions},
     io::prelude::*,
     mem,
@@ -8,18 +9,17 @@ use syscall::{data::Packet, SchemeMut};
 
 use fal_frontend_redox::RedoxFilesystem;
 
-fn main() {
-    let mut socket = File::create(":ext2").expect("Failed to create scheme");
+pub fn daemon<Backend: fal::FilesystemMut<File>>(scheme: &OsStr) {
+    let mut socket = File::create(scheme).expect("Failed to create scheme");
 
     let file = OpenOptions::new()
         .read(true)
-        .write(false)
+        .write(true)
+        .create(false)
         .open(std::env::args().nth(1).unwrap())
         .unwrap();
 
-    let mut scheme = RedoxFilesystem::<fal_backend_ext2::Filesystem<File>>::init(file, "/".as_ref()); // TODO: Should this driver set the last mount path to "ext2:" or "/"?
-
-    println!("{:?}", scheme.inner.superblock);
+    let mut scheme = RedoxFilesystem::<Backend>::init(file, "/".as_ref()); // TODO: Should this driver set the last mount path to "<scheme>:" or "/"?
 
     loop {
         let mut packet = Packet::default();

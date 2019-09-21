@@ -75,15 +75,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "extfs-redox"
-version = "0.1.0"
-dependencies = [
- "fal-backend-ext2 0.1.0",
- "fal-frontend-redox 0.1.0",
- "redox_syscall 0.1.56 (registry+https://github.com/rust-lang/crates.io-index)",
-]
-
-[[package]]
 name = "fal"
 version = "0.1.0"
 dependencies = [
@@ -91,6 +82,10 @@ dependencies = [
  "time 0.1.42 (registry+https://github.com/rust-lang/crates.io-index)",
  "uuid 0.7.4 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
+
+[[package]]
+name = "fal-backend-apfs"
+version = "0.1.0"
 
 [[package]]
 name = "fal-backend-btrfs"
@@ -123,6 +118,9 @@ name = "fal-frontend-redox"
 version = "0.1.0"
 dependencies = [
  "fal 0.1.0",
+ "fal-backend-apfs 0.1.0",
+ "fal-backend-btrfs 0.1.0",
+ "fal-backend-ext2 0.1.0",
  "redox_syscall 0.1.56 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 

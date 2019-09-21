@@ -6,6 +6,35 @@ edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+default = ["ext2"]
+ext2 = ["fal-backend-ext2"]
+btrfs = ["fal-backend-btrfs"]
+apfs = ["fal-backend-apfs"]
+
+[lib]
+name = "fal_frontend_redox"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ext2d"
+required-features = ["ext2"]
+path = "src/ext2d.rs"
+
+[[bin]]
+name = "btrfsd"
+required-features = ["btrfs"]
+path = "src/btrfsd.rs"
+
+[[bin]]
+name = "apfsd"
+required-features = ["apfs"]
+path = "src/apfsd.rs"
+
 [dependencies]
 redox_syscall = "0.1"
 fal = { path = "../fal", version = "0.1" }
+
+fal-backend-ext2 = { version = "0.1", optional = true, path = "../fal-backend-ext2" }
+fal-backend-btrfs = { version = "0.1", optional = true, path = "../fal-backend-btrfs" }
+fal-backend-apfs = { version = "0.1", optional = true, path = "../fal-backend-apfs" }
