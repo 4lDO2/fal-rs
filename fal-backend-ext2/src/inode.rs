@@ -300,7 +300,7 @@ impl Inode {
 
         let stride = mem::size_of::<u32>();
         for (index, direct_ptr) in this.direct_ptrs.iter().enumerate() {
-            buffer[index * stride..(index + 1) * stride].copy_from_slice(&direct_ptr.to_le_bytes());
+            buffer[40 + index * stride..40 + (index + 1) * stride].copy_from_slice(&direct_ptr.to_le_bytes());
         }
 
         write_u32(buffer, 88, this.singly_indirect_ptr);
