@@ -38,10 +38,11 @@ fn read_block_to_raw<D: fal::Device>(
     block_address: u32,
     buffer: &mut [u8],
 ) -> io::Result<()> {
-    filesystem.device.lock().unwrap().seek(SeekFrom::Start(
+    let mut guard = filesystem.device.lock().unwrap();
+    guard.seek(SeekFrom::Start(
         block_address as u64 * u64::from(filesystem.superblock.block_size),
     ))?;
-    filesystem.device.lock().unwrap().read_exact(buffer)?;
+    guard.read_exact(buffer)?;
     Ok(())
 }
 fn read_block<D: fal::Device>(
@@ -57,10 +58,11 @@ fn write_block_raw<D: fal::DeviceMut>(
     block_address: u32,
     buffer: &[u8],
 ) -> io::Result<()> {
-    filesystem.device.lock().unwrap().seek(SeekFrom::Start(
+    let mut guard = filesystem.device.lock().unwrap();
+    guard.seek(SeekFrom::Start(
         block_address as u64 * u64::from(filesystem.superblock.block_size),
     ))?;
-    filesystem.device.lock().unwrap().write_all(buffer)?;
+    guard.write_all(buffer)?;
     Ok(())
 }
 fn write_block<D: fal::DeviceMut>(
