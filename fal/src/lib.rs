@@ -77,6 +77,10 @@ pub trait Inode: Clone {
     fn generation_number(&self) -> Option<u64>;
     fn addr(&self) -> Self::InodeAddr;
     fn attrs(&self) -> Attributes<Self::InodeAddr>;
+
+    fn set_perm(&mut self, permissions: u16);
+    fn set_uid(&mut self, uid: u32);
+    fn set_gid(&mut self, gid: u32);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -262,6 +266,9 @@ pub trait Filesystem<D: Device> where Self: Sized {
 
 pub trait FilesystemMut<D: DeviceMut>: Filesystem<D> where Self: Sized {
     fn unmount(self) {}
+
+    /// Write the inode metadata to disk.
+    fn store_inode(&mut self, inode: &Self::InodeStruct) -> Result<()>;
 }
 
 #[derive(Debug)]

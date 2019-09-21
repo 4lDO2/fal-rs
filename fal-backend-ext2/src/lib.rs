@@ -190,6 +190,20 @@ impl fal::Inode for Inode {
             user_id: self.uid.into(),
         }
     }
+    #[inline]
+    fn set_perm(&mut self, permissions: u16) {
+        self.permissions = permissions & 0o777;
+    }
+
+    #[inline]
+    fn set_uid(&mut self, uid: u32) {
+        self.uid = uid;
+    }
+
+    #[inline]
+    fn set_gid(&mut self, gid: u32) {
+        self.gid = gid;
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -394,5 +408,8 @@ impl<D: fal::DeviceMut> fal::FilesystemMut<D> for Filesystem<D> {
     fn unmount(self) {
         dbg!("Storing filesystem superblock");
         self.superblock.store(&mut *self.device.lock().unwrap()).unwrap()
+    }
+    fn store_inode(&mut self, inode: &Inode) -> fal::Result<()> {
+        Inode::store(inode, self)
     }
 }

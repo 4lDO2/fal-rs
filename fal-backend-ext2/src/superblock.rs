@@ -382,9 +382,11 @@ impl Superblock {
 
         {
             if let Some(vol_name) = extended.vol_name.as_ref() {
-                let vol_name_bytes = vol_name.as_bytes();
-                assert_eq!(vol_name_bytes[15], 0);
-                buffer[120..136].copy_from_slice(&vol_name_bytes);
+                let vol_name = CString::new(vol_name.as_bytes()).unwrap();
+                let vol_name_bytes = vol_name.to_bytes_with_nul();
+                let len = std::cmp::min(16, vol_name_bytes.len());
+                assert_eq!(0, vol_name_bytes[len - 1]);
+                buffer[120..120 + len].copy_from_slice(&vol_name_bytes);
             } else {
                 buffer[120] = 0;
             }

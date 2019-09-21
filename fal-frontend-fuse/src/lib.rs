@@ -298,6 +298,42 @@ impl<Backend: fal::FilesystemMut<File>> fuse::Filesystem for FuseFilesystem<Back
         };
         reply.opened(fh, 0);
     }
+    fn setattr(&mut self, 
+        _req: &Request, 
+        fuse_inode: u64, 
+        mode: Option<u32>, 
+        uid: Option<u32>, 
+        gid: Option<u32>, 
+        _size: Option<u64>, 
+        _atime: Option<Timespec>, 
+        _mtime: Option<Timespec>, 
+        _fh: Option<u64>, 
+        _crtime: Option<Timespec>, 
+        _chgtime: Option<Timespec>, 
+        _bkuptime: Option<Timespec>, 
+        _flags: Option<u32>, 
+    reply: ReplyAttr)
+    {
+        let inode: Backend::InodeAddr = match fuse_inode_to_fs_inode(fuse_inode) {
+            Some(inode) => inode,
+            None => {
+                reply.error(libc::EOVERFLOW);
+                return;
+            }
+        };
+        let mut inode: Backend::InodeStruct = self.inner().load_inode(inode).unwrap();
+        if let Some(mode) = mode {
+            inode.set_perm((mode & 0o777) as u16);
+        }
+        if let Some(uid) = uid {
+            inode.set_uid(uid);
+        }
+        if let Some(gid) = gid {
+            inode.set_uid(gid);
+        }
+        self.inner().store_inode(&inode).unwrap();
+        reply.attr(&Timespec::new(0, 0), &fuse_attr(inode.attrs()));
+    }
     fn read(
         &mut self,
         _req: &Request,

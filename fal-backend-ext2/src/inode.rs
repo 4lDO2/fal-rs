@@ -134,7 +134,7 @@ impl Inode {
         inode_address: u32,
     ) -> fal::Result<Self> {
         if inode_address == 0 {
-            return Err(fal::Error::NoEntity);
+            return Err(fal::Error::Invalid);
         }
 
         if !block_group::inode_exists(inode_address, filesystem)? {
@@ -168,13 +168,16 @@ impl Inode {
     pub fn store<D: fal::DeviceMut>(
         this: &Self,
         filesystem: &mut Filesystem<D>,
-        inode_address: u32,
     ) -> fal::Result<()> {
+        let inode_address = this.addr;
+
         if inode_address == 0 {
             return Err(fal::Error::Invalid);
         }
 
-        debug_assert!(block_group::inode_exists(inode_address, filesystem)?);
+        if !block_group::inode_exists(inode_address, filesystem)? {
+            return Err(fal::Error::NoEntity);
+        }
 
         let block_group_index =
             block_group::inode_block_group_index(&filesystem.superblock, inode_address);
@@ -185,21 +188,17 @@ impl Inode {
         let inode_size = filesystem.superblock.inode_size();
 
         let containing_block_index = block_group_descriptor.inode_table_start_baddr
-            + u32::try_from(
-                u64::from(inode_index_in_group * u32::from(inode_size))
-                    / u64::from(filesystem.superblock.block_size)
-            )
-            .unwrap();
+            +
+                inode_index_in_group * u32::from(inode_size)
+                    / filesystem.superblock.block_size;
 
-        let max_inodes_in_block =
-            filesystem.superblock.block_size / u32::from(inode_size);
+        let max_inodes_in_block = filesystem.superblock.block_size / u32::from(inode_size);
 
         let inode_index_in_block =
             usize::try_from(inode_index_in_group % max_inodes_in_block).unwrap();
         let inode_size = usize::from(inode_size);
 
         let mut containing_block = read_block(filesystem, containing_block_index)?;
-
         let inode_bytes = &mut containing_block
             [inode_index_in_block * inode_size..inode_index_in_block * inode_size + inode_size];
 
@@ -409,7 +408,7 @@ impl Inode {
         let abs_baddr = self.absolute_baddr(filesystem, rel_baddr)?;
         Ok(read_block_to(filesystem, abs_baddr, buffer)?)
     }
-    pub fn write_block<D: fal::DeviceMut>(
+    pub fn write_content_block<D: fal::DeviceMut>(
         &self,
         rel_baddr: u32,
         filesystem: &Filesystem<D>,
@@ -519,7 +518,7 @@ impl Inode {
             block_bytes[off_from_rel_block_usize..off_from_rel_block_usize + end]
                 .copy_from_slice(&buffer[..end]);
 
-            self.write_block(
+            self.write_content_block(
                 rel_baddr_start.try_into().unwrap(),
                 filesystem,
                 &block_bytes,
@@ -545,7 +544,7 @@ impl Inode {
                 &buffer[..usize::try_from(filesystem.superblock.block_size).unwrap()],
             );
 
-            self.write_block(current_rel_baddr, filesystem, &block_bytes)?;
+            self.write_content_block(current_rel_baddr, filesystem, &block_bytes)?;
 
             buffer = &buffer[usize::try_from(filesystem.superblock.block_size).unwrap()..];
             current_rel_baddr += 1;
@@ -554,7 +553,7 @@ impl Inode {
         if buffer.len() != 0 {
             self.read_block_to(current_rel_baddr, filesystem, &mut block_bytes)?;
             block_bytes[..buffer.len()].copy_from_slice(&buffer);
-            self.write_block(current_rel_baddr, filesystem, &block_bytes)?;
+            self.write_content_block(current_rel_baddr, filesystem, &block_bytes)?;
         }
 
         Ok(())
@@ -658,7 +657,6 @@ impl Inode {
         }
 
         let mut entry_inode_struct = Inode::load(filesystem, entry.inode)?;
-        let entry_inode = entry.inode;
 
         entry.total_entry_size = 0;
         entry.inode = 0;
@@ -674,7 +672,7 @@ impl Inode {
         if entry_inode_struct.hard_link_count == 0 {
             entry_inode_struct.remove(filesystem, entry.inode)?;
         } else {
-            Inode::store(&entry_inode_struct, filesystem, entry_inode)?;
+            Inode::store(&entry_inode_struct, filesystem)?;
         }
 
         Ok(())
