@@ -5,6 +5,5 @@ members = [
     "fal-backend-ext2",
     "fal-frontend-fuse",
     "fal-frontend-redox",
-    "extfs-fuse",
     "fal",
 ]

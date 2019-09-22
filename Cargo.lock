@@ -62,19 +62,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "extfs-fuse"
-version = "0.1.0"
-dependencies = [
- "clap 2.33.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "env_logger 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "fal-backend-ext2 0.1.0",
- "fal-frontend-fuse 0.1.0",
- "fuse 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "libc 0.2.62 (registry+https://github.com/rust-lang/crates.io-index)",
- "time 0.1.42 (registry+https://github.com/rust-lang/crates.io-index)",
-]
-
-[[package]]
 name = "fal"
 version = "0.1.0"
 dependencies = [
@@ -107,7 +94,12 @@ dependencies = [
 name = "fal-frontend-fuse"
 version = "0.1.0"
 dependencies = [
+ "clap 2.33.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "env_logger 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "fal 0.1.0",
+ "fal-backend-apfs 0.1.0",
+ "fal-backend-btrfs 0.1.0",
+ "fal-backend-ext2 0.1.0",
  "fuse 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.62 (registry+https://github.com/rust-lang/crates.io-index)",
  "time 0.1.42 (registry+https://github.com/rust-lang/crates.io-index)",

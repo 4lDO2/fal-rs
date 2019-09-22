@@ -6,8 +6,20 @@ edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+default = ["ext2"]
+ext2 = ["fal-backend-ext2"]
+apfs = ["fal-backend-apfs"]
+btrfs = ["fal-backend-btrfs"]
+
 [dependencies]
+clap = "2.33"
+env_logger = "0.6"
 fal = { path = "../fal", version = "0.1" }
 libc = "0.2"
 time = "0.1"
 fuse = "0.3"
+
+fal-backend-ext2 = { version = "0.1", optional = true, path = "../fal-backend-ext2" }
+fal-backend-btrfs = { version = "0.1", optional = true, path = "../fal-backend-btrfs" }
+fal-backend-apfs = { version = "0.1", optional = true, path = "../fal-backend-apfs" }
