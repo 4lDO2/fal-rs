@@ -74,7 +74,7 @@ pub fn read_from_desc_area<D: fal::Device>(device: &mut D, superblock: &NxSuperb
     let obj_phys = ObjPhys::parse(&block_bytes[..32]);
     match obj_phys.object_type.ty {
         ObjectType::NxSuperblock => CheckpointDescAreaEntry::Superblock(NxSuperblock::parse(&block_bytes)),
-        ObjectType::CheckpointMap => CheckpointDescAreaEntry::Mapping(CheckpointMappingPhys::parse(&block_bytes).0),
+        ObjectType::CheckpointMap => CheckpointDescAreaEntry::Mapping(CheckpointMappingPhys::parse(&block_bytes)),
 
         other => panic!("Unexpected checkpoint desc area entry type: {:?}.", other),
     }

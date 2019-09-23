@@ -6,4 +6,7 @@ members = [
     "fal-frontend-fuse",
     "fal-frontend-redox",
     "fal",
+
+    # TODO: temporary
+    "apfs-test",
 ]
