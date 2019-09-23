@@ -7,6 +7,6 @@ fn main() {
     let mut device = File::open(&device_path).unwrap();
     println!("Reading {}", device_path);
 
-    let superblock = superblock::Superblock::load(&mut device);
+    let superblock = superblock::NxSuperblock::load(&mut device);
     println!("Superblock: {:?}", superblock);
 }

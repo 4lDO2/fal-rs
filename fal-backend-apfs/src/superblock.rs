@@ -282,7 +282,7 @@ impl BitAnd for RoCompatFeatures {
 }
 
 #[derive(Debug)]
-pub struct Superblock {
+pub struct NxSuperblock {
     header: ObjPhys,
     block_size: u32,
     block_count: u64,
@@ -334,7 +334,7 @@ pub struct Superblock {
     fusion_wbc: BlockRange,
 }
 
-impl Superblock {
+impl NxSuperblock {
     const MAGIC: u32 = 0x4253584E; // 'BSXN'
     const MAX_VOLUME_COUNT: u32 = 100;
     const NUM_COUNTERS: u32 = 32;
