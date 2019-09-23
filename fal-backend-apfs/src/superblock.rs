@@ -411,27 +411,27 @@ impl NxSuperblock {
         let fusion_uuid = read_uuid(block_bytes, 1276);
 
         let keylocker = BlockRange {
-            start: read_u64(block_bytes, 1292) as i64,
-            count: read_u64(block_bytes, 1300),
+            start: read_u64(block_bytes, 1296) as i64,
+            count: read_u64(block_bytes, 1304),
         };
 
         let mut ephemeral_info = vec! [];
 
         for i in 0..Self::EPH_INFO_COUNT {
-            ephemeral_info.push(read_u64(block_bytes, 1308 + i as usize * 8));
+            ephemeral_info.push(read_u64(block_bytes, 1312 + i as usize * 8));
         }
 
         let ephemeral_info = ephemeral_info.into_boxed_slice();
 
-        // Offset is now 1308 + 8 * 4 = 1340.
-        // test_oid, offset 1348.
+        // Offset is now 1312 + 8 * 4 = 1344.
+        // test_oid, offset 1352.
 
-        let fusion_mt_oid = read_u64(block_bytes, 1348).into();
-        let fusion_wbc_oid = read_u64(block_bytes, 1356).into();
+        let fusion_mt_oid = read_u64(block_bytes, 1352).into();
+        let fusion_wbc_oid = read_u64(block_bytes, 1360).into();
 
         let fusion_wbc = BlockRange {
-            start: read_u64(block_bytes, 1364) as i64,
-            count: read_u64(block_bytes, 1372),
+            start: read_u64(block_bytes, 1368) as i64,
+            count: read_u64(block_bytes, 1376),
         };
 
         Self {
