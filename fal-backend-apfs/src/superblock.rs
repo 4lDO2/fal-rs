@@ -40,7 +40,7 @@ impl From<ObjectIdentifier> for u64 {
 }
 
 enum_from_primitive! {
-    #[derive(Clone, Copy, Debug)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum ObjectType {
         NxSuperblock = 0x1,
         Btree = 0x2,
@@ -79,10 +79,10 @@ enum_from_primitive! {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ObjectTypeAndFlags {
-    ty: ObjectType,
-    flags: u16,
+    pub ty: ObjectType,
+    pub flags: u16,
 }
 
 impl ObjectTypeAndFlags {
@@ -125,7 +125,7 @@ pub struct ObjPhys {
 }
 
 impl ObjPhys {
-    const LEN: usize = 32;
+    pub const LEN: usize = 32;
     pub fn parse(bytes: &[u8]) -> Self {
         Self {
             checksum: read_u64(bytes, 0),
@@ -283,55 +283,55 @@ impl BitAnd for RoCompatFeatures {
 
 #[derive(Debug)]
 pub struct NxSuperblock {
-    header: ObjPhys,
-    block_size: u32,
-    block_count: u64,
+    pub header: ObjPhys,
+    pub block_size: u32,
+    pub block_count: u64,
 
-    features: Features,
-    incompat_features: IncompatFeatures,
-    ro_compat_features: RoCompatFeatures,
+    pub features: Features,
+    pub incompat_features: IncompatFeatures,
+    pub ro_compat_features: RoCompatFeatures,
 
-    uuid: Uuid,
+    pub uuid: Uuid,
 
-    next_oid: ObjectIdentifier,
-    next_xid: TransactionIdenfifier,
+    pub next_oid: ObjectIdentifier,
+    pub next_xid: TransactionIdenfifier,
 
-    chkpnt_desc_blkcnt: u32,
-    chkpnt_data_blkcnt: u32,
-    chkpnt_desc_base: BlockAddr,
-    chkpnt_data_base: BlockAddr,
-    chkpnt_desc_next_idx: u32,
-    chkpnt_data_next_idx: u32,
-    chkpnt_desc_first: u32,
-    chkpnt_desc_len: u32,
-    chkpnt_data_first: u32,
-    chkpnt_data_len: u32,
+    pub chkpnt_desc_blkcnt: u32,
+    pub chkpnt_data_blkcnt: u32,
+    pub chkpnt_desc_base: BlockAddr,
+    pub chkpnt_data_base: BlockAddr,
+    pub chkpnt_desc_next_idx: u32,
+    pub chkpnt_data_next_idx: u32,
+    pub chkpnt_desc_first: u32,
+    pub chkpnt_desc_len: u32,
+    pub chkpnt_data_first: u32,
+    pub chkpnt_data_len: u32,
 
-    spacemanager_oid: ObjectIdentifier,
-    object_map_oid: ObjectIdentifier,
-    reaper_oid: ObjectIdentifier,
+    pub spacemanager_oid: ObjectIdentifier,
+    pub object_map_oid: ObjectIdentifier,
+    pub reaper_oid: ObjectIdentifier,
 
     // test_type: u32
 
-    max_volume_count: u32,
-    volumes_oids: Box<[ObjectIdentifier]>, 
-    counters: Box<[u64]>,
+    pub max_volume_count: u32,
+    pub volumes_oids: Box<[ObjectIdentifier]>, 
+    pub counters: Box<[u64]>,
 
-    blocked_out_blocks: BlockRange,
-    evict_mapping_tre_oid: ObjectIdentifier,
+    pub blocked_out_blocks: BlockRange,
+    pub evict_mapping_tre_oid: ObjectIdentifier,
 
-    flags: u64,
+    pub flags: u64,
 
-    efi_jumpstart: BlockAddr,
-    fusion_uuid: Uuid,
-    keylocker: BlockRange,
-    ephemeral_info: Box<[u64]>,
+    pub efi_jumpstart: BlockAddr,
+    pub fusion_uuid: Uuid,
+    pub keylocker: BlockRange,
+    pub ephemeral_info: Box<[u64]>,
 
     // test_oid: u32
 
-    fusion_mt_oid: ObjectIdentifier,
-    fusion_wbc_oid: ObjectIdentifier,
-    fusion_wbc: BlockRange,
+    pub fusion_mt_oid: ObjectIdentifier,
+    pub fusion_wbc_oid: ObjectIdentifier,
+    pub fusion_wbc: BlockRange,
 }
 
 impl NxSuperblock {
@@ -499,5 +499,11 @@ impl NxSuperblock {
         write_uuid(block, 72, &this.uuid);
         write_u64(block, 88, this.next_oid.into());
         write_u64(block, 96, this.next_xid);
+    }
+    pub fn chkpnt_desc_blkcnt(&self) -> u32 {
+        self.chkpnt_desc_blkcnt & !(1 << 31)
+    }
+    pub fn chkpnt_data_blkcnt(&self) -> u32 {
+        self.chkpnt_data_blkcnt & !(1 << 31)
     }
 }
