@@ -506,4 +506,8 @@ impl NxSuperblock {
     pub fn chkpnt_data_blkcnt(&self) -> u32 {
         self.chkpnt_data_blkcnt & !(1 << 31)
     }
+    pub fn is_valid(&self) -> bool {
+        // FIXME
+        true
+    }
 }

@@ -1,6 +1,9 @@
 use std::{io::{prelude::*, SeekFrom}, sync::Mutex};
 
-use crate::superblock::NxSuperblock;
+use crate::{
+    checkpoint::{self, CheckpointDescAreaEntry},
+    superblock::NxSuperblock,
+};
 
 pub struct Filesystem<D: fal::Device> {
     pub device: Mutex<D>,
@@ -31,9 +34,11 @@ impl<D: fal::Device> Filesystem<D> {
             //
         }
 
-        for i in 0..container_superblock.chkpnt_desc_len {
-            println!("A: {:?}", crate::checkpoint::read_from_desc_area(&mut device, &container_superblock, i));
-        }
+        let superblock = (0..container_superblock.chkpnt_desc_len).map(|i| {
+            checkpoint::read_from_desc_area(&mut device, &container_superblock, container_superblock.chkpnt_desc_first + i)
+        }).filter_map(|entry| entry.into_superblock()).filter(|superblock| superblock.is_valid()).max_by_key(|superblock| superblock.header.transaction_id).unwrap();
+
+        println!("Checkpoint superblock: {:?}", superblock);
 
         Self {
             container_superblock,

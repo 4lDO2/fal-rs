@@ -68,6 +68,15 @@ pub enum CheckpointDescAreaEntry {
     Mapping(CheckpointMappingPhys),
 }
 
+impl CheckpointDescAreaEntry {
+    pub fn into_superblock(self) -> Option<NxSuperblock> {
+        match self {
+            Self::Superblock(superblock) => Some(superblock),
+            Self::Mapping(_) => None,
+        }
+    }
+}
+
 pub fn read_from_desc_area<D: fal::Device>(device: &mut D, superblock: &NxSuperblock, index: u32) -> CheckpointDescAreaEntry {
     let block_bytes = Filesystem::read_block(superblock, device, superblock.chkpnt_desc_base + i64::from(index));
 
