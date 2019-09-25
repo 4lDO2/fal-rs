@@ -99,7 +99,7 @@ impl SpacemanagerDatazoneInfoPhys {
     pub const LEN: usize = Self::ALLOCATION_ZONE_COUNT * SpacemanagerAllocZoneInfoPhys::LEN;
     pub fn parse(bytes: &[u8]) -> Self {
         Self {
-            allocation_zones: (0..2 * Self::ALLOCATION_ZONE_COUNT).map(|i| SpacemanagerAllocZoneInfoPhys::parse(&bytes[i * SpacemanagerAllocZoneInfoPhys::LEN .. (i + 1) * SpacemanagerAllocZoneInfoPhys::LEN])).collect(),
+            allocation_zones: (0..SpacemanagerPhys::DEVICE_COUNT * Self::ALLOCATION_ZONE_COUNT).map(|i| SpacemanagerAllocZoneInfoPhys::parse(&bytes[i * SpacemanagerAllocZoneInfoPhys::LEN .. (i + 1) * SpacemanagerAllocZoneInfoPhys::LEN])).collect(),
         }
     }
 }
@@ -133,11 +133,12 @@ pub struct SpacemanagerPhys {
 }
 
 impl SpacemanagerPhys {
+    pub const DEVICE_COUNT: usize = 2;
     pub fn parse(bytes: &[u8]) -> Self {
         let header = ObjPhys::parse(bytes);
 
         // The devices field starts at 48, and since SD_COUNT = 2 and LEN = 48, it stops at 144.
-        let devices = (0..2).map(|i| SpacemanagerDevice::parse(&bytes[48 + i * 48..48 + (i + 1) * 48])).collect();
+        let devices = (0..Self::DEVICE_COUNT).map(|i| SpacemanagerDevice::parse(&bytes[48 + i * 48..48 + (i + 1) * 48])).collect();
 
         // The free queues field starts at 200, and since SFQ_COUNT = 3 and LEN = 40, it stops at
         // 320.
