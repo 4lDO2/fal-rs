@@ -3,6 +3,7 @@ use enum_primitive::FromPrimitive;
 use fal::{read_u32, read_u64};
 
 use crate::{
+    btree::BTreeNode,
     filesystem::Filesystem,
     reaper::ReaperPhys,
     superblock::{BlockAddr, NxSuperblock, ObjectIdentifier, ObjPhys, ObjectType, ObjectTypeAndFlags},
@@ -80,6 +81,7 @@ pub enum CheckpointDescAreaEntry {
 pub enum GenericObject {
     SpaceManager(SpacemanagerPhys),
     Reaper(ReaperPhys),
+    BTreeNode(BTreeNode),
     Null,
 }
 
@@ -117,6 +119,7 @@ pub fn read_from_data_area<D: fal::Device>(device: &mut D, superblock: &NxSuperb
     match obj_phys.object_type.ty {
         ObjectType::SpaceManager => Some(GenericObject::SpaceManager(SpacemanagerPhys::parse(&block_bytes))),
         ObjectType::NxReaper => Some(GenericObject::Reaper(ReaperPhys::parse(&block_bytes))),
+        ObjectType::Btree | ObjectType::BtreeNode => Some(GenericObject::BTreeNode(dbg!(BTreeNode::parse(&block_bytes)))),
         _ => {
             dbg!(index);
             dbg!(obj_phys.object_type.ty, obj_phys.object_subtype);
