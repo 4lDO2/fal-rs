@@ -1,13 +1,18 @@
-use std::{io::{prelude::*, SeekFrom}, sync::Mutex};
+use std::{
+    collections::HashMap,
+    io::{prelude::*, SeekFrom},
+    sync::Mutex
+};
 
 use crate::{
-    checkpoint::{self, CheckpointDescAreaEntry},
-    superblock::NxSuperblock,
+    checkpoint::{self, CheckpointDescAreaEntry, CheckpointMapping, CheckpointMappingPhys, GenericObject},
+    superblock::{NxSuperblock, ObjectIdentifier},
 };
 
 pub struct Filesystem<D: fal::Device> {
     pub device: Mutex<D>,
     pub container_superblock: NxSuperblock,
+    pub ephemeral_objects: HashMap<ObjectIdentifier, GenericObject>,
 }
 
 impl<D: fal::Device> Filesystem<D> {
@@ -38,11 +43,18 @@ impl<D: fal::Device> Filesystem<D> {
             checkpoint::read_from_desc_area(&mut device, &container_superblock, container_superblock.chkpnt_desc_first + i)
         }).filter_map(|entry| entry.into_superblock()).filter(|superblock| superblock.is_valid()).max_by_key(|superblock| superblock.header.transaction_id).unwrap();
 
-        println!("Checkpoint superblock: {:?}", superblock);
+        let ephemeral_object_ids = (0..container_superblock.chkpnt_desc_len).map(|i| {
+            checkpoint::read_from_desc_area(&mut device, &container_superblock, container_superblock.chkpnt_desc_first + i)
+        }).filter_map(|entry| entry.into_mapping()).filter(|mapping| mapping.header.is_ephemeral() || true).map(|mapping: CheckpointMappingPhys| Vec::from(mapping.mappings).into_iter().map(|mapping: CheckpointMapping| (mapping.oid, mapping.paddr))).flatten().collect::<Vec<_>>();
+
+        let ephemeral_objects = ephemeral_object_ids.into_iter().map(|(id, paddr)| (id, checkpoint::read_from_data_area(&mut device, &container_superblock, (paddr.0 - superblock.chkpnt_data_base as u64) as u32).unwrap())).collect::<HashMap<ObjectIdentifier, GenericObject>>();
+
+        let container_superblock: NxSuperblock = superblock;
 
         Self {
             container_superblock,
             device: Mutex::new(device),
+            ephemeral_objects,
         }
     }
     pub fn read_block_to(superblock: &NxSuperblock, device: &mut D, block: &mut [u8], address: crate::superblock::BlockAddr) {

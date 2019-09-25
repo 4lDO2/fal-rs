@@ -1,24 +1,30 @@
+use enum_primitive::FromPrimitive;
+
 use fal::{read_u32, read_u64};
 
-use crate::{filesystem::Filesystem, superblock::{BlockAddr, NxSuperblock, ObjectIdentifier, ObjPhys, ObjectType}};
+use crate::{
+    filesystem::Filesystem,
+    superblock::{BlockAddr, NxSuperblock, ObjectIdentifier, ObjPhys, ObjectType, ObjectTypeAndFlags},
+    spacemanager::SpacemanagerPhys,
+};
 
 #[derive(Debug)]
 pub struct CheckpointMapping {
-    ty: u32,
-    subtype: u32,
-    size: u32,
-    padding: u32,
-    fs_oid: ObjectIdentifier,
-    oid: ObjectIdentifier,
-    paddr: ObjectIdentifier,
+    pub ty: ObjectTypeAndFlags,
+    pub subtype: ObjectType,
+    pub size: u32,
+    pub padding: u32,
+    pub fs_oid: ObjectIdentifier,
+    pub oid: ObjectIdentifier,
+    pub paddr: ObjectIdentifier,
 }
 
 #[derive(Debug)]
 pub struct CheckpointMappingPhys {
-    header: ObjPhys,
-    flags: u32,
-    count: u32,
-    mappings: Box<[CheckpointMapping]>,
+    pub header: ObjPhys,
+    pub flags: u32,
+    pub count: u32,
+    pub mappings: Box<[CheckpointMapping]>,
 }
 
 impl CheckpointMapping {
@@ -26,8 +32,9 @@ impl CheckpointMapping {
 
     pub fn parse(bytes: &[u8]) -> Self {
         Self {
-            ty: read_u32(bytes, 0),
-            subtype: read_u32(bytes, 4),
+            ty: ObjectTypeAndFlags::from_raw(read_u32(bytes, 0)),
+
+            subtype: ObjectType::from_u32(read_u32(bytes, 4)).unwrap(),
             size: read_u32(bytes, 8),
             padding: read_u32(bytes, 12),
             fs_oid: read_u64(bytes, 16).into(),
@@ -68,11 +75,23 @@ pub enum CheckpointDescAreaEntry {
     Mapping(CheckpointMappingPhys),
 }
 
+#[derive(Debug)]
+pub enum GenericObject {
+    SpaceManager(SpacemanagerPhys),
+    Null,
+}
+
 impl CheckpointDescAreaEntry {
     pub fn into_superblock(self) -> Option<NxSuperblock> {
         match self {
             Self::Superblock(superblock) => Some(superblock),
             Self::Mapping(_) => None,
+        }
+    }
+    pub fn into_mapping(self) -> Option<CheckpointMappingPhys> {
+        match self {
+            Self::Mapping(mapping) => Some(mapping),
+            Self::Superblock(_) => None,
         }
     }
 }
@@ -86,5 +105,19 @@ pub fn read_from_desc_area<D: fal::Device>(device: &mut D, superblock: &NxSuperb
         ObjectType::CheckpointMap => CheckpointDescAreaEntry::Mapping(CheckpointMappingPhys::parse(&block_bytes)),
 
         other => panic!("Unexpected checkpoint desc area entry type: {:?}.", other),
+    }
+}
+
+pub fn read_from_data_area<D: fal::Device>(device: &mut D, superblock: &NxSuperblock, index: u32) -> Option<GenericObject> {
+    let block_bytes = Filesystem::read_block(superblock, device, superblock.chkpnt_data_base + i64::from(index));
+
+    let obj_phys = ObjPhys::parse(&block_bytes[..32]);
+    match obj_phys.object_type.ty {
+        ObjectType::SpaceManager => Some(GenericObject::SpaceManager(dbg!(SpacemanagerPhys::parse(&block_bytes)))),
+        _ => {
+            dbg!(index);
+            dbg!(obj_phys.object_type.ty, obj_phys.object_subtype);
+            Some(GenericObject::Null)
+        }
     }
 }

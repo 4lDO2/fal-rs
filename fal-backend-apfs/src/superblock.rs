@@ -19,7 +19,7 @@ pub struct BlockRange {
 }
 
 /// (oid_t).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Hash, Eq)]
 pub struct ObjectIdentifier(pub u64);
 
 impl ObjectIdentifier {
@@ -107,10 +107,19 @@ impl ObjectTypeAndFlags {
     pub fn into_raw(this: Self) -> u32 {
         (this.ty as u32 & Self::TYPE_MASK) | (((this.flags as u32) << 16) & Self::FLAGS_MASK)
     }
+    pub fn is_ephemeral(&self) -> bool {
+        self.flags & Self::FLAG_EPHEMERAL != 0
+    }
+    pub fn is_physical(&self) -> bool {
+        self.flags & Self::FLAG_PHYSICAL != 0
+    }
+    pub fn is_virtual(&self) -> bool {
+        !self.is_ephemeral() && !self.is_physical()
+    }
 }
 
 /// (xid_t).
-pub type TransactionIdenfifier = u64;
+pub type TransactionIdentifier = u64;
 
 // TODO: Write a fletcher crate.
 type Fletcher64 = u64;
@@ -119,7 +128,7 @@ type Fletcher64 = u64;
 pub struct ObjPhys {
     pub checksum: Fletcher64,
     pub object_id: ObjectIdentifier,
-    pub transaction_id: TransactionIdenfifier,
+    pub transaction_id: TransactionIdentifier,
     pub object_type: ObjectTypeAndFlags,
     pub object_subtype: ObjectType,
 }
@@ -141,6 +150,15 @@ impl ObjPhys {
         write_u64(bytes, 16, this.transaction_id.into());
         write_u32(bytes, 24, ObjectTypeAndFlags::into_raw(this.object_type));
         write_u32(bytes, 28, this.object_subtype as u32);
+    }
+    pub fn is_ephemeral(&self) -> bool {
+        self.object_type.is_ephemeral()
+    }
+    pub fn is_physical(&self) -> bool {
+        self.object_type.is_physical()
+    }
+    pub fn is_virtual(&self) -> bool {
+        self.object_type.is_virtual()
     }
 }
 
@@ -294,7 +312,7 @@ pub struct NxSuperblock {
     pub uuid: Uuid,
 
     pub next_oid: ObjectIdentifier,
-    pub next_xid: TransactionIdenfifier,
+    pub next_xid: TransactionIdentifier,
 
     pub chkpnt_desc_blkcnt: u32,
     pub chkpnt_data_blkcnt: u32,
