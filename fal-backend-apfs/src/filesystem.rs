@@ -1,11 +1,13 @@
 use std::{
     collections::HashMap,
     io::{prelude::*, SeekFrom},
-    sync::Mutex
+    sync::Mutex,
 };
 
 use crate::{
-    checkpoint::{self, CheckpointDescAreaEntry, CheckpointMapping, CheckpointMappingPhys, GenericObject},
+    checkpoint::{
+        self, CheckpointDescAreaEntry, CheckpointMapping, CheckpointMappingPhys, GenericObject,
+    },
     superblock::{NxSuperblock, ObjectIdentifier},
 };
 
@@ -26,11 +28,17 @@ impl<D: fal::Device> Filesystem<D> {
 
         let block_size = container_superblock.block_size as usize;
 
-        let mut descriptor_area = vec! [0u8; block_size * container_superblock.chkpnt_desc_blkcnt() as usize];
+        let mut descriptor_area =
+            vec![0u8; block_size * container_superblock.chkpnt_desc_blkcnt() as usize];
 
         for block_index in 0..container_superblock.chkpnt_desc_blkcnt() {
-            let range = block_index as usize * block_size .. (block_index as usize + 1) * block_size;
-            Self::read_block_to(&container_superblock, &mut device, &mut descriptor_area[range.clone()], container_superblock.chkpnt_desc_base + i64::from(block_index));
+            let range = block_index as usize * block_size..(block_index as usize + 1) * block_size;
+            Self::read_block_to(
+                &container_superblock,
+                &mut device,
+                &mut descriptor_area[range.clone()],
+                container_superblock.chkpnt_desc_base + i64::from(block_index),
+            );
 
             // Only when running fsck...
             //
@@ -39,15 +47,50 @@ impl<D: fal::Device> Filesystem<D> {
             //
         }
 
-        let superblock = (0..container_superblock.chkpnt_desc_len).map(|i| {
-            checkpoint::read_from_desc_area(&mut device, &container_superblock, container_superblock.chkpnt_desc_first + i)
-        }).filter_map(|entry| entry.into_superblock()).filter(|superblock| superblock.is_valid()).max_by_key(|superblock| superblock.header.transaction_id).unwrap();
+        let superblock = (0..container_superblock.chkpnt_desc_len)
+            .map(|i| {
+                checkpoint::read_from_desc_area(
+                    &mut device,
+                    &container_superblock,
+                    container_superblock.chkpnt_desc_first + i,
+                )
+            })
+            .filter_map(|entry| entry.into_superblock())
+            .filter(|superblock| superblock.is_valid())
+            .max_by_key(|superblock| superblock.header.transaction_id)
+            .unwrap();
 
-        let ephemeral_object_ids = (0..container_superblock.chkpnt_desc_len).map(|i| {
-            checkpoint::read_from_desc_area(&mut device, &container_superblock, container_superblock.chkpnt_desc_first + i)
-        }).filter_map(|entry| entry.into_mapping()).filter(|mapping| mapping.header.is_ephemeral() || true).map(|mapping: CheckpointMappingPhys| Vec::from(mapping.mappings).into_iter().map(|mapping: CheckpointMapping| (mapping.oid, mapping.paddr))).flatten().collect::<Vec<_>>();
+        let ephemeral_object_ids = (0..container_superblock.chkpnt_desc_len)
+            .map(|i| {
+                checkpoint::read_from_desc_area(
+                    &mut device,
+                    &container_superblock,
+                    container_superblock.chkpnt_desc_first + i,
+                )
+            })
+            .filter_map(|entry| entry.into_mapping())
+            .map(|mapping: CheckpointMappingPhys| {
+                Vec::from(mapping.mappings)
+                    .into_iter()
+                    .map(|mapping: CheckpointMapping| (mapping.oid, mapping.paddr))
+            })
+            .flatten()
+            .collect::<Vec<_>>();
 
-        let ephemeral_objects = ephemeral_object_ids.into_iter().map(|(id, paddr)| (id, checkpoint::read_from_data_area(&mut device, &container_superblock, (paddr.0 - superblock.chkpnt_data_base as u64) as u32).unwrap())).collect::<HashMap<ObjectIdentifier, GenericObject>>();
+        let ephemeral_objects = ephemeral_object_ids
+            .into_iter()
+            .map(|(id, paddr)| {
+                (
+                    id,
+                    checkpoint::read_from_data_area(
+                        &mut device,
+                        &container_superblock,
+                        (paddr.0 - superblock.chkpnt_data_base as u64) as u32,
+                    )
+                    .unwrap(),
+                )
+            })
+            .collect::<HashMap<ObjectIdentifier, GenericObject>>();
 
         let container_superblock: NxSuperblock = superblock;
 
@@ -57,23 +100,45 @@ impl<D: fal::Device> Filesystem<D> {
             ephemeral_objects,
         }
     }
-    pub fn read_block_to(superblock: &NxSuperblock, device: &mut D, block: &mut [u8], address: crate::superblock::BlockAddr) {
+    pub fn read_block_to(
+        superblock: &NxSuperblock,
+        device: &mut D,
+        block: &mut [u8],
+        address: crate::superblock::BlockAddr,
+    ) {
         debug_assert!(address >= 0);
         debug_assert_eq!(block.len(), superblock.block_size as usize);
 
-        device.seek(SeekFrom::Start(address as u64 * u64::from(superblock.block_size))).unwrap();
+        device
+            .seek(SeekFrom::Start(
+                address as u64 * u64::from(superblock.block_size),
+            ))
+            .unwrap();
         device.read_exact(block).unwrap();
     }
-    pub fn read_block(superblock: &NxSuperblock, device: &mut D, address: crate::superblock::BlockAddr) -> Box<[u8]> {
-        let mut block_bytes = vec! [0u8; superblock.block_size as usize].into_boxed_slice();
+    pub fn read_block(
+        superblock: &NxSuperblock,
+        device: &mut D,
+        address: crate::superblock::BlockAddr,
+    ) -> Box<[u8]> {
+        let mut block_bytes = vec![0u8; superblock.block_size as usize].into_boxed_slice();
         Self::read_block_to(superblock, device, &mut block_bytes, address);
         block_bytes
     }
 }
 impl<D: fal::DeviceMut> Filesystem<D> {
-    pub fn write_block(superblock: &NxSuperblock, device: &mut D, address: crate::superblock::BlockAddr, block: &[u8]) {
+    pub fn write_block(
+        superblock: &NxSuperblock,
+        device: &mut D,
+        address: crate::superblock::BlockAddr,
+        block: &[u8],
+    ) {
         debug_assert_eq!(block.len(), superblock.block_size as usize);
-        device.seek(SeekFrom::Start(address as u64 * u64::from(superblock.block_size))).unwrap();
+        device
+            .seek(SeekFrom::Start(
+                address as u64 * u64::from(superblock.block_size),
+            ))
+            .unwrap();
         device.write_all(&block).unwrap();
     }
 }

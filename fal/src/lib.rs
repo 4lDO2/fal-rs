@@ -201,7 +201,10 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 // TODO: Add some kind of Result type.
 /// An abstract filesystem. Typically implemented by the backend.
-pub trait Filesystem<D: Device> where Self: Sized {
+pub trait Filesystem<D: Device>
+where
+    Self: Sized,
+{
     /// An inode address. u32 on ext2.
     type InodeAddr: From<u32> + Into<u64> + Copy + TryFrom<u64> + Eq + std::fmt::Debug;
 
@@ -264,7 +267,10 @@ pub trait Filesystem<D: Device> where Self: Sized {
     fn filesystem_attrs(&self) -> FsAttributes;
 }
 
-pub trait FilesystemMut<D: DeviceMut>: Filesystem<D> where Self: Sized {
+pub trait FilesystemMut<D: DeviceMut>: Filesystem<D>
+where
+    Self: Sized,
+{
     fn unmount(self) {}
 
     /// Write the inode metadata to disk.

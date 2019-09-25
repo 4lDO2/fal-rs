@@ -1,4 +1,7 @@
-use crate::{div_round_up, read_u16, read_u32, read_u8, write_u8, write_u16, write_u32, write_uuid, read_uuid, Uuid};
+use crate::{
+    div_round_up, read_u16, read_u32, read_u8, read_uuid, write_u16, write_u32, write_u8,
+    write_uuid, Uuid,
+};
 
 use std::{
     ffi::CString,
@@ -186,7 +189,9 @@ impl RoFeatureFlags {
 }
 
 fn log2_round_up<T: From<u8> + AddAssign + ShrAssign + Eq>(mut t: T) -> T {
-    if t == 1.into() { return 0.into(); }
+    if t == 1.into() {
+        return 0.into();
+    }
 
     let mut count = 0.into();
 
@@ -345,8 +350,16 @@ impl Superblock {
         write_u32(buffer, 12, self.unalloc_block_count);
         write_u32(buffer, 16, self.unalloc_inode_count);
         write_u32(buffer, 20, self.superblock_block_num);
-        write_u32(buffer, 24, log2_round_up(self.block_size as u32) - log2_round_up(1024));
-        write_u32(buffer, 28, log2_round_up(self.fragment_size as u32) - log2_round_up(1024));
+        write_u32(
+            buffer,
+            24,
+            log2_round_up(self.block_size as u32) - log2_round_up(1024),
+        );
+        write_u32(
+            buffer,
+            28,
+            log2_round_up(self.fragment_size as u32) - log2_round_up(1024),
+        );
         write_u32(buffer, 32, self.blocks_per_group);
         write_u32(buffer, 36, self.fragments_per_group);
         write_u32(buffer, 40, self.inodes_per_group);
@@ -356,7 +369,11 @@ impl Superblock {
         write_u16(buffer, 54, self.mounts_left_before_fsck);
         write_u16(buffer, 56, SIGNATURE);
         write_u16(buffer, 58, FilesystemState::serialize(self.fs_state));
-        write_u16(buffer, 60, ErrorHandlingMethod::serialize(self.error_handling));
+        write_u16(
+            buffer,
+            60,
+            ErrorHandlingMethod::serialize(self.error_handling),
+        );
         write_u16(buffer, 62, self.minor_version);
         write_u32(buffer, 64, self.last_fsck_time);
         write_u32(buffer, 68, self.interval_between_forced_fscks);
@@ -374,10 +391,22 @@ impl Superblock {
         write_u32(buffer, 84, extended.first_nonreserved_inode);
         write_u16(buffer, 88, extended.inode_struct_size);
         write_u16(buffer, 90, extended.superblock_block_group);
-        write_u32(buffer, 92, OptionalFeatureFlags::into_raw(extended.opt_features_present));
-        write_u32(buffer, 96, RequiredFeatureFlags::into_raw(extended.req_features_present));
+        write_u32(
+            buffer,
+            92,
+            OptionalFeatureFlags::into_raw(extended.opt_features_present),
+        );
+        write_u32(
+            buffer,
+            96,
+            RequiredFeatureFlags::into_raw(extended.req_features_present),
+        );
 
-        write_u32(buffer, 100, RoFeatureFlags::into_raw(extended.req_features_for_rw));
+        write_u32(
+            buffer,
+            100,
+            RoFeatureFlags::into_raw(extended.req_features_for_rw),
+        );
         write_uuid(buffer, 104, &extended.fs_id);
 
         {

@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use fal::{read_u16, read_u32, read_u64};
 
-use crate::superblock::{BlockAddr, ObjectIdentifier, ObjPhys, TransactionIdentifier};
+use crate::superblock::{BlockAddr, ObjPhys, ObjectIdentifier, TransactionIdentifier};
 
 #[derive(Debug)]
 pub struct SpacemanagerDevice {
@@ -77,7 +77,9 @@ impl SpacemanagerAllocZoneInfoPhys {
         const PREVIOUS_BOUNDARIES_COUNT: usize = 7;
 
         // This collection starts at 16, and ends at 16 + 7 * 16 = 128.
-        let previous_boundaries = (0..PREVIOUS_BOUNDARIES_COUNT).map(|i| read_u64(bytes, 16 + i * 16 + 0)..read_u64(bytes, 16 + i * 16 + 8)).collect();
+        let previous_boundaries = (0..PREVIOUS_BOUNDARIES_COUNT)
+            .map(|i| read_u64(bytes, 16 + i * 16 + 0)..read_u64(bytes, 16 + i * 16 + 8))
+            .collect();
 
         Self {
             current_boundaries: read_u64(bytes, 0)..read_u64(bytes, 8),
@@ -99,7 +101,14 @@ impl SpacemanagerDatazoneInfoPhys {
     pub const LEN: usize = Self::ALLOCATION_ZONE_COUNT * SpacemanagerAllocZoneInfoPhys::LEN;
     pub fn parse(bytes: &[u8]) -> Self {
         Self {
-            allocation_zones: (0..SpacemanagerPhys::DEVICE_COUNT * Self::ALLOCATION_ZONE_COUNT).map(|i| SpacemanagerAllocZoneInfoPhys::parse(&bytes[i * SpacemanagerAllocZoneInfoPhys::LEN .. (i + 1) * SpacemanagerAllocZoneInfoPhys::LEN])).collect(),
+            allocation_zones: (0..SpacemanagerPhys::DEVICE_COUNT * Self::ALLOCATION_ZONE_COUNT)
+                .map(|i| {
+                    SpacemanagerAllocZoneInfoPhys::parse(
+                        &bytes[i * SpacemanagerAllocZoneInfoPhys::LEN
+                            ..(i + 1) * SpacemanagerAllocZoneInfoPhys::LEN],
+                    )
+                })
+                .collect(),
         }
     }
 }
@@ -138,11 +147,15 @@ impl SpacemanagerPhys {
         let header = ObjPhys::parse(bytes);
 
         // The devices field starts at 48, and since SD_COUNT = 2 and LEN = 48, it stops at 144.
-        let devices = (0..Self::DEVICE_COUNT).map(|i| SpacemanagerDevice::parse(&bytes[48 + i * 48..48 + (i + 1) * 48])).collect();
+        let devices = (0..Self::DEVICE_COUNT)
+            .map(|i| SpacemanagerDevice::parse(&bytes[48 + i * 48..48 + (i + 1) * 48]))
+            .collect();
 
         // The free queues field starts at 200, and since SFQ_COUNT = 3 and LEN = 40, it stops at
         // 320.
-        let free_queues = (0..3).map(|i| SpacemanagerFreeQueue::parse(&bytes[200 + i * 40 .. 200 + (i + 1) * 40])).collect();
+        let free_queues = (0..3)
+            .map(|i| SpacemanagerFreeQueue::parse(&bytes[200 + i * 40..200 + (i + 1) * 40]))
+            .collect();
 
         Self {
             header,

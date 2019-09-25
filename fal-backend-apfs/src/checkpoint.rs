@@ -6,8 +6,10 @@ use crate::{
     btree::BTreeNode,
     filesystem::Filesystem,
     reaper::ReaperPhys,
-    superblock::{BlockAddr, NxSuperblock, ObjectIdentifier, ObjPhys, ObjectType, ObjectTypeAndFlags},
     spacemanager::SpacemanagerPhys,
+    superblock::{
+        BlockAddr, NxSuperblock, ObjPhys, ObjectIdentifier, ObjectType, ObjectTypeAndFlags,
+    },
 };
 
 #[derive(Debug)]
@@ -54,10 +56,12 @@ impl CheckpointMappingPhys {
         let flags = read_u32(bytes, 32);
         let count = read_u32(bytes, 36);
 
-        let mut mappings = vec! [];
+        let mut mappings = vec![];
 
         for i in 0..count as usize {
-            mappings.push(CheckpointMapping::parse(&bytes[40 + i * 40 .. 40 + (i + 1) * 40]));
+            mappings.push(CheckpointMapping::parse(
+                &bytes[40 + i * 40..40 + (i + 1) * 40],
+            ));
         }
 
         let len = Self::BASE_LEN + count as usize * CheckpointMapping::LEN;
@@ -100,26 +104,50 @@ impl CheckpointDescAreaEntry {
     }
 }
 
-pub fn read_from_desc_area<D: fal::Device>(device: &mut D, superblock: &NxSuperblock, index: u32) -> CheckpointDescAreaEntry {
-    let block_bytes = Filesystem::read_block(superblock, device, superblock.chkpnt_desc_base + i64::from(index));
+pub fn read_from_desc_area<D: fal::Device>(
+    device: &mut D,
+    superblock: &NxSuperblock,
+    index: u32,
+) -> CheckpointDescAreaEntry {
+    let block_bytes = Filesystem::read_block(
+        superblock,
+        device,
+        superblock.chkpnt_desc_base + i64::from(index),
+    );
 
     let obj_phys = ObjPhys::parse(&block_bytes[..32]);
     match obj_phys.object_type.ty {
-        ObjectType::NxSuperblock => CheckpointDescAreaEntry::Superblock(NxSuperblock::parse(&block_bytes)),
-        ObjectType::CheckpointMap => CheckpointDescAreaEntry::Mapping(CheckpointMappingPhys::parse(&block_bytes)),
+        ObjectType::NxSuperblock => {
+            CheckpointDescAreaEntry::Superblock(NxSuperblock::parse(&block_bytes))
+        }
+        ObjectType::CheckpointMap => {
+            CheckpointDescAreaEntry::Mapping(CheckpointMappingPhys::parse(&block_bytes))
+        }
 
         other => panic!("Unexpected checkpoint desc area entry type: {:?}.", other),
     }
 }
 
-pub fn read_from_data_area<D: fal::Device>(device: &mut D, superblock: &NxSuperblock, index: u32) -> Option<GenericObject> {
-    let block_bytes = Filesystem::read_block(superblock, device, superblock.chkpnt_data_base + i64::from(index));
+pub fn read_from_data_area<D: fal::Device>(
+    device: &mut D,
+    superblock: &NxSuperblock,
+    index: u32,
+) -> Option<GenericObject> {
+    let block_bytes = Filesystem::read_block(
+        superblock,
+        device,
+        superblock.chkpnt_data_base + i64::from(index),
+    );
 
     let obj_phys = ObjPhys::parse(&block_bytes[..32]);
     match obj_phys.object_type.ty {
-        ObjectType::SpaceManager => Some(GenericObject::SpaceManager(SpacemanagerPhys::parse(&block_bytes))),
+        ObjectType::SpaceManager => Some(GenericObject::SpaceManager(SpacemanagerPhys::parse(
+            &block_bytes,
+        ))),
         ObjectType::NxReaper => Some(GenericObject::Reaper(ReaperPhys::parse(&block_bytes))),
-        ObjectType::Btree | ObjectType::BtreeNode => Some(GenericObject::BTreeNode(dbg!(BTreeNode::parse(&block_bytes)))),
+        ObjectType::Btree | ObjectType::BtreeNode => Some(GenericObject::BTreeNode(dbg!(
+            BTreeNode::parse(&block_bytes)
+        ))),
         _ => {
             dbg!(index);
             dbg!(obj_phys.object_type.ty, obj_phys.object_subtype);

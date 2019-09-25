@@ -63,7 +63,9 @@ impl<Backend: fal::FilesystemMut<File>> SchemeMut for RedoxFilesystem<Backend> {
         let inode_struct = syscall_result(self.inner.load_inode(file_inode))?;
         let permissions = fal::check_permissions(uid, gid, &inode_struct.attrs());
 
-        if ((flags & syscall::flag::O_RDONLY != 0) || flags & syscall::flag::O_RDWR != 0) && !permissions.read {
+        if ((flags & syscall::flag::O_RDONLY != 0) || flags & syscall::flag::O_RDWR != 0)
+            && !permissions.read
+        {
             return syscall_result(Err(fal::Error::AccessDenied));
         }
         if flags & syscall::flag::O_RDWR != 0 && !permissions.write {
@@ -115,7 +117,8 @@ impl<Backend: fal::FilesystemMut<File>> SchemeMut for RedoxFilesystem<Backend> {
 
             buf[..len].copy_from_slice(&contents.as_bytes()[offset..offset + len]);
             self.inner()
-                .fh_mut(fh as u64).set_offset(offset as u64 + len as u64);
+                .fh_mut(fh as u64)
+                .set_offset(offset as u64 + len as u64);
 
             Ok(len)
         } else {

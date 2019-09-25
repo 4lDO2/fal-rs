@@ -1,14 +1,14 @@
 use std::{
     convert::{TryFrom, TryInto},
     ffi::{OsStr, OsString},
-    io,
-    mem,
+    io, mem,
 };
 
 use crate::{
     block_group, div_round_up, os_str_to_bytes, os_string_from_bytes, read_block, read_block_to,
-    read_u16, read_u32, read_u8, round_up, superblock::{OsId, Superblock}, write_block, write_u16,
-    write_u32, write_u8, Filesystem,
+    read_u16, read_u32, read_u8, round_up,
+    superblock::{OsId, Superblock},
+    write_block, write_u16, write_u32, write_u8, Filesystem,
 };
 
 pub const ROOT: u32 = 2;
@@ -150,9 +150,7 @@ impl Inode {
         let inode_size = filesystem.superblock.inode_size();
 
         let containing_block_index = block_group_descriptor.inode_table_start_baddr
-            +
-                inode_index_in_group * u32::from(inode_size)
-                    / filesystem.superblock.block_size;
+            + inode_index_in_group * u32::from(inode_size) / filesystem.superblock.block_size;
 
         let max_inodes_in_block = filesystem.superblock.block_size / u32::from(inode_size);
 
@@ -163,7 +161,11 @@ impl Inode {
         let containing_block = read_block(filesystem, containing_block_index)?;
         let inode_bytes = &containing_block
             [inode_index_in_block * inode_size..inode_index_in_block * inode_size + inode_size];
-        Ok(Self::parse(&filesystem.superblock, inode_address, inode_bytes))
+        Ok(Self::parse(
+            &filesystem.superblock,
+            inode_address,
+            inode_bytes,
+        ))
     }
     pub fn store<D: fal::DeviceMut>(
         this: &Self,
@@ -188,9 +190,7 @@ impl Inode {
         let inode_size = filesystem.superblock.inode_size();
 
         let containing_block_index = block_group_descriptor.inode_table_start_baddr
-            +
-                inode_index_in_group * u32::from(inode_size)
-                    / filesystem.superblock.block_size;
+            + inode_index_in_group * u32::from(inode_size) / filesystem.superblock.block_size;
 
         let max_inodes_in_block = filesystem.superblock.block_size / u32::from(inode_size);
 
@@ -300,7 +300,8 @@ impl Inode {
 
         let stride = mem::size_of::<u32>();
         for (index, direct_ptr) in this.direct_ptrs.iter().enumerate() {
-            buffer[40 + index * stride..40 + (index + 1) * stride].copy_from_slice(&direct_ptr.to_le_bytes());
+            buffer[40 + index * stride..40 + (index + 1) * stride]
+                .copy_from_slice(&direct_ptr.to_le_bytes());
         }
 
         write_u32(buffer, 88, this.singly_indirect_ptr);

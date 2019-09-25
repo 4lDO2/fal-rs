@@ -150,7 +150,6 @@ impl<D: fal::DeviceMut> Filesystem<D> {
     }
 }
 
-
 impl fal::Inode for Inode {
     type InodeAddr = u32;
 
@@ -252,7 +251,10 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
     fn mount(mut device: D, path: &OsStr) -> Self {
         let mut superblock = Superblock::load(&mut device).unwrap();
 
-        superblock.last_mount_time = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs() as u32;
+        superblock.last_mount_time = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as u32;
         superblock.mounts_since_fsck += 1;
         superblock.mounts_left_before_fsck -= 1;
 
@@ -384,7 +386,7 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
 
         Ok(location.unwrap().into_boxed_slice())
     }
-    
+
     fn fh(&self, fh: u64) -> &FileHandle {
         &self.fhs[&fh]
     }
@@ -409,7 +411,9 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
 impl<D: fal::DeviceMut> fal::FilesystemMut<D> for Filesystem<D> {
     fn unmount(self) {
         dbg!("Storing filesystem superblock");
-        self.superblock.store(&mut *self.device.lock().unwrap()).unwrap()
+        self.superblock
+            .store(&mut *self.device.lock().unwrap())
+            .unwrap()
     }
     fn store_inode(&mut self, inode: &Inode) -> fal::Result<()> {
         Inode::store(inode, self)

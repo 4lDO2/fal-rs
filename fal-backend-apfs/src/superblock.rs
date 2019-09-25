@@ -1,12 +1,18 @@
 use std::{
-    io::{SeekFrom, prelude::*},
-    ops::BitOr, ops::BitAnd,
+    io::{prelude::*, SeekFrom},
+    ops::BitAnd,
+    ops::BitOr,
 };
 
-use enum_primitive::{enum_from_primitive, enum_from_primitive_impl, enum_from_primitive_impl_ty, FromPrimitive};
+use enum_primitive::{
+    enum_from_primitive, enum_from_primitive_impl, enum_from_primitive_impl_ty, FromPrimitive,
+};
 use uuid::Uuid;
 
-use fal::{read_u8, read_u16, read_u32, read_u64, read_uuid, write_u8, write_u16, write_u32, write_u64, write_uuid};
+use fal::{
+    read_u16, read_u32, read_u64, read_u8, read_uuid, write_u16, write_u32, write_u64, write_u8,
+    write_uuid,
+};
 
 /// A block address (paddr_t). Never negative.
 pub type BlockAddr = i64;
@@ -34,7 +40,7 @@ impl From<u64> for ObjectIdentifier {
     }
 }
 impl From<ObjectIdentifier> for u64 {
-    fn from(ObjectIdentifier(oid): ObjectIdentifier) -> Self{
+    fn from(ObjectIdentifier(oid): ObjectIdentifier) -> Self {
         oid
     }
 }
@@ -330,9 +336,8 @@ pub struct NxSuperblock {
     pub reaper_oid: ObjectIdentifier,
 
     // test_type: u32
-
     pub max_volume_count: u32,
-    pub volumes_oids: Box<[ObjectIdentifier]>, 
+    pub volumes_oids: Box<[ObjectIdentifier]>,
     pub counters: Box<[u64]>,
 
     pub blocked_out_blocks: BlockRange,
@@ -346,7 +351,6 @@ pub struct NxSuperblock {
     pub ephemeral_info: Box<[u64]>,
 
     // test_oid: u32
-
     pub fusion_mt_oid: ObjectIdentifier,
     pub fusion_wbc_oid: ObjectIdentifier,
     pub fusion_wbc: BlockRange,
@@ -404,7 +408,7 @@ impl NxSuperblock {
         let max_volume_count = read_u32(block_bytes, 180);
         assert!(max_volume_count <= 100);
 
-        let mut volumes_oids = vec! [];
+        let mut volumes_oids = vec![];
 
         for i in 0..max_volume_count {
             volumes_oids.push(read_u64(block_bytes, 180 + i as usize * 8).into());
@@ -433,7 +437,7 @@ impl NxSuperblock {
             count: read_u64(block_bytes, 1304),
         };
 
-        let mut ephemeral_info = vec! [];
+        let mut ephemeral_info = vec![];
 
         for i in 0..Self::EPH_INFO_COUNT {
             ephemeral_info.push(read_u64(block_bytes, 1312 + i as usize * 8));
@@ -484,7 +488,7 @@ impl NxSuperblock {
             max_volume_count,
             volumes_oids,
 
-            counters: vec! [].into_boxed_slice(),
+            counters: vec![].into_boxed_slice(),
             blocked_out_blocks,
 
             evict_mapping_tre_oid,

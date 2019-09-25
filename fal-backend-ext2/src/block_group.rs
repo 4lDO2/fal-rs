@@ -69,14 +69,16 @@ pub fn inode_exists<D: fal::Device>(inode: u32, filesystem: &Filesystem<D>) -> i
     let descriptor = load_block_group_descriptor(filesystem, group_index)?;
 
     let bm_start_baddr = descriptor.inode_usage_bm_baddr;
-    let bm_block_index =
-        u32::try_from(u64::from(index_inside_group / 8) / u64::from(filesystem.superblock.block_size))
-            .unwrap();
+    let bm_block_index = u32::try_from(
+        u64::from(index_inside_group / 8) / u64::from(filesystem.superblock.block_size),
+    )
+    .unwrap();
 
     let block_bytes = read_block(filesystem, bm_start_baddr + bm_block_index)?;
 
     let byte_index_inside_bm =
-        u32::try_from(u64::from(index_inside_group) / u64::from(filesystem.superblock.block_size)).unwrap();
+        u32::try_from(u64::from(index_inside_group) / u64::from(filesystem.superblock.block_size))
+            .unwrap();
 
     let bm_byte = block_bytes[usize::try_from(byte_index_inside_bm).unwrap()];
     let bm_bit = 1 << ((inode - 1) % 8);
@@ -96,9 +98,10 @@ pub fn block_exists<D: fal::Device>(baddr: u32, filesystem: &Filesystem<D>) -> i
     let descriptor = load_block_group_descriptor(filesystem, group_index)?;
 
     let bm_start_baddr = descriptor.block_usage_bm_baddr;
-    let bm_block_index =
-        u32::try_from(u64::from(index_inside_group / 8) / u64::from(filesystem.superblock.block_size))
-            .unwrap();
+    let bm_block_index = u32::try_from(
+        u64::from(index_inside_group / 8) / u64::from(filesystem.superblock.block_size),
+    )
+    .unwrap();
 
     let mut block_bytes = vec![0; usize::try_from(filesystem.superblock.block_size).unwrap()];
     read_block_to_raw(
@@ -108,7 +111,8 @@ pub fn block_exists<D: fal::Device>(baddr: u32, filesystem: &Filesystem<D>) -> i
     )?;
 
     let byte_index_inside_bm =
-        u32::try_from(u64::from(index_inside_group) / u64::from(filesystem.superblock.block_size)).unwrap();
+        u32::try_from(u64::from(index_inside_group) / u64::from(filesystem.superblock.block_size))
+            .unwrap();
 
     let bm_byte = block_bytes[usize::try_from(byte_index_inside_bm).unwrap()];
     let bm_bit = 1 << (baddr % 8);

@@ -1,9 +1,9 @@
+use crate::superblock::ObjPhys;
+use fal::{read_u16, read_u32, read_u64};
 use std::{
     convert::{TryFrom, TryInto},
     ops::{BitAnd, BitOr, Range},
 };
-use fal::{read_u16, read_u32, read_u64};
-use crate::superblock::ObjPhys;
 
 pub type NodeLocation = Range<u16>;
 
@@ -40,7 +40,13 @@ impl BTreeNodeFlags {
         Self(0)
     }
     pub fn all() -> Self {
-        Self::u64_keys() | Self::sequential_insert() | Self::allow_ghosts() | Self::ephemeral() | Self::physical() | Self::nonpersistent() | Self::key_val_nonaligned()
+        Self::u64_keys()
+            | Self::sequential_insert()
+            | Self::allow_ghosts()
+            | Self::ephemeral()
+            | Self::physical()
+            | Self::nonpersistent()
+            | Self::key_val_nonaligned()
     }
 }
 
@@ -52,7 +58,7 @@ impl TryFrom<u16> for BTreeNodeFlags {
     fn try_from(raw: u16) -> Result<Self, Self::Error> {
         let outside = raw & !(Self::all().0);
         if outside != 0 {
-            return Err(BTreeNodeFlagsUnknown(outside))
+            return Err(BTreeNodeFlagsUnknown(outside));
         }
         Ok(Self(raw))
     }
@@ -95,7 +101,6 @@ impl std::fmt::Debug for BTreeNodeFlags {
         }
         if *self & Self::key_val_nonaligned() != Self::none() {
             components.push("KV_NONALIGNED");
-
         }
 
         write!(f, "{}", components.join(" | "))
@@ -128,7 +133,7 @@ impl BTreeNode {
             free_space: read_nloc(bytes, 44),
             key_free_list: read_nloc(bytes, 48),
             val_free_list: read_nloc(bytes, 52),
-            data: vec! [], // FIXME
+            data: vec![], // FIXME
         }
     }
 }

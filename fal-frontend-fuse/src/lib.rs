@@ -231,7 +231,10 @@ impl<Backend: fal::FilesystemMut<File>> fuse::Filesystem for FuseFilesystem<Back
             }
         };
 
-        assert_eq!(inode.into(), self.inner().fh(fh).inode().attrs().inode.into());
+        assert_eq!(
+            inode.into(),
+            self.inner().fh(fh).inode().attrs().inode.into()
+        );
 
         match self.inner().read_directory(fh, offset) {
             Ok(Some(entry)) => {
@@ -276,17 +279,19 @@ impl<Backend: fal::FilesystemMut<File>> fuse::Filesystem for FuseFilesystem<Back
         let attrs = inode_struct.attrs();
         let permissions = fal::check_permissions(req.uid(), req.gid(), &attrs);
 
-        if ((flags & libc::O_RDONLY as u32 != 0) || flags & libc::O_RDWR as u32 != 0) && !permissions.read {
+        if ((flags & libc::O_RDONLY as u32 != 0) || flags & libc::O_RDWR as u32 != 0)
+            && !permissions.read
+        {
             reply.error(libc::EACCES);
-            return
+            return;
         }
         if flags & libc::O_RDWR as u32 != 0 && !permissions.write {
             reply.error(libc::EACCES);
-            return
+            return;
         }
         if flags & libc::O_EXCL as u32 != 0 && !permissions.execute {
             reply.error(libc::EACCES);
-            return
+            return;
         }
 
         let fh = match self.inner().open_file(inode) {
@@ -298,22 +303,23 @@ impl<Backend: fal::FilesystemMut<File>> fuse::Filesystem for FuseFilesystem<Back
         };
         reply.opened(fh, 0);
     }
-    fn setattr(&mut self, 
-        _req: &Request, 
-        fuse_inode: u64, 
-        mode: Option<u32>, 
-        uid: Option<u32>, 
-        gid: Option<u32>, 
-        _size: Option<u64>, 
-        _atime: Option<Timespec>, 
-        _mtime: Option<Timespec>, 
-        _fh: Option<u64>, 
-        _crtime: Option<Timespec>, 
-        _chgtime: Option<Timespec>, 
-        _bkuptime: Option<Timespec>, 
-        _flags: Option<u32>, 
-    reply: ReplyAttr)
-    {
+    fn setattr(
+        &mut self,
+        _req: &Request,
+        fuse_inode: u64,
+        mode: Option<u32>,
+        uid: Option<u32>,
+        gid: Option<u32>,
+        _size: Option<u64>,
+        _atime: Option<Timespec>,
+        _mtime: Option<Timespec>,
+        _fh: Option<u64>,
+        _crtime: Option<Timespec>,
+        _chgtime: Option<Timespec>,
+        _bkuptime: Option<Timespec>,
+        _flags: Option<u32>,
+        reply: ReplyAttr,
+    ) {
         let inode: Backend::InodeAddr = match fuse_inode_to_fs_inode(fuse_inode) {
             Some(inode) => inode,
             None => {

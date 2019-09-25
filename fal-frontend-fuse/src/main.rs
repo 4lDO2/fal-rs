@@ -55,7 +55,7 @@ fn main() {
                 .map(OsString::from)
                 .collect::<Vec<_>>()
         } else {
-            vec! []
+            vec![]
         };
         let options = options_owned
             .iter()
@@ -66,19 +66,43 @@ fn main() {
 
         match filesystem_type {
             #[cfg(feature = "ext2")]
-            "ext2" =>
-                fuse::mount(FuseFilesystem::<fal_backend_ext2::Filesystem<std::fs::File>>::init(file, mount_point.as_ref(), fuse_options)
-                    .expect("Failed to initialize the driver"), &mount_point, &options).unwrap(),
+            "ext2" => fuse::mount(
+                FuseFilesystem::<fal_backend_ext2::Filesystem<std::fs::File>>::init(
+                    file,
+                    mount_point.as_ref(),
+                    fuse_options,
+                )
+                .expect("Failed to initialize the driver"),
+                &mount_point,
+                &options,
+            )
+            .unwrap(),
 
             #[cfg(feature = "btrfs")]
-            "btrfs" =>
-                fuse::mount(FuseFilesystem::<fal_backend_btrfs::Filesystem<std::fs::File>>::init(file, mount_point.as_ref(), fuse_options)
-                    .expect("Failed to initialize the driver"), &mount_point, &options).unwrap(),
+            "btrfs" => fuse::mount(
+                FuseFilesystem::<fal_backend_btrfs::Filesystem<std::fs::File>>::init(
+                    file,
+                    mount_point.as_ref(),
+                    fuse_options,
+                )
+                .expect("Failed to initialize the driver"),
+                &mount_point,
+                &options,
+            )
+            .unwrap(),
 
             #[cfg(feature = "apfs")]
-            "apfs" =>
-                fuse::mount(FuseFilesystem::<fal_backend_apfs::Filesystem<std::fs::File>>::init(file, mount_point.as_ref(), fuse_options)
-                    .expect("Failed to initialize the driver"), &mount_point, &options).unwrap(),
+            "apfs" => fuse::mount(
+                FuseFilesystem::<fal_backend_apfs::Filesystem<std::fs::File>>::init(
+                    file,
+                    mount_point.as_ref(),
+                    fuse_options,
+                )
+                .expect("Failed to initialize the driver"),
+                &mount_point,
+                &options,
+            )
+            .unwrap(),
 
             other => panic!("unknown filesystem type: {}.", other),
         }

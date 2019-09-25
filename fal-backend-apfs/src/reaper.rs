@@ -1,6 +1,6 @@
 use fal::{read_u32, read_u64};
 
-use crate::superblock::{ObjectIdentifier, ObjPhys, TransactionIdentifier};
+use crate::superblock::{ObjPhys, ObjectIdentifier, TransactionIdentifier};
 
 #[derive(Debug)]
 pub struct ReaperPhys {
