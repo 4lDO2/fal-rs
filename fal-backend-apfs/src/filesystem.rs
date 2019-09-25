@@ -5,6 +5,7 @@ use std::{
 };
 
 use crate::{
+    btree::BTreeNode,
     checkpoint::{
         self, CheckpointDescAreaEntry, CheckpointMapping, CheckpointMappingPhys, GenericObject,
     },
@@ -96,6 +97,9 @@ impl<D: fal::Device> Filesystem<D> {
         let container_superblock: NxSuperblock = superblock;
 
         let omap = OmapPhys::parse(&Self::read_block(&container_superblock, &mut device, container_superblock.object_map_oid.0 as i64));
+
+        let omap_tree = BTreeNode::parse(&Self::read_block(&container_superblock, &mut device, omap.tree_oid.0 as i64));
+        dbg!(omap_tree);
 
         Self {
             container_superblock,
