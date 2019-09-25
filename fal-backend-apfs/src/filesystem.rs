@@ -8,6 +8,7 @@ use crate::{
     checkpoint::{
         self, CheckpointDescAreaEntry, CheckpointMapping, CheckpointMappingPhys, GenericObject,
     },
+    omap::OmapPhys,
     superblock::{NxSuperblock, ObjectIdentifier},
 };
 
@@ -93,6 +94,8 @@ impl<D: fal::Device> Filesystem<D> {
             .collect::<HashMap<ObjectIdentifier, GenericObject>>();
 
         let container_superblock: NxSuperblock = superblock;
+
+        let omap = OmapPhys::parse(&Self::read_block(&container_superblock, &mut device, container_superblock.object_map_oid.0 as i64));
 
         Self {
             container_superblock,

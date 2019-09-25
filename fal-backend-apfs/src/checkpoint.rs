@@ -145,9 +145,9 @@ pub fn read_from_data_area<D: fal::Device>(
             &block_bytes,
         ))),
         ObjectType::NxReaper => Some(GenericObject::Reaper(ReaperPhys::parse(&block_bytes))),
-        ObjectType::Btree | ObjectType::BtreeNode => Some(GenericObject::BTreeNode(dbg!(
+        ObjectType::Btree | ObjectType::BtreeNode => Some(GenericObject::BTreeNode(
             BTreeNode::parse(&block_bytes)
-        ))),
+        )),
         _ => {
             dbg!(index);
             dbg!(obj_phys.object_type.ty, obj_phys.object_subtype);
