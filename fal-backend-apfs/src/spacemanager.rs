@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use fal::{read_u16, read_u32, read_u64};
 
-use crate::superblock::{BlockAddr, ObjPhys, ObjectIdentifier, TransactionIdentifier};
+use crate::{BlockAddr, ObjPhys, ObjectIdentifier, TransactionIdentifier};
 
 #[derive(Debug)]
 pub struct SpacemanagerDevice {

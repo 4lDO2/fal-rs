@@ -9,14 +9,16 @@ use crate::{
     checkpoint::{
         self, CheckpointDescAreaEntry, CheckpointMapping, CheckpointMappingPhys, GenericObject,
     },
-    omap::{OmapKey, OmapPhys},
-    superblock::{NxSuperblock, ObjectIdentifier},
+    omap::{OmapKey, OmapPhys, OmapValue},
+    superblock::{ApfsSuperblock, NxSuperblock},
+    BlockAddr, ObjectIdentifier,
 };
 
 pub struct Filesystem<D: fal::Device> {
     pub device: Mutex<D>,
     pub container_superblock: NxSuperblock,
     pub ephemeral_objects: HashMap<ObjectIdentifier, GenericObject>,
+    pub mounted_volumes: Vec<ApfsSuperblock>,
 }
 
 impl<D: fal::Device> Filesystem<D> {
@@ -100,22 +102,29 @@ impl<D: fal::Device> Filesystem<D> {
 
         let omap_tree = BTreeNode::parse(&Self::read_block(&container_superblock, &mut device, omap.tree_oid.0 as i64));
 
-        let value = omap_tree.get_from_root(&BTreeKey::OmapKey(OmapKey {
-            oid: container_superblock.volumes_oids[0],
-            xid: container_superblock.header.transaction_id,
-        }));
+        let mounted_volumes = container_superblock.volumes_oids.iter().take_while(|oid| **oid != ObjectIdentifier::INVALID).copied().map(|volume| {
+            let omap_value: OmapValue = omap_tree.get_from_root(&BTreeKey::OmapKey(OmapKey {
+                oid: volume,
+                xid: container_superblock.header.transaction_id,
+            })).expect("Volume virtual oid_t wasn't found in the omap b+ tree.").into_omap_value().unwrap();
+
+            ApfsSuperblock::parse(&Self::read_block(&container_superblock, &mut device, omap_value.paddr))
+        }).collect();
+
+        dbg!(&mounted_volumes);
 
         Self {
             container_superblock,
             device: Mutex::new(device),
             ephemeral_objects,
+            mounted_volumes,
         }
     }
     pub fn read_block_to(
         superblock: &NxSuperblock,
         device: &mut D,
         block: &mut [u8],
-        address: crate::superblock::BlockAddr,
+        address: crate::BlockAddr,
     ) {
         debug_assert!(address >= 0);
         debug_assert_eq!(block.len(), superblock.block_size as usize);
@@ -130,7 +139,7 @@ impl<D: fal::Device> Filesystem<D> {
     pub fn read_block(
         superblock: &NxSuperblock,
         device: &mut D,
-        address: crate::superblock::BlockAddr,
+        address: crate::BlockAddr,
     ) -> Box<[u8]> {
         let mut block_bytes = vec![0u8; superblock.block_size as usize].into_boxed_slice();
         Self::read_block_to(superblock, device, &mut block_bytes, address);
@@ -141,7 +150,7 @@ impl<D: fal::DeviceMut> Filesystem<D> {
     pub fn write_block(
         superblock: &NxSuperblock,
         device: &mut D,
-        address: crate::superblock::BlockAddr,
+        address: BlockAddr,
         block: &[u8],
     ) {
         debug_assert_eq!(block.len(), superblock.block_size as usize);

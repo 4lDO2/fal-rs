@@ -1,6 +1,6 @@
 use crate::{
     omap::{OmapKey, OmapValue},
-    superblock::{ObjectType, ObjPhys},
+    ObjectType, ObjPhys
 };
 
 use fal::{read_u16, read_u32, read_u64};
@@ -304,6 +304,14 @@ pub enum BTreeKey {
 #[derive(Debug)]
 pub enum BTreeValue {
     OmapValue(OmapValue),
+}
+
+impl BTreeValue {
+    pub fn into_omap_value(self) -> Option<OmapValue> {
+        match self {
+            Self::OmapValue(val) => Some(val),
+        }
+    }
 }
 
 impl BTreeNode {

@@ -7,9 +7,8 @@ use crate::{
     filesystem::Filesystem,
     reaper::ReaperPhys,
     spacemanager::SpacemanagerPhys,
-    superblock::{
-        BlockAddr, NxSuperblock, ObjPhys, ObjectIdentifier, ObjectType, ObjectTypeAndFlags,
-    },
+    superblock::NxSuperblock,
+    ObjPhys, ObjectIdentifier, ObjectType, ObjectTypeAndFlags,
 };
 
 #[derive(Debug)]

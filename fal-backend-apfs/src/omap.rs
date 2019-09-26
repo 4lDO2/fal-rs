@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 use fal::{read_u32, read_u64};
-use crate::superblock::{BlockAddr, ObjectIdentifier, ObjPhys, TransactionIdentifier};
+use crate::{BlockAddr, ObjectIdentifier, ObjPhys, TransactionIdentifier};
 
 #[derive(Debug)]
 pub struct OmapPhys {

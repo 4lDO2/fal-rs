@@ -1,15 +1,14 @@
 use std::{
-    io::{prelude::*, SeekFrom},
+    io::SeekFrom,
     ops::BitAnd,
     ops::BitOr,
 };
 
 use uuid::Uuid;
 
-use fal::{
-    read_u16, read_u32, read_u64, read_u8, read_uuid, write_u16, write_u32, write_u64, write_u8,
-    write_uuid,
-};
+use fal::{read_u32, read_u64, read_uuid, write_u32, write_u64, write_uuid};
+
+use crate::{BlockAddr, BlockRange, ObjectIdentifier, TransactionIdentifier, ObjPhys};
 
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -149,6 +148,7 @@ impl BitAnd for RoCompatFeatures {
     }
 }
 
+/// Per-container (partition) superblock.
 #[derive(Debug)]
 pub struct NxSuperblock {
     pub header: ObjPhys,
@@ -375,5 +375,51 @@ impl NxSuperblock {
     pub fn is_valid(&self) -> bool {
         // FIXME
         true
+    }
+}
+
+/// Per-volume superblock.
+#[derive(Debug)]
+pub struct ApfsSuperblock {
+    header: ObjPhys,
+
+    // magic
+    fs_index: u32,
+
+    features: u64,
+    ro_incompat_features: u64,
+    incompat_features: u64,
+
+    unmount_time: u64,
+
+    fs_reserve_block_count: u64,
+    fs_quota_block_count: u64,
+    fs_alloc_count: u64,
+}
+
+impl ApfsSuperblock {
+    pub const MAGIC: u32 = 0x42535041; // 'BSPA'
+
+    pub fn parse(bytes: &[u8]) -> Self {
+        let header = ObjPhys::parse(&bytes[..32]);
+
+        assert_eq!(read_u32(bytes, 32), Self::MAGIC);
+
+        Self {
+            header,
+
+            fs_index: read_u32(bytes, 36),
+
+            features: read_u64(bytes, 40),
+            ro_incompat_features: read_u64(bytes, 48),
+            incompat_features: read_u64(bytes, 56),
+
+            unmount_time: read_u64(bytes, 64),
+
+            fs_reserve_block_count: read_u64(bytes, 72),
+            fs_quota_block_count: read_u64(bytes, 80),
+            fs_alloc_count: read_u64(bytes, 88),
+
+        }
     }
 }
