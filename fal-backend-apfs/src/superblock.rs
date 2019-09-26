@@ -25,7 +25,7 @@ pub struct BlockRange {
 }
 
 /// (oid_t).
-#[derive(Clone, Copy, Debug, PartialEq, Hash, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Hash, Eq, PartialOrd, Ord)]
 pub struct ObjectIdentifier(pub u64);
 
 impl ObjectIdentifier {
@@ -411,26 +411,26 @@ impl NxSuperblock {
         let mut volumes_oids = vec![];
 
         for i in 0..max_volume_count {
-            volumes_oids.push(read_u64(block_bytes, 180 + i as usize * 8).into());
+            volumes_oids.push(read_u64(block_bytes, 184 + i as usize * 8).into());
         }
 
         let volumes_oids = volumes_oids.into_boxed_slice();
 
-        // The new offset should be 8 * 100 + 180 = 980.
+        // The new offset should be 8 * 100 + 184 = 984.
         // As the counters are only used for debugging, we can ignore them for now.
 
-        // The counters take up 32 * sizeof(u64) bytes, which sets the new offset to 980 + 256 =
-        // 1236.
+        // The counters take up 32 * sizeof(u64) bytes, which sets the new offset to 984 + 256 =
+        // 1240.
 
         let blocked_out_blocks = BlockRange {
-            start: read_u64(block_bytes, 1236) as i64,
-            count: read_u64(block_bytes, 1244),
+            start: read_u64(block_bytes, 1240) as i64,
+            count: read_u64(block_bytes, 1248),
         };
 
-        let evict_mapping_tre_oid = read_u64(block_bytes, 1252).into();
-        let flags = read_u64(block_bytes, 1260);
-        let efi_jumpstart = read_u64(block_bytes, 1268) as i64;
-        let fusion_uuid = read_uuid(block_bytes, 1276);
+        let evict_mapping_tre_oid = read_u64(block_bytes, 1256).into();
+        let flags = read_u64(block_bytes, 1264);
+        let efi_jumpstart = read_u64(block_bytes, 1272) as i64;
+        let fusion_uuid = read_uuid(block_bytes, 1280);
 
         let keylocker = BlockRange {
             start: read_u64(block_bytes, 1296) as i64,
