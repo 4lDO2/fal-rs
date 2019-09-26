@@ -9,6 +9,8 @@ use std::{
     ops::{AddAssign, ShrAssign},
 };
 
+use bitflags::bitflags;
+
 pub const SUPERBLOCK_OFFSET: u64 = 1024;
 pub const SUPERBLOCK_LEN: u64 = 1024;
 
@@ -63,128 +65,31 @@ pub struct SuperblockExtension {
     pub orphan_inode_head_list: u32,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct OptionalFeatureFlags {
-    pub preallocate_dir_blocks: bool,
-    pub afs_server_inodes: bool,
-    pub has_journal: bool,
-    pub inode_extended_attributes: bool,
-    pub growable: bool,
-    pub dir_hash_index: bool,
-}
-impl OptionalFeatureFlags {
-    pub const PREALLOCATE_DIR_BLOCKS_BIT: u32 = 0x0001;
-    pub const AFS_SERVER_INODES_BIT: u32 = 0x0002;
-    pub const HAS_JOURNAL_BIT: u32 = 0x0004;
-    pub const INODE_EXTENDED_ATTRIBUTES_BIT: u32 = 0x0008;
-    pub const GROWABLE_BIT: u32 = 0x0010;
-    pub const DIR_HASH_INDEX_BIT: u32 = 0x0020;
-
-    pub fn from_raw(raw: u32) -> Self {
-        Self {
-            preallocate_dir_blocks: raw & Self::PREALLOCATE_DIR_BLOCKS_BIT != 0,
-            afs_server_inodes: raw & Self::AFS_SERVER_INODES_BIT != 0,
-            has_journal: raw & Self::HAS_JOURNAL_BIT != 0,
-            inode_extended_attributes: raw & Self::INODE_EXTENDED_ATTRIBUTES_BIT != 0,
-            growable: raw & Self::GROWABLE_BIT != 0,
-            dir_hash_index: raw & Self::DIR_HASH_INDEX_BIT != 0,
-        }
-    }
-    pub fn into_raw(this: Self) -> u32 {
-        let mut raw = 0;
-        if this.preallocate_dir_blocks {
-            raw |= Self::PREALLOCATE_DIR_BLOCKS_BIT;
-        }
-        if this.afs_server_inodes {
-            raw |= Self::AFS_SERVER_INODES_BIT;
-        }
-        if this.has_journal {
-            raw |= Self::HAS_JOURNAL_BIT;
-        }
-        if this.inode_extended_attributes {
-            raw |= Self::INODE_EXTENDED_ATTRIBUTES_BIT;
-        }
-        if this.growable {
-            raw |= Self::GROWABLE_BIT;
-        }
-        if this.dir_hash_index {
-            raw |= Self::DIR_HASH_INDEX_BIT
-        }
-        raw
+bitflags! {
+    pub struct OptionalFeatureFlags: u32 {
+        const PREALLOCATE_DIR_BLOCKS = 0x0001;
+        const AFS_SERVER_INODES = 0x0002;
+        const HAS_JOURNAL = 0x0004;
+        const INODE_EXTENDED_ATTRS = 0x0008;
+        const GROWABLE_BIT = 0x0010;
+        const DIR_HASH_INDEX = 0x0020;
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct RequiredFeatureFlags {
-    pub compression: bool,
-    pub dir_type: bool,
-    pub replay_journal_mandatory: bool,
-    pub journal_device: bool,
-}
-
-impl RequiredFeatureFlags {
-    pub const COMPRESSION_BIT: u32 = 0x0001;
-    pub const DIR_TYPE_BIT: u32 = 0x0002;
-    pub const REPLAY_JOURNAL_MANDATORY_BIT: u32 = 0x0004;
-    pub const JOURNAL_DEVICE_BIT: u32 = 0x0008;
-
-    pub fn from_raw(raw: u32) -> Self {
-        Self {
-            compression: raw & Self::COMPRESSION_BIT != 0,
-            dir_type: raw & Self::DIR_TYPE_BIT != 0,
-            replay_journal_mandatory: raw & Self::REPLAY_JOURNAL_MANDATORY_BIT != 0,
-            journal_device: raw & Self::JOURNAL_DEVICE_BIT != 0,
-        }
-    }
-    pub fn into_raw(this: Self) -> u32 {
-        let mut raw = 0;
-        if this.compression {
-            raw |= Self::COMPRESSION_BIT;
-        }
-        if this.dir_type {
-            raw |= Self::DIR_TYPE_BIT;
-        }
-        if this.replay_journal_mandatory {
-            raw |= Self::REPLAY_JOURNAL_MANDATORY_BIT;
-        }
-        if this.journal_device {
-            raw |= Self::JOURNAL_DEVICE_BIT
-        }
-        raw
+bitflags! {
+    pub struct RequiredFeatureFlags: u32 {
+        const COMPRESSION = 0x0001;
+        const DIR_TYPE = 0x0002;
+        const REPLAY_JOURNAL_MANDATORY = 0x0004;
+        const JOURNAL_DEVICE = 0x0008;
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct RoFeatureFlags {
-    pub sparse_super: bool,
-    pub extended_file_size: bool,
-    pub bst_dir_contents: bool,
-}
-
-impl RoFeatureFlags {
-    pub const SPARSE_SUPER_BIT: u32 = 0x0001;
-    pub const EXTENDED_FILE_SIZE_BIT: u32 = 0x0002;
-    pub const BST_DIR_CONTENTS_BIT: u32 = 0x0004;
-
-    pub fn from_raw(raw: u32) -> Self {
-        Self {
-            sparse_super: raw & Self::SPARSE_SUPER_BIT != 0,
-            extended_file_size: raw & Self::EXTENDED_FILE_SIZE_BIT != 0,
-            bst_dir_contents: raw & Self::BST_DIR_CONTENTS_BIT != 0,
-        }
-    }
-    pub fn into_raw(this: Self) -> u32 {
-        let mut raw = 0;
-        if this.sparse_super {
-            raw |= Self::SPARSE_SUPER_BIT;
-        }
-        if this.extended_file_size {
-            raw |= Self::EXTENDED_FILE_SIZE_BIT;
-        }
-        if this.bst_dir_contents {
-            raw |= Self::BST_DIR_CONTENTS_BIT
-        }
-        raw
+bitflags! {
+    pub struct RoFeatureFlags: u32 {
+        const SPARSE_SUPER = 0x0001;
+        const EXTENDED_FILE_SIZE = 0x0002;
+        const BST_DIR_CONTENTS = 0x0004;
     }
 }
 
@@ -245,10 +150,10 @@ impl Superblock {
             let first_nonreserved_inode = read_u32(&block_bytes, 84);
             let inode_struct_size = read_u16(&block_bytes, 88);
             let superblock_block_group = read_u16(&block_bytes, 90);
-            let opt_features_present = OptionalFeatureFlags::from_raw(read_u32(&block_bytes, 92));
-            let req_features_present = RequiredFeatureFlags::from_raw(read_u32(&block_bytes, 96));
+            let opt_features_present = OptionalFeatureFlags::from_bits(read_u32(&block_bytes, 92)).unwrap();
+            let req_features_present = RequiredFeatureFlags::from_bits(read_u32(&block_bytes, 96)).unwrap();
 
-            let req_features_for_rw = RoFeatureFlags::from_raw(read_u32(&block_bytes, 100));
+            let req_features_for_rw = RoFeatureFlags::from_bits(read_u32(&block_bytes, 100)).unwrap();
             let fs_id = read_uuid(&block_bytes, 104);
 
             let vol_name = {
@@ -394,18 +299,18 @@ impl Superblock {
         write_u32(
             buffer,
             92,
-            OptionalFeatureFlags::into_raw(extended.opt_features_present),
+            extended.opt_features_present.bits(),
         );
         write_u32(
             buffer,
             96,
-            RequiredFeatureFlags::into_raw(extended.req_features_present),
+            extended.req_features_present.bits(),
         );
 
         write_u32(
             buffer,
             100,
-            RoFeatureFlags::into_raw(extended.req_features_for_rw),
+            extended.req_features_for_rw.bits(),
         );
         write_uuid(buffer, 104, &extended.fs_id);
 

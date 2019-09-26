@@ -7,7 +7,7 @@ use std::{
 use crate::{
     block_group, div_round_up, os_str_to_bytes, os_string_from_bytes, read_block, read_block_to,
     read_u16, read_u32, read_u8, round_up,
-    superblock::{OsId, Superblock},
+    superblock::{OptionalFeatureFlags, OsId, RequiredFeatureFlags, RoFeatureFlags, Superblock},
     write_block, write_u16, write_u32, write_u8, Filesystem,
 };
 
@@ -235,7 +235,7 @@ impl Inode {
 
         let size = u64::from(size_low)
             | if let Some(extended) = superblock.extended.as_ref() {
-                if extended.req_features_for_rw.extended_file_size && ty == InodeType::File {
+                if extended.req_features_for_rw.contains(RoFeatureFlags::EXTENDED_FILE_SIZE) && ty == InodeType::File {
                     u64::from(size_high_or_acl) << 32
                 } else {
                     0
@@ -792,7 +792,7 @@ impl DirEntry {
         Self {
             inode: read_u32(bytes, 0),
             type_indicator: if let Some(extended) = superblock.extended.as_ref() {
-                if extended.opt_features_present.inode_extended_attributes {
+                if extended.opt_features_present.contains(OptionalFeatureFlags::INODE_EXTENDED_ATTRS) {
                     InodeType::from_direntry_ty_indicator(read_u8(bytes, 7))
                 } else {
                     None
@@ -812,7 +812,7 @@ impl DirEntry {
         if superblock
             .extended
             .as_ref()
-            .map(|extended| extended.req_features_present.dir_type)
+            .map(|extended| extended.req_features_present.contains(RequiredFeatureFlags::DIR_TYPE))
             .unwrap_or(false)
         {
             write_u8(
