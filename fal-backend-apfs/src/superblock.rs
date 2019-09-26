@@ -4,6 +4,7 @@ use std::{
     ops::BitOr,
 };
 
+use bitflags::bitflags;
 use uuid::Uuid;
 
 use fal::{read_u32, read_u64, read_uuid, write_u32, write_u64, write_uuid};
@@ -11,142 +12,23 @@ use fal::{read_u32, read_u64, read_uuid, write_u32, write_u64, write_uuid};
 use crate::{BlockAddr, BlockRange, ObjectIdentifier, TransactionIdentifier, ObjPhys};
 
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct Features(u64);
-
-impl Features {
-    pub fn defrag() -> Self {
-        Self(1)
-    }
-    pub fn lcfd() -> Self {
-        Self(2)
-    }
-    pub fn all() -> Self {
-        Self::defrag() | Self::lcfd()
-    }
-    pub fn none() -> Self {
-        Self(0)
+bitflags! {
+    pub struct Features: u64 {
+        const DEFRAG = 0x1;
+        const LCFD = 0x2;
     }
 }
 
-impl BitOr for Features {
-    type Output = Self;
-    fn bitor(self, rhs: Self) -> Self {
-        Self(self.0 | rhs.0)
+bitflags! {
+    pub struct IncompatFeatures: u64 {
+        const VERSION_1 = 0x1;
+        const VERSION_2 = 0x2;
+        const FUSION = 0x100;
     }
 }
 
-impl BitAnd for Features {
-    type Output = Self;
-    fn bitand(self, rhs: Self) -> Self {
-        Self(self.0 & rhs.0)
-    }
-}
-
-impl std::fmt::Debug for Features {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let mut features = vec![];
-
-        if *self & Self::defrag() != Self::none() {
-            features.push("DEFRAGMENT");
-        }
-
-        if *self & Self::lcfd() != Self::none() {
-            features.push("LOW_CAPACITY_FUSION_DRIVE");
-        }
-
-        if *self == Self::none() {
-            features.push("(none)");
-        }
-
-        write!(f, "{}", features.join(" | "))
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct IncompatFeatures(u64);
-
-impl IncompatFeatures {
-    pub fn version_1() -> Self {
-        Self(1)
-    }
-    pub fn version_2() -> Self {
-        Self(2)
-    }
-    pub fn fusion() -> Self {
-        Self(0x100)
-    }
-    pub fn none() -> Self {
-        Self(0)
-    }
-    pub fn all() -> Self {
-        Self::version_1() | Self::version_1() | Self::version_2()
-    }
-}
-
-impl BitOr for IncompatFeatures {
-    type Output = Self;
-    fn bitor(self, rhs: Self) -> Self {
-        Self(self.0 | rhs.0)
-    }
-}
-
-impl BitAnd for IncompatFeatures {
-    type Output = Self;
-    fn bitand(self, rhs: Self) -> Self {
-        Self(self.0 & rhs.0)
-    }
-}
-
-impl std::fmt::Debug for IncompatFeatures {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let mut features = vec![];
-
-        if *self & Self::version_1() != Self::none() {
-            features.push("VERSION_1");
-        }
-
-        if *self & Self::version_2() != Self::none() {
-            features.push("VERSION_2");
-        }
-
-        if *self & Self::fusion() != Self::none() {
-            features.push("FUSION");
-        }
-
-        if *self == Self::none() {
-            features.push("(none)");
-        }
-
-        write!(f, "{}", features.join(" | "))
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RoCompatFeatures(u64);
-
-impl RoCompatFeatures {
-    pub fn none() -> Self {
-        Self(0)
-    }
-    pub fn all() -> Self {
-        Self::none()
-    }
-}
-
-impl BitOr for RoCompatFeatures {
-    type Output = Self;
-    fn bitor(self, rhs: Self) -> Self {
-        Self(self.0 | rhs.0)
-    }
-}
-
-impl BitAnd for RoCompatFeatures {
-    type Output = Self;
-    fn bitand(self, rhs: Self) -> Self {
-        Self(self.0 & rhs.0)
-    }
-}
+#[derive(Debug)]
+pub struct RoCompatFeatures;
 
 /// Per-container (partition) superblock.
 #[derive(Debug)]
@@ -222,9 +104,9 @@ impl NxSuperblock {
         let block_size = read_u32(block_bytes, 36);
         let block_count = read_u64(block_bytes, 40);
 
-        let features = Features(read_u64(block_bytes, 48));
-        let ro_compat_features = RoCompatFeatures(read_u64(block_bytes, 56));
-        let incompat_features = IncompatFeatures(read_u64(block_bytes, 64));
+        let features = Features::from_bits(read_u64(block_bytes, 48)).unwrap();
+        let ro_compat_features = RoCompatFeatures;
+        let incompat_features = IncompatFeatures::from_bits(read_u64(block_bytes, 64)).unwrap();
 
         let uuid = read_uuid(block_bytes, 72);
 
@@ -359,9 +241,9 @@ impl NxSuperblock {
         write_u32(block, 32, Self::MAGIC);
         write_u32(block, 36, this.block_size);
         write_u64(block, 40, this.block_count);
-        write_u64(block, 48, this.features.0);
-        write_u64(block, 56, this.ro_compat_features.0);
-        write_u64(block, 64, this.incompat_features.0);
+        write_u64(block, 48, this.features.bits());
+        write_u64(block, 56, 0);
+        write_u64(block, 64, this.incompat_features.bits());
         write_uuid(block, 72, &this.uuid);
         write_u64(block, 88, this.next_oid.into());
         write_u64(block, 96, this.next_xid);

@@ -8,6 +8,7 @@ pub mod superblock;
 
 use fal::{read_u32, read_u64, write_u32, write_u64, };
 
+use bitflags::bitflags;
 use enum_primitive::{
     enum_from_primitive, enum_from_primitive_impl, enum_from_primitive_impl_ty, FromPrimitive,
 };
@@ -83,39 +84,45 @@ enum_from_primitive! {
     }
 }
 
+bitflags! {
+    pub struct ObjectTypeFlags: u16 {
+        const VIRTUAL = 0x0000;
+        const EPHEMERAL = 0x8000;
+        const PHYSICAL = 0x4000;
+        const NOHEADER = 0x2000;
+        const ENCRYPTED = 0x1000;
+        const NONPERSISTENT = 0x0800;
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ObjectTypeAndFlags {
     pub ty: ObjectType,
-    pub flags: u16,
+    pub flags: ObjectTypeFlags,
 }
 
 impl ObjectTypeAndFlags {
     pub const TYPE_MASK: u32 = 0x0000FFFF;
     pub const FLAGS_MASK: u32 = 0xFFFF0000;
 
-    pub const FLAG_VIRTUAL: u16 = 0x0000;
-    pub const FLAG_EPHEMERAL: u16 = 0x8000;
-    pub const FLAG_PHYSICAL: u16 = 0x4000;
-    pub const FLAG_NOHEADER: u16 = 0x2000;
-    pub const FLAG_ENCRYPTED: u16 = 0x1000;
-    pub const FLAG_NONPERSISTENT: u16 = 0x0800;
+    
 
     pub fn from_raw(raw: u32) -> Self {
         let ty = raw & Self::TYPE_MASK;
         let flags = ((raw & Self::FLAGS_MASK) >> 16) as u16;
         Self {
             ty: ObjectType::from_u32(ty).unwrap(),
-            flags,
+            flags: ObjectTypeFlags::from_bits(flags).unwrap(),
         }
     }
     pub fn into_raw(this: Self) -> u32 {
-        (this.ty as u32 & Self::TYPE_MASK) | (((this.flags as u32) << 16) & Self::FLAGS_MASK)
+        (this.ty as u32 & Self::TYPE_MASK) | (((this.flags.bits() as u32) << 16) & Self::FLAGS_MASK)
     }
     pub fn is_ephemeral(&self) -> bool {
-        self.flags & Self::FLAG_EPHEMERAL != 0
+        self.flags.contains(ObjectTypeFlags::EPHEMERAL)
     }
     pub fn is_physical(&self) -> bool {
-        self.flags & Self::FLAG_PHYSICAL != 0
+        self.flags.contains(ObjectTypeFlags::PHYSICAL)
     }
     pub fn is_virtual(&self) -> bool {
         !self.is_ephemeral() && !self.is_physical()

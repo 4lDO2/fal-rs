@@ -8,6 +8,7 @@ edition = "2018"
 
 [dependencies]
 fal = { version = "0.1", path = "../fal" }
+bitflags = "1.2"
 libc = "0.2"
 uuid = "0.7"
 time = "0.1"
