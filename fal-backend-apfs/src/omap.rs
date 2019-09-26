@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use fal::{read_u32, read_u64};
 use crate::superblock::{BlockAddr, ObjectIdentifier, ObjPhys, TransactionIdentifier};
 
@@ -15,20 +16,53 @@ pub struct OmapPhys {
     pub pending_revert_max: TransactionIdentifier,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OmapKey {
     pub oid: ObjectIdentifier,
     pub xid: TransactionIdentifier,
 }
 
-#[derive(Debug)]
+impl OmapKey {
+    pub fn parse(bytes: &[u8]) -> Self {
+        Self {
+            oid: read_u64(bytes, 0).into(),
+            xid: read_u64(bytes, 8),
+        }
+    }
+}
+
+impl PartialOrd for OmapKey {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.oid.cmp(&other.oid) {
+            Ordering::Equal => Some(self.xid.cmp(&other.xid)),
+            other_ordering => Some(other_ordering),
+        }
+    }
+}
+impl Ord for OmapKey {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.partial_cmp(other).unwrap()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct OmapValue {
     pub flags: u32,
     pub size: u32,
     pub paddr: BlockAddr,
 }
 
-#[derive(Debug)]
+impl OmapValue {
+    pub fn parse(bytes: &[u8]) -> Self {
+        Self {
+            flags: read_u32(bytes, 0),
+            size: read_u32(bytes, 4),
+            paddr: read_u64(bytes, 8) as i64,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct OmapSnapshot {
     pub flags: u32,
     pub padding: u32,

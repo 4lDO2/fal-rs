@@ -5,11 +5,11 @@ use std::{
 };
 
 use crate::{
-    btree::BTreeNode,
+    btree::{BTreeNode, BTreeKey},
     checkpoint::{
         self, CheckpointDescAreaEntry, CheckpointMapping, CheckpointMappingPhys, GenericObject,
     },
-    omap::OmapPhys,
+    omap::{OmapKey, OmapPhys},
     superblock::{NxSuperblock, ObjectIdentifier},
 };
 
@@ -99,7 +99,11 @@ impl<D: fal::Device> Filesystem<D> {
         let omap = OmapPhys::parse(&Self::read_block(&container_superblock, &mut device, container_superblock.object_map_oid.0 as i64));
 
         let omap_tree = BTreeNode::parse(&Self::read_block(&container_superblock, &mut device, omap.tree_oid.0 as i64));
-        dbg!(omap_tree);
+
+        let value = omap_tree.get_from_root(&BTreeKey::OmapKey(OmapKey {
+            oid: container_superblock.volumes_oids[0],
+            xid: container_superblock.header.transaction_id,
+        }));
 
         Self {
             container_superblock,
