@@ -2,6 +2,8 @@ use std::cmp::Ordering;
 use fal::{read_u32, read_u64};
 use crate::{BlockAddr, ObjectIdentifier, ObjPhys, TransactionIdentifier};
 
+use bitflags::bitflags;
+
 #[derive(Debug)]
 pub struct OmapPhys {
     pub header: ObjPhys,
@@ -45,9 +47,19 @@ impl Ord for OmapKey {
     }
 }
 
+bitflags! {
+    pub struct OmapValueFlags: u32 {
+        const DELETED = 0x1;
+        const SAVED = 0x2;
+        const ENCRYPTED = 0x4;
+        const NOHEADER = 0x8;
+        const CRYPTO_GENERATION = 0x10;
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct OmapValue {
-    pub flags: u32,
+    pub flags: OmapValueFlags,
     pub size: u32,
     pub paddr: BlockAddr,
 }
@@ -55,7 +67,7 @@ pub struct OmapValue {
 impl OmapValue {
     pub fn parse(bytes: &[u8]) -> Self {
         Self {
-            flags: read_u32(bytes, 0),
+            flags: OmapValueFlags::from_bits(read_u32(bytes, 0)).unwrap(),
             size: read_u32(bytes, 4),
             paddr: read_u64(bytes, 8) as i64,
         }

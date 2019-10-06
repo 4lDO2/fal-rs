@@ -304,66 +304,67 @@ bitflags! {
 /// Per-volume superblock.
 #[derive(Debug)]
 pub struct ApfsSuperblock {
-    header: ObjPhys,
+    pub header: ObjPhys,
 
     // magic
-    fs_index: u32,
+    pub fs_index: u32,
 
-    features: VolumeOptFeatures,
-    ro_incompat_features: VolumeRoCompatFeatures,
-    incompat_features: VolumeIncompatFeatures,
+    pub features: VolumeOptFeatures,
+    pub ro_incompat_features: VolumeRoCompatFeatures,
+    pub incompat_features: VolumeIncompatFeatures,
 
-    unmount_time: u64,
+    pub unmount_time: u64,
 
-    fs_reserve_block_count: u64,
-    fs_quota_block_count: u64,
-    fs_alloc_count: u64,
+    pub fs_reserve_block_count: u64,
+    pub fs_quota_block_count: u64,
+    pub fs_alloc_count: u64,
 
-    meta_crypto_state: WrappedMetaCryptoState,
+    pub meta_crypto_state: WrappedMetaCryptoState,
 
-    root_tree_type: ObjectTypeAndFlags,
-    extentref_tree_type: ObjectTypeAndFlags,
-    snap_meta_tree_type: ObjectTypeAndFlags,
+    pub root_tree_type: ObjectTypeAndFlags,
+    pub extentref_tree_type: ObjectTypeAndFlags,
+    pub snap_meta_tree_type: ObjectTypeAndFlags,
 
-    omap_oid: ObjectIdentifier,
-    root_tree_oid: ObjectIdentifier,
-    extentref_tree_oid: ObjectIdentifier,
-    snap_meta_tree_oid: ObjectIdentifier,
+    pub omap_oid: ObjectIdentifier,
+    pub root_tree_oid: ObjectIdentifier,
+    pub extentref_tree_oid: ObjectIdentifier,
+    pub snap_meta_tree_oid: ObjectIdentifier,
 
-    revert_to_xid: TransactionIdentifier,
-    revert_to_sblock_oid: ObjectIdentifier,
+    pub revert_to_xid: TransactionIdentifier,
+    pub revert_to_sblock_oid: ObjectIdentifier,
 
-    next_obj_id: u64,
+    pub next_obj_id: u64,
 
-    file_count: u64,
-    directory_count: u64,
-    symlink_count: u64,
-    other_fsobj_count: u64,
-    snapshot_count: u64,
+    pub file_count: u64,
+    pub directory_count: u64,
+    pub symlink_count: u64,
+    pub other_fsobj_count: u64,
+    pub snapshot_count: u64,
 
-    total_blocks_allocated: u64,
-    total_blocks_freed: u64,
+    pub total_blocks_allocated: u64,
+    pub total_blocks_freed: u64,
 
-    volume_uuid: Uuid,
-    last_modification_time: u64,
+    pub volume_uuid: Uuid,
+    pub last_modification_time: u64,
 
-    volume_flags: VolumeFlags,
+    pub volume_flags: VolumeFlags,
 
-    formatted_by: ApfsModifiedBy,
-    modified_by: Vec<ApfsModifiedBy>,
+    pub formatted_by: ApfsModifiedBy,
+    pub modified_by: Vec<ApfsModifiedBy>,
 
-    volume_name: String,
-    next_document_id: u32,
+    pub volume_name: String,
+    pub next_document_id: u32,
 
-    role: VolumeRole,
-    reserved: u16,
+    pub role: VolumeRole,
+    pub reserved: u16,
 
-    root_to_xid: TransactionIdentifier,
-    er_state_oid: ObjectIdentifier,
+    pub root_to_xid: TransactionIdentifier,
+    pub er_state_oid: ObjectIdentifier,
 }
 
 #[derive(Debug)]
 pub struct ApfsModifiedBy {
+
     id: CString,
     timestamp: u64,
     latest_xid: TransactionIdentifier,
@@ -470,7 +471,7 @@ impl ApfsSuperblock {
             meta_crypto_state: WrappedMetaCryptoState::parse(&bytes[96..116]),
 
             root_tree_type: ObjectTypeAndFlags::from_raw(read_u32(bytes, 116)),
-            extentref_tree_type: ObjectTypeAndFlags::from_raw(dbg!(read_u32(bytes, 120))),
+            extentref_tree_type: ObjectTypeAndFlags::from_raw(read_u32(bytes, 120)),
             snap_meta_tree_type: ObjectTypeAndFlags::from_raw(read_u32(bytes, 124)),
 
             omap_oid: read_u64(bytes, 128).into(),

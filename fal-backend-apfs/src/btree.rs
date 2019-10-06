@@ -39,10 +39,10 @@ bitflags! {
 
 #[derive(Debug)]
 pub struct BTreeInfoFixed {
-    flags: BTreeFlags,
-    node_size: u32,
-    key_size: u32,
-    val_size: u32,
+    pub flags: BTreeFlags,
+    pub node_size: u32,
+    pub key_size: u32,
+    pub val_size: u32,
 }
 
 impl BTreeInfoFixed {
@@ -58,11 +58,11 @@ impl BTreeInfoFixed {
 
 #[derive(Debug)]
 pub struct BTreeInfo {
-    fixed: BTreeInfoFixed,
-    longest_key: u32,
-    longest_val: u32,
-    key_count: u64,
-    node_count: u64,
+    pub fixed: BTreeInfoFixed,
+    pub longest_key: u32,
+    pub longest_val: u32,
+    pub key_count: u64,
+    pub node_count: u64,
 }
 
 impl BTreeInfo {
@@ -135,17 +135,17 @@ impl BTreeToc {
 
 #[derive(Debug)]
 pub struct BTreeNode {
-    header: ObjPhys,
-    flags: BTreeNodeFlags,
-    level: u16,
-    key_count: u32,
-    table_space: NodeLocation,
-    free_space: NodeLocation,
-    key_free_list: NodeLocation,
-    val_free_list: NodeLocation,
-    keyval_area: Vec<u8>,
-    info: Option<BTreeInfo>,
-    toc: BTreeToc,
+    pub header: ObjPhys,
+    pub flags: BTreeNodeFlags,
+    pub level: u16,
+    pub key_count: u32,
+    pub table_space: NodeLocation,
+    pub free_space: NodeLocation,
+    pub key_free_list: NodeLocation,
+    pub val_free_list: NodeLocation,
+    pub keyval_area: Vec<u8>,
+    pub info: Option<BTreeInfo>,
+    pub toc: BTreeToc,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
@@ -172,23 +172,21 @@ impl BTreeNode {
 
         let flags = BTreeNodeFlags::from_bits(read_u16(bytes, 32)).unwrap();
 
-        if !flags.contains(BTreeNodeFlags::ROOT | BTreeNodeFlags::LEAF) {
-            unimplemented!()
-        }
-
         let table_space = read_nloc(bytes, 40);
 
+        let key_count = read_u32(bytes, 36);
+
         let toc = if flags.contains(BTreeNodeFlags::FIXED_KV_SIZE) {
-            BTreeToc::Offsets((56 / KvOffset::LEN as u16..table_space.end / KvOffset::LEN as u16).map(|i| KvOffset::parse(&bytes[i as usize * KvOffset::LEN .. (i as usize + 1) * KvOffset::LEN])).collect())
+            BTreeToc::Offsets(((56 + table_space.start) / KvOffset::LEN as u16..(56 + table_space.end) / KvOffset::LEN as u16).map(|i| KvOffset::parse(&bytes[i as usize * KvOffset::LEN .. (i as usize + 1) * KvOffset::LEN])).take(key_count as usize).collect())
         } else {
-            BTreeToc::Locations((56 / KvLocation::LEN..table_space.end as usize / KvLocation::LEN).map(|i| KvLocation::parse(&bytes[i * KvLocation::LEN .. (i + 1) * KvLocation::LEN])).collect())
+            BTreeToc::Locations(((56 + table_space.start) as usize / KvLocation::LEN..(56 + table_space.end) as usize / KvLocation::LEN).map(|i| KvLocation::parse(&bytes[i * KvLocation::LEN .. (i + 1) * KvLocation::LEN])).take(key_count as usize).collect())
         };
 
         Self {
             header,
             flags,
+            key_count,
             level: read_u16(bytes, 34),
-            key_count: read_u32(bytes, 36),
             free_space: read_nloc(bytes, 44),
             key_free_list: read_nloc(bytes, 48),
             val_free_list: read_nloc(bytes, 52),

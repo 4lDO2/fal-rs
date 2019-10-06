@@ -18,7 +18,7 @@ pub struct Filesystem<D: fal::Device> {
     pub device: Mutex<D>,
     pub container_superblock: NxSuperblock,
     pub ephemeral_objects: HashMap<ObjectIdentifier, GenericObject>,
-    pub mounted_volumes: Vec<ApfsSuperblock>,
+    pub mounted_volumes: Vec<Volume>,
 }
 
 impl<D: fal::Device> Filesystem<D> {
@@ -26,9 +26,9 @@ impl<D: fal::Device> Filesystem<D> {
         let container_superblock = NxSuperblock::load(&mut device);
 
         if container_superblock.chkpnt_desc_blkcnt & (1 << 31) != 0 {
-            unimplemented!()
+            unimplemented!("B-tree checkpoints aren't implemented as of now")
         }
-        // Otherwise, checkpoint descriptor area is contiguos.
+        // Otherwise, checkpoint descriptor area is contiguous.
 
         let block_size = container_superblock.block_size as usize;
 
@@ -108,10 +108,8 @@ impl<D: fal::Device> Filesystem<D> {
                 xid: container_superblock.header.transaction_id,
             })).expect("Volume virtual oid_t wasn't found in the omap b+ tree.").into_omap_value().unwrap();
 
-            ApfsSuperblock::parse(&Self::read_block(&container_superblock, &mut device, omap_value.paddr))
+            Volume::load(&container_superblock, &mut device, omap_value.paddr)
         }).collect();
-
-        dbg!(&mounted_volumes);
 
         Self {
             container_superblock,
@@ -160,5 +158,28 @@ impl<D: fal::DeviceMut> Filesystem<D> {
             ))
             .unwrap();
         device.write_all(&block).unwrap();
+    }
+}
+
+#[derive(Debug)]
+pub struct Volume {
+    pub superblock: ApfsSuperblock,
+    pub omap: OmapPhys,
+    pub omap_tree: BTreeNode,
+}
+
+impl Volume {
+    pub fn load<D: fal::Device>(nx_super: &NxSuperblock, device: &mut D, phys: BlockAddr) -> Self {
+        let superblock = 
+            ApfsSuperblock::parse(&Filesystem::read_block(nx_super, device, phys));
+
+        let omap = OmapPhys::parse(&Filesystem::read_block(nx_super, device, superblock.omap_oid.0 as i64));
+        let omap_tree = BTreeNode::parse(&Filesystem::read_block(nx_super, device, omap.tree_oid.0 as i64));
+
+        Self {
+            superblock,
+            omap,
+            omap_tree,
+        }
     }
 }
