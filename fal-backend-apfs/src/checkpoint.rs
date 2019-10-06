@@ -3,12 +3,8 @@ use enum_primitive::FromPrimitive;
 use fal::{read_u32, read_u64};
 
 use crate::{
-    btree::BTreeNode,
-    filesystem::Filesystem,
-    reaper::ReaperPhys,
-    spacemanager::SpacemanagerPhys,
-    superblock::NxSuperblock,
-    ObjPhys, ObjectIdentifier, ObjectType, ObjectTypeAndFlags,
+    btree::BTreeNode, filesystem::Filesystem, reaper::ReaperPhys, spacemanager::SpacemanagerPhys,
+    superblock::NxSuperblock, ObjPhys, ObjectIdentifier, ObjectType, ObjectTypeAndFlags,
 };
 
 #[derive(Debug)]
@@ -144,9 +140,9 @@ pub fn read_from_data_area<D: fal::Device>(
             &block_bytes,
         ))),
         ObjectType::NxReaper => Some(GenericObject::Reaper(ReaperPhys::parse(&block_bytes))),
-        ObjectType::Btree | ObjectType::BtreeNode => Some(GenericObject::BTreeNode(
-            BTreeNode::parse(&block_bytes)
-        )),
+        ObjectType::Btree | ObjectType::BtreeNode => {
+            Some(GenericObject::BTreeNode(BTreeNode::parse(&block_bytes)))
+        }
         _ => {
             dbg!(index);
             dbg!(obj_phys.object_type.ty, obj_phys.object_subtype);

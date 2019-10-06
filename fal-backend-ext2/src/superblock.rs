@@ -150,10 +150,13 @@ impl Superblock {
             let first_nonreserved_inode = read_u32(&block_bytes, 84);
             let inode_struct_size = read_u16(&block_bytes, 88);
             let superblock_block_group = read_u16(&block_bytes, 90);
-            let opt_features_present = OptionalFeatureFlags::from_bits(read_u32(&block_bytes, 92)).unwrap();
-            let req_features_present = RequiredFeatureFlags::from_bits(read_u32(&block_bytes, 96)).unwrap();
+            let opt_features_present =
+                OptionalFeatureFlags::from_bits(read_u32(&block_bytes, 92)).unwrap();
+            let req_features_present =
+                RequiredFeatureFlags::from_bits(read_u32(&block_bytes, 96)).unwrap();
 
-            let req_features_for_rw = RoFeatureFlags::from_bits(read_u32(&block_bytes, 100)).unwrap();
+            let req_features_for_rw =
+                RoFeatureFlags::from_bits(read_u32(&block_bytes, 100)).unwrap();
             let fs_id = read_uuid(&block_bytes, 104);
 
             let vol_name = {
@@ -296,22 +299,10 @@ impl Superblock {
         write_u32(buffer, 84, extended.first_nonreserved_inode);
         write_u16(buffer, 88, extended.inode_struct_size);
         write_u16(buffer, 90, extended.superblock_block_group);
-        write_u32(
-            buffer,
-            92,
-            extended.opt_features_present.bits(),
-        );
-        write_u32(
-            buffer,
-            96,
-            extended.req_features_present.bits(),
-        );
+        write_u32(buffer, 92, extended.opt_features_present.bits());
+        write_u32(buffer, 96, extended.req_features_present.bits());
 
-        write_u32(
-            buffer,
-            100,
-            extended.req_features_for_rw.bits(),
-        );
+        write_u32(buffer, 100, extended.req_features_for_rw.bits());
         write_uuid(buffer, 104, &extended.fs_id);
 
         {

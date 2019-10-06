@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    btree::{BTreeNode, BTreeKey},
+    btree::{BTreeKey, BTreeNode},
     checkpoint::{
         self, CheckpointDescAreaEntry, CheckpointMapping, CheckpointMappingPhys, GenericObject,
     },
@@ -98,18 +98,36 @@ impl<D: fal::Device> Filesystem<D> {
 
         let container_superblock: NxSuperblock = superblock;
 
-        let omap = OmapPhys::parse(&Self::read_block(&container_superblock, &mut device, container_superblock.object_map_oid.0 as i64));
+        let omap = OmapPhys::parse(&Self::read_block(
+            &container_superblock,
+            &mut device,
+            container_superblock.object_map_oid.0 as i64,
+        ));
 
-        let omap_tree = BTreeNode::parse(&Self::read_block(&container_superblock, &mut device, omap.tree_oid.0 as i64));
+        let omap_tree = BTreeNode::parse(&Self::read_block(
+            &container_superblock,
+            &mut device,
+            omap.tree_oid.0 as i64,
+        ));
 
-        let mounted_volumes = container_superblock.volumes_oids.iter().take_while(|oid| **oid != ObjectIdentifier::INVALID).copied().map(|volume| {
-            let omap_value: OmapValue = omap_tree.get_from_root(&BTreeKey::OmapKey(OmapKey {
-                oid: volume,
-                xid: container_superblock.header.transaction_id,
-            })).expect("Volume virtual oid_t wasn't found in the omap b+ tree.").into_omap_value().unwrap();
+        let mounted_volumes = container_superblock
+            .volumes_oids
+            .iter()
+            .take_while(|oid| **oid != ObjectIdentifier::INVALID)
+            .copied()
+            .map(|volume| {
+                let omap_value: OmapValue = omap_tree
+                    .get_from_root(&BTreeKey::OmapKey(OmapKey {
+                        oid: volume,
+                        xid: container_superblock.header.transaction_id,
+                    }))
+                    .expect("Volume virtual oid_t wasn't found in the omap b+ tree.")
+                    .into_omap_value()
+                    .unwrap();
 
-            Volume::load(&container_superblock, &mut device, omap_value.paddr)
-        }).collect();
+                Volume::load(&container_superblock, &mut device, omap_value.paddr)
+            })
+            .collect();
 
         Self {
             container_superblock,
@@ -170,11 +188,18 @@ pub struct Volume {
 
 impl Volume {
     pub fn load<D: fal::Device>(nx_super: &NxSuperblock, device: &mut D, phys: BlockAddr) -> Self {
-        let superblock = 
-            ApfsSuperblock::parse(&Filesystem::read_block(nx_super, device, phys));
+        let superblock = ApfsSuperblock::parse(&Filesystem::read_block(nx_super, device, phys));
 
-        let omap = OmapPhys::parse(&Filesystem::read_block(nx_super, device, superblock.omap_oid.0 as i64));
-        let omap_tree = BTreeNode::parse(&Filesystem::read_block(nx_super, device, omap.tree_oid.0 as i64));
+        let omap = OmapPhys::parse(&Filesystem::read_block(
+            nx_super,
+            device,
+            superblock.omap_oid.0 as i64,
+        ));
+        let omap_tree = BTreeNode::parse(&Filesystem::read_block(
+            nx_super,
+            device,
+            omap.tree_oid.0 as i64,
+        ));
 
         Self {
             superblock,

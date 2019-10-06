@@ -1,6 +1,6 @@
-use std::cmp::Ordering;
+use crate::{BlockAddr, ObjPhys, ObjectIdentifier, TransactionIdentifier};
 use fal::{read_u32, read_u64};
-use crate::{BlockAddr, ObjectIdentifier, ObjPhys, TransactionIdentifier};
+use std::cmp::Ordering;
 
 use bitflags::bitflags;
 

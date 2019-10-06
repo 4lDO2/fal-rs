@@ -6,8 +6,9 @@ use uuid::Uuid;
 
 use fal::{read_u16, read_u32, read_u64, read_uuid, write_u32, write_u64, write_uuid};
 
-use crate::{BlockAddr, BlockRange, ObjectIdentifier, TransactionIdentifier, ObjectTypeAndFlags, ObjPhys};
-
+use crate::{
+    BlockAddr, BlockRange, ObjPhys, ObjectIdentifier, ObjectTypeAndFlags, TransactionIdentifier,
+};
 
 bitflags! {
     pub struct ContainerFeatures: u64 {
@@ -103,7 +104,8 @@ impl NxSuperblock {
 
         let features = ContainerFeatures::from_bits(read_u64(block_bytes, 48)).unwrap();
         let ro_compat_features = ContainerRoCompatFeatures;
-        let incompat_features = ContainerIncompatFeatures::from_bits(read_u64(block_bytes, 64)).unwrap();
+        let incompat_features =
+            ContainerIncompatFeatures::from_bits(read_u64(block_bytes, 64)).unwrap();
 
         let uuid = read_uuid(block_bytes, 72);
 
@@ -364,7 +366,6 @@ pub struct ApfsSuperblock {
 
 #[derive(Debug)]
 pub struct ApfsModifiedBy {
-
     id: CString,
     timestamp: u64,
     latest_xid: TransactionIdentifier,
@@ -376,7 +377,11 @@ impl ApfsModifiedBy {
 
     pub fn parse(bytes: &[u8]) -> Self {
         let id_bytes = &bytes[..Self::NAME_LENGTH];
-        let nul_position = id_bytes.into_iter().copied().position(|byte| byte == 0).unwrap_or(id_bytes.len());
+        let nul_position = id_bytes
+            .into_iter()
+            .copied()
+            .position(|byte| byte == 0)
+            .unwrap_or(id_bytes.len());
         let id = CString::new(&id_bytes[..nul_position]).unwrap();
 
         Self {
@@ -444,12 +449,19 @@ impl ApfsSuperblock {
 
         // The previous modification collection starts at 320, it consists of 8 entries, 48 bytes
         // each. The total size is hence 384, and the next offset is 704.
-        let modified_by = (0..8).map(|i| ApfsModifiedBy::parse(&bytes[320 + i * 48..320 + (i + 1) * 48])).take_while(|modified_by| modified_by.latest_xid != 0).collect();
+        let modified_by = (0..8)
+            .map(|i| ApfsModifiedBy::parse(&bytes[320 + i * 48..320 + (i + 1) * 48]))
+            .take_while(|modified_by| modified_by.latest_xid != 0)
+            .collect();
 
         // After the volname, the offset is 704 + 256 = 960.
         let volume_name = {
             let volname_bytes = &bytes[704..704 + 256];
-            let nul_position = volname_bytes.into_iter().copied().find(|b| *b == 0).unwrap();
+            let nul_position = volname_bytes
+                .into_iter()
+                .copied()
+                .find(|b| *b == 0)
+                .unwrap();
             String::from_utf8((&volname_bytes[..nul_position as usize]).to_owned()).unwrap()
         };
 

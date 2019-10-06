@@ -6,7 +6,7 @@ pub mod reaper;
 pub mod spacemanager;
 pub mod superblock;
 
-use fal::{read_u32, read_u64, write_u32, write_u64, };
+use fal::{read_u32, read_u64, write_u32, write_u64};
 
 use bitflags::bitflags;
 use enum_primitive::{
@@ -104,8 +104,6 @@ pub struct ObjectTypeAndFlags {
 impl ObjectTypeAndFlags {
     pub const TYPE_MASK: u32 = 0x0000FFFF;
     pub const FLAGS_MASK: u32 = 0xFFFF0000;
-
-    
 
     pub fn from_raw(raw: u32) -> Self {
         let ty = raw & Self::TYPE_MASK;

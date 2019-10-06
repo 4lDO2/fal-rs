@@ -2,7 +2,7 @@ use bitflags::bitflags;
 
 use crate::{
     omap::{OmapKey, OmapValue},
-    ObjectType, ObjPhys
+    ObjPhys, ObjectType,
 };
 
 use fal::{read_u16, read_u32, read_u64};
@@ -128,7 +128,9 @@ impl BTreeToc {
     fn get(&self, index: usize, key_size: u16, val_size: u16) -> Option<KvLocation> {
         match self {
             Self::Locations(locations) => locations.get(index).map(Clone::clone),
-            Self::Offsets(offsets) => offsets.get(index).map(|offset| off2loc(*offset, key_size, val_size)),
+            Self::Offsets(offsets) => offsets
+                .get(index)
+                .map(|offset| off2loc(*offset, key_size, val_size)),
         }
     }
 }
@@ -177,9 +179,27 @@ impl BTreeNode {
         let key_count = read_u32(bytes, 36);
 
         let toc = if flags.contains(BTreeNodeFlags::FIXED_KV_SIZE) {
-            BTreeToc::Offsets(((56 + table_space.start) / KvOffset::LEN as u16..(56 + table_space.end) / KvOffset::LEN as u16).map(|i| KvOffset::parse(&bytes[i as usize * KvOffset::LEN .. (i as usize + 1) * KvOffset::LEN])).take(key_count as usize).collect())
+            BTreeToc::Offsets(
+                ((56 + table_space.start) / KvOffset::LEN as u16
+                    ..(56 + table_space.end) / KvOffset::LEN as u16)
+                    .map(|i| {
+                        KvOffset::parse(
+                            &bytes[i as usize * KvOffset::LEN..(i as usize + 1) * KvOffset::LEN],
+                        )
+                    })
+                    .take(key_count as usize)
+                    .collect(),
+            )
         } else {
-            BTreeToc::Locations(((56 + table_space.start) as usize / KvLocation::LEN..(56 + table_space.end) as usize / KvLocation::LEN).map(|i| KvLocation::parse(&bytes[i * KvLocation::LEN .. (i + 1) * KvLocation::LEN])).take(key_count as usize).collect())
+            BTreeToc::Locations(
+                ((56 + table_space.start) as usize / KvLocation::LEN
+                    ..(56 + table_space.end) as usize / KvLocation::LEN)
+                    .map(|i| {
+                        KvLocation::parse(&bytes[i * KvLocation::LEN..(i + 1) * KvLocation::LEN])
+                    })
+                    .take(key_count as usize)
+                    .collect(),
+            )
         };
 
         Self {
@@ -190,7 +210,14 @@ impl BTreeNode {
             free_space: read_nloc(bytes, 44),
             key_free_list: read_nloc(bytes, 48),
             val_free_list: read_nloc(bytes, 52),
-            keyval_area: bytes[56 + table_space.end as usize..(bytes.len() - if header.object_type.ty == ObjectType::Btree { BTreeInfo::LEN } else { 0 })].to_owned(),
+            keyval_area: bytes[56 + table_space.end as usize
+                ..(bytes.len()
+                    - if header.object_type.ty == ObjectType::Btree {
+                        BTreeInfo::LEN
+                    } else {
+                        0
+                    })]
+                .to_owned(),
             info: if header.object_type.ty == ObjectType::Btree {
                 Some(BTreeInfo::parse(&bytes[bytes.len() - BTreeInfo::LEN..]))
             } else {
@@ -207,7 +234,11 @@ impl BTreeNode {
         if !self.flags.contains(BTreeNodeFlags::LEAF) {
             unimplemented!()
         }
-        let toc_index = match self.keys(key_size, val_size).unwrap().position(|k| k == *key) {
+        let toc_index = match self
+            .keys(key_size, val_size)
+            .unwrap()
+            .position(|k| k == *key)
+        {
             Some(idx) => idx,
             None => return None,
         };
@@ -221,18 +252,27 @@ impl BTreeNode {
         Some(BTreeValue::OmapValue(OmapValue::parse(&value_bytes)))
     }
     pub fn get_from_root(&self, key: &BTreeKey) -> Option<BTreeValue> {
-        self.get(key, self.info.as_ref().unwrap().fixed.key_size as u16, self.info.as_ref().unwrap().fixed.val_size as u16)
+        self.get(
+            key,
+            self.info.as_ref().unwrap().fixed.key_size as u16,
+            self.info.as_ref().unwrap().fixed.val_size as u16,
+        )
     }
     pub fn keys<'a>(&'a self, key_size: u16, val_size: u16) -> Option<Keys<'a>> {
         if self.flags.contains(BTreeNodeFlags::LEAF) {
-            Some(Keys { btree: self, index: 0, key_size, val_size })
+            Some(Keys {
+                btree: self,
+                index: 0,
+                key_size,
+                val_size,
+            })
         } else {
             None
         }
     }
     pub fn key(&self, index: usize, key_size: u16, val_size: u16) -> Option<BTreeKey> {
         if index >= self.key_count as usize {
-            return None
+            return None;
         }
         if !self.flags.contains(BTreeNodeFlags::LEAF) {
             unimplemented!()

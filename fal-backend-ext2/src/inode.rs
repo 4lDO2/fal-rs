@@ -235,7 +235,11 @@ impl Inode {
 
         let size = u64::from(size_low)
             | if let Some(extended) = superblock.extended.as_ref() {
-                if extended.req_features_for_rw.contains(RoFeatureFlags::EXTENDED_FILE_SIZE) && ty == InodeType::File {
+                if extended
+                    .req_features_for_rw
+                    .contains(RoFeatureFlags::EXTENDED_FILE_SIZE)
+                    && ty == InodeType::File
+                {
                     u64::from(size_high_or_acl) << 32
                 } else {
                     0
@@ -792,7 +796,10 @@ impl DirEntry {
         Self {
             inode: read_u32(bytes, 0),
             type_indicator: if let Some(extended) = superblock.extended.as_ref() {
-                if extended.opt_features_present.contains(OptionalFeatureFlags::INODE_EXTENDED_ATTRS) {
+                if extended
+                    .opt_features_present
+                    .contains(OptionalFeatureFlags::INODE_EXTENDED_ATTRS)
+                {
                     InodeType::from_direntry_ty_indicator(read_u8(bytes, 7))
                 } else {
                     None
@@ -812,7 +819,11 @@ impl DirEntry {
         if superblock
             .extended
             .as_ref()
-            .map(|extended| extended.req_features_present.contains(RequiredFeatureFlags::DIR_TYPE))
+            .map(|extended| {
+                extended
+                    .req_features_present
+                    .contains(RequiredFeatureFlags::DIR_TYPE)
+            })
             .unwrap_or(false)
         {
             write_u8(
