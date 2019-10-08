@@ -10,7 +10,15 @@ use bitflags::bitflags;
 use enum_primitive::*;
 use fal::{read_u16, read_u32, read_u64, read_u8, read_uuid, write_u64, write_u8};
 
-const SUPERBLOCK_OFFSET: u64 = 65536;
+mod sizes {
+    pub const K: u64 = 1024;
+    pub const M: u64 = K * K;
+    pub const G: u64 = M * K;
+    pub const T: u64 = G * K;
+    pub const P: u64 = T * K;
+}
+
+const SUPERBLOCK_OFFSETS: [u64; 4] = [64 * sizes::K, 64 * sizes::M, 256 * sizes::G, 1 * sizes::P];
 const CHECKSUM_SIZE: usize = 32;
 const MAGIC: u64 = 0x4D5F53665248425F;
 
@@ -103,145 +111,148 @@ impl ChecksumType {
 
 impl Superblock {
     pub fn parse(mut file: File) -> Self {
-        file.seek(SeekFrom::Start(SUPERBLOCK_OFFSET)).unwrap();
+        let disk_size = file.seek(SeekFrom::End(0)).unwrap();
+        let mut block = vec![0u8; 4096];
 
-        let mut block = vec![0u8; 16384];
-        file.read_exact(&mut block).unwrap();
+        SUPERBLOCK_OFFSETS.iter().copied().filter(|offset| offset + 4096 < disk_size).map(|offset| {
+            file.seek(SeekFrom::Start(offset)).unwrap();
+            file.read_exact(&mut block).unwrap();
 
-        let mut checksum = [0u8; CHECKSUM_SIZE];
-        checksum.copy_from_slice(&block[..=31]);
+            let mut checksum = [0u8; CHECKSUM_SIZE];
+            checksum.copy_from_slice(&block[..=31]);
 
-        let fs_id = read_uuid(&block, 32);
+            let fs_id = read_uuid(&block, 32);
 
-        let byte_number = read_u64(&block, 48);
-        let flags = read_u64(&block, 56);
-        let magic = read_u64(&block, 64);
-        assert_eq!(magic, MAGIC);
-        let generation = read_u64(&block, 72);
-        let root = read_u64(&block, 80);
-        let chunk_root = read_u64(&block, 88);
-        let log_root = read_u64(&block, 96);
+            let byte_number = read_u64(&block, 48);
+            let flags = read_u64(&block, 56);
+            let magic = read_u64(&block, 64);
+            assert_eq!(magic, MAGIC);
+            let generation = read_u64(&block, 72);
+            let root = read_u64(&block, 80);
+            let chunk_root = read_u64(&block, 88);
+            let log_root = read_u64(&block, 96);
 
-        let log_root_transid = read_u64(&block, 104);
-        let total_byte_count = read_u64(&block, 112);
-        let total_bytes_used = read_u64(&block, 120);
-        let root_dir_objectid = read_u64(&block, 128);
-        let device_count = read_u64(&block, 136);
+            let log_root_transid = read_u64(&block, 104);
+            let total_byte_count = read_u64(&block, 112);
+            let total_bytes_used = read_u64(&block, 120);
+            let root_dir_objectid = read_u64(&block, 128);
+            let device_count = read_u64(&block, 136);
 
-        let sector_size = read_u32(&block, 144);
-        let node_size = read_u32(&block, 148);
-        let unused_leaf_size = read_u32(&block, 152);
-        let stripe_size = read_u32(&block, 156);
-        let system_chunk_array_size = read_u32(&block, 160);
-        let chunk_root_gen = read_u64(&block, 164);
+            let sector_size = read_u32(&block, 144);
+            let node_size = read_u32(&block, 148);
+            let unused_leaf_size = read_u32(&block, 152);
+            let stripe_size = read_u32(&block, 156);
+            let system_chunk_array_size = read_u32(&block, 160);
+            let chunk_root_gen = read_u64(&block, 164);
 
-        let optional_flags = read_u64(&block, 172);
-        let flags_for_write_support = read_u64(&block, 180);
-        let required_flags = read_u64(&block, 188);
+            let optional_flags = read_u64(&block, 172);
+            let flags_for_write_support = read_u64(&block, 180);
+            let required_flags = read_u64(&block, 188);
 
-        let checksum_type = ChecksumType::from_raw(read_u16(&block, 196)).unwrap();
+            let checksum_type = ChecksumType::from_raw(read_u16(&block, 196)).unwrap();
 
-        let root_level = read_u8(&block, 198);
-        let chunk_root_level = read_u8(&block, 199);
-        let log_root_level = read_u8(&block, 200);
+            let root_level = read_u8(&block, 198);
+            let chunk_root_level = read_u8(&block, 199);
+            let log_root_level = read_u8(&block, 200);
 
-        let device_properties = {
-            let id = read_u64(&block, 201);
-            let size = read_u64(&block, 209);
-            let bytes_used = read_u64(&block, 217);
-            let io_alignment = read_u32(&block, 225);
-            let io_width = read_u32(&block, 229);
-            let sector_size = read_u32(&block, 233);
-            let type_and_info = read_u64(&block, 237);
-            let generation = read_u64(&block, 245);
-            let start_byte = read_u64(&block, 253);
-            let group = read_u32(&block, 261);
-            let seek_speed = read_u8(&block, 265);
-            let bandwidth = read_u8(&block, 266);
-            let device_uuid = read_uuid(&block, 267);
-            let fs_uuid = read_uuid(&block, 283);
+            let device_properties = {
+                let id = read_u64(&block, 201);
+                let size = read_u64(&block, 209);
+                let bytes_used = read_u64(&block, 217);
+                let io_alignment = read_u32(&block, 225);
+                let io_width = read_u32(&block, 229);
+                let sector_size = read_u32(&block, 233);
+                let type_and_info = read_u64(&block, 237);
+                let generation = read_u64(&block, 245);
+                let start_byte = read_u64(&block, 253);
+                let group = read_u32(&block, 261);
+                let seek_speed = read_u8(&block, 265);
+                let bandwidth = read_u8(&block, 266);
+                let device_uuid = read_uuid(&block, 267);
+                let fs_uuid = read_uuid(&block, 283);
 
-            assert_eq!(fs_uuid, fs_id);
+                assert_eq!(fs_uuid, fs_id);
 
-            DeviceProperties {
-                id,
-                size,
-                bytes_used,
-                io_alignment,
-                io_width,
-                sector_size,
-                type_and_info,
-                generation,
-                start_byte,
-                group,
-                seek_speed,
-                bandwidth,
-                fs_uuid,
-                uuid: device_uuid,
+                DeviceProperties {
+                    id,
+                    size,
+                    bytes_used,
+                    io_alignment,
+                    io_width,
+                    sector_size,
+                    type_and_info,
+                    generation,
+                    start_byte,
+                    group,
+                    seek_speed,
+                    bandwidth,
+                    fs_uuid,
+                    uuid: device_uuid,
+                }
+            };
+
+            let device_label = {
+                let label_bytes = &block[299..=554];
+                let nul_position = label_bytes
+                    .iter()
+                    .copied()
+                    .position(|byte| byte == 0)
+                    .unwrap();
+                let label_bytes_to_nul = &label_bytes[..nul_position];
+                CString::new(label_bytes_to_nul).unwrap()
+            };
+
+            let cache_generation = read_u8(&block, 555);
+            let uuid_tree_generation = read_u8(&block, 556);
+            let metadata_uuid = read_uuid(&block, 557);
+
+            let system_chunk_array = &block[811..=2858];
+
+            let mut root_backups = [Default::default(); 4];
+            for (index, backup) in root_backups.iter_mut().enumerate() {
+                *backup = RootBackup::from_raw(
+                    &block[2859 + index * RootBackup::RAW_SIZE
+                        ..2859 + (index + 1) * RootBackup::RAW_SIZE],
+                );
             }
-        };
 
-        let device_label = {
-            let label_bytes = &block[299..=554];
-            let nul_position = label_bytes
-                .iter()
-                .copied()
-                .position(|byte| byte == 0)
-                .unwrap();
-            let label_bytes_to_nul = &label_bytes[..nul_position];
-            CString::new(label_bytes_to_nul).unwrap()
-        };
-
-        let cache_generation = read_u8(&block, 555);
-        let uuid_tree_generation = read_u8(&block, 556);
-        let metadata_uuid = read_uuid(&block, 557);
-
-        let system_chunk_array = &block[811..=2858];
-
-        let mut root_backups = [Default::default(); 4];
-        for (index, backup) in root_backups.iter_mut().enumerate() {
-            *backup = RootBackup::from_raw(
-                &block[2859 + index * RootBackup::RAW_SIZE
-                    ..2859 + (index + 1) * RootBackup::RAW_SIZE],
-            );
-        }
-
-        Self {
-            checksum,
-            fs_id,
-            byte_number,
-            flags,
-            magic,
-            generation,
-            root,
-            chunk_root,
-            log_root,
-            log_root_transid,
-            total_byte_count,
-            total_bytes_used,
-            root_dir_objectid,
-            device_count,
-            sector_size,
-            node_size,
-            unused_leaf_size,
-            stripe_size,
-            system_chunk_array_size,
-            chunk_root_gen,
-            optional_flags,
-            flags_for_write_support,
-            required_flags,
-            checksum_type,
-            root_level,
-            chunk_root_level,
-            log_root_level,
-            device_properties,
-            device_label,
-            cache_generation,
-            uuid_tree_generation,
-            metadata_uuid,
-            system_chunk_array: SystemChunkArray::parse(&system_chunk_array[..system_chunk_array_size as usize]),
-            root_backups,
-        }
+            Self {
+                checksum,
+                fs_id,
+                byte_number,
+                flags,
+                magic,
+                generation,
+                root,
+                chunk_root,
+                log_root,
+                log_root_transid,
+                total_byte_count,
+                total_bytes_used,
+                root_dir_objectid,
+                device_count,
+                sector_size,
+                node_size,
+                unused_leaf_size,
+                stripe_size,
+                system_chunk_array_size,
+                chunk_root_gen,
+                optional_flags,
+                flags_for_write_support,
+                required_flags,
+                checksum_type,
+                root_level,
+                chunk_root_level,
+                log_root_level,
+                device_properties,
+                device_label,
+                cache_generation,
+                uuid_tree_generation,
+                metadata_uuid,
+                system_chunk_array: SystemChunkArray::parse(&system_chunk_array[..system_chunk_array_size as usize]),
+                root_backups,
+            }
+        }).max_by_key(|sb| sb.generation).unwrap()
     }
 }
 
