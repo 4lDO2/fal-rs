@@ -1,10 +1,11 @@
-use std::{env, fs::File};
-
-use fal_backend_btrfs::superblock;
+use std::fs::File;
 
 fn main() {
-    println!(
-        "{:?}",
-        superblock::Superblock::parse(File::open(env::args().nth(1).unwrap()).unwrap())
-    );
+    let device_path = std::env::args().nth(1).unwrap();
+    let device = File::open(&device_path).unwrap();
+    println!("Reading {}", device_path);
+
+    let fs = fal_backend_btrfs::filesystem::Filesystem::mount(device);
+
+    println!("Superblock: {:?}", fs.superblock);
 }
