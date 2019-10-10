@@ -490,6 +490,10 @@ impl SystemChunkArray {
             let chunk = DiskChunk::parse(chunk_bytes);
             assert!(chunk.ty.contains(BlockGroupType::SYSTEM));
 
+            // Only RAID 0 is supported so far.
+            assert_eq!(chunk.stripe_count, 1, "Unimplemented RAID configuration with stripe count {}", chunk.stripe_count);
+            assert_eq!(chunk.sub_stripe_count, 0, "Unimplemented RAID configuration with sub stripe count (used for RAID 10) {}", chunk.sub_stripe_count);
+
             (key, chunk)
         }).collect();
 

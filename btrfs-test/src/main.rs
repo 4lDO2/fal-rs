@@ -1,6 +1,6 @@
 use std::{env, fs::File};
 
-mod superblock;
+use fal_backend_btrfs::superblock;
 
 fn main() {
     println!(

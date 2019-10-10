@@ -7,6 +7,7 @@ members = [
     "fal-frontend-redox",
     "fal",
 
-    # TODO: temporary
+    # TODO: Temporary, for testing individual early WIP filesystems.
     "apfs-test",
+    "btrfs-test",
 ]
