@@ -7,6 +7,7 @@ use std::{
 };
 
 use bitflags::bitflags;
+use crc::{crc32, Hasher32};
 use enum_primitive::*;
 use fal::{read_u16, read_u32, read_u64, read_u8, read_uuid, write_u64, write_u8};
 
@@ -89,23 +90,10 @@ pub struct DeviceProperties {
     fs_uuid: uuid::Uuid,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ChecksumType {
-    Crc32,
-}
-impl ChecksumType {
-    const CRC32_RAW: u16 = 0;
-
-    pub fn from_raw(raw: u16) -> Option<Self> {
-        match raw {
-            Self::CRC32_RAW => Some(ChecksumType::Crc32),
-            _ => None,
-        }
-    }
-    pub fn to_raw(this: Self) -> u16 {
-        match this {
-            ChecksumType::Crc32 => Self::CRC32_RAW,
-        }
+enum_from_primitive! {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    pub enum ChecksumType {
+        Crc32 = 0,
     }
 }
 
@@ -119,7 +107,7 @@ impl Superblock {
             file.read_exact(&mut block).unwrap();
 
             let mut checksum = [0u8; CHECKSUM_SIZE];
-            checksum.copy_from_slice(&block[..=31]);
+            checksum.copy_from_slice(&block[..32]);
 
             let fs_id = read_uuid(&block, 32);
 
@@ -149,7 +137,7 @@ impl Superblock {
             let flags_for_write_support = read_u64(&block, 180);
             let required_flags = read_u64(&block, 188);
 
-            let checksum_type = ChecksumType::from_raw(read_u16(&block, 196)).unwrap();
+            let checksum_type = ChecksumType::from_u16(read_u16(&block, 196)).unwrap();
 
             let root_level = read_u8(&block, 198);
             let chunk_root_level = read_u8(&block, 199);
@@ -214,6 +202,17 @@ impl Superblock {
                     &block[2859 + index * RootBackup::RAW_SIZE
                         ..2859 + (index + 1) * RootBackup::RAW_SIZE],
                 );
+            }
+
+            {
+                let calculated_checksum = {
+                    let mut hasher = crc32::Digest::new_with_initial(crc32::CASTAGNOLI, 0);
+                    hasher.write(&block[32..]);
+                    hasher.sum32()
+                };
+                let stored_checksum = read_u32(&checksum, 0);
+
+                assert_eq!(calculated_checksum, stored_checksum);
             }
 
             Self {
