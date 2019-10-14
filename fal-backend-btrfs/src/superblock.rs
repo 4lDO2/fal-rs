@@ -3,8 +3,9 @@ use std::{
     io::SeekFrom,
 };
 
-use crate::{BlockGroupType, DiskChunk, DiskKey, DiskKeyType, sizes};
+use crate::{BlockGroupType, Checksum, DiskChunk, DiskKey, DiskKeyType, HeaderFlags, sizes};
 
+use bitflags::bitflags;
 use crc::{crc32, Hasher32};
 use enum_primitive::*;
 use fal::{read_u16, read_u32, read_u64, read_u8, read_uuid, write_u64, write_u8};
@@ -15,10 +16,10 @@ const MAGIC: u64 = 0x4D5F53665248425F; // ASCII for "_BHRfS_M"
 
 #[derive(Debug)]
 pub struct Superblock {
-    pub checksum: [u8; CHECKSUM_SIZE],
+    pub checksum: Checksum,
     pub fs_id: uuid::Uuid,
     pub byte_number: u64,
-    pub flags: u64,
+    pub flags: SuperblockFlags,
     pub magic: u64,
     pub generation: u64,
     pub root: u64,
@@ -105,7 +106,7 @@ impl Superblock {
         let fs_id = read_uuid(&block, 32);
 
         let byte_number = read_u64(&block, 48);
-        let flags = read_u64(&block, 56);
+        let flags = SuperblockFlags::from_bits(read_u64(&block, 56)).unwrap();
         let magic = read_u64(&block, 64);
         assert_eq!(magic, MAGIC);
         let generation = read_u64(&block, 72);
@@ -209,7 +210,7 @@ impl Superblock {
         }
 
         Self {
-            checksum,
+            checksum: Checksum::new(checksum_type, &checksum),
             fs_id,
             byte_number,
             flags,
@@ -358,5 +359,19 @@ impl SystemChunkArray {
         }).collect();
 
         Self(pairs)
+    }
+}
+
+bitflags! {
+    pub struct SuperblockFlags: u64 {
+        const WRITTEN = 1 << 0;
+        const RELOC = 1 << 1;
+
+        const ERROR = 1 << 2;
+        const SEEDING = 1 << 32;
+        const METADUMP = 1 << 33;
+        const METADUMP_V2 = 1 << 34;
+        const CHANGING_FSID = 1 << 35;
+        const CHANGING_FSID_V2 = 1 << 36;
     }
 }

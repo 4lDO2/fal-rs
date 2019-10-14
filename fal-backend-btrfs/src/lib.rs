@@ -145,3 +145,23 @@ impl Stripe {
         }
     }
 }
+
+bitflags! {
+    pub struct HeaderFlags: u64 {
+        const WRITTEN = 1 << 0;
+        const RELOC = 1 << 1;
+    }
+}
+
+#[derive(Debug)]
+pub enum Checksum {
+    Crc32(u32),
+}
+
+impl Checksum {
+    pub fn new(ty: superblock::ChecksumType, bytes: &[u8]) -> Self {
+        match ty {
+            superblock::ChecksumType::Crc32 => Self::Crc32(read_u32(bytes, 0)),
+        }
+    }
+}
