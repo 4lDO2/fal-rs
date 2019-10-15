@@ -26,7 +26,7 @@ impl Header {
         let checksum_bytes = &bytes[..32];
         let checksum = Checksum::new(checksum_type, checksum_bytes);
 
-        //assert_eq!(checksum, Checksum::calculate(checksum_type, &bytes[32..]));
+        assert_eq!(checksum, Checksum::calculate(checksum_type, &bytes[32..]));
 
         let fsid = read_uuid(bytes, 32);
         
@@ -151,7 +151,7 @@ pub enum Tree {
 
 impl Tree {
     pub fn parse(checksum_type: ChecksumType, bytes: &[u8]) -> Self {
-        let header = dbg!(Header::parse(checksum_type, &bytes[..101]));
+        let header = Header::parse(checksum_type, &bytes);
 
         match header.level {
             0 => Self::Leaf(Leaf::parse(header, &bytes[101..])),
