@@ -39,9 +39,13 @@ impl<D: fal::Device> Filesystem<D> {
         assert!(mapping.contains(&superblock.chunk_root) && mapping.contains(&(superblock.chunk_root + u64::from(superblock.node_size) - 1)));
 
         let chunk_tree_bytes = read_node_raw(&mut device, &superblock, superblock.chunk_root);
+        let root_tree_bytes = read_node_raw(&mut device, &superblock, superblock.root);
 
-        let tree = Tree::parse(superblock.checksum_type, &chunk_tree_bytes);
-        dbg!(&tree);
+        let chunk_tree = Tree::parse(superblock.checksum_type, &chunk_tree_bytes);
+        dbg!(&chunk_tree);
+
+        let root_tree = Tree::parse(superblock.checksum_type, &root_tree_bytes);
+        dbg!(&root_tree);
 
         Self {
             device: Mutex::new(device),

@@ -69,19 +69,19 @@ pub struct KeyPtr {
 }
 
 impl KeyPtr {
-    pub const LEN: usize = 41;
+    pub const LEN: usize = 33;
     pub fn parse(bytes: &[u8]) -> Self {
         Self {
             key: DiskKey::parse(&bytes[..17]),
-            block_ptr: read_u64(bytes, 25),
-            generation: read_u64(bytes, 33),
+            block_ptr: read_u64(bytes, 17),
+            generation: read_u64(bytes, 25),
         }
     }
 }
 
 impl Node {
     pub fn parse(header: Header, bytes: &[u8]) -> Self {
-        let key_ptrs = (0..header.item_count as usize).map(|i| KeyPtr::parse(&bytes[i * 41 .. (i + 1) * 41])).collect();
+        let key_ptrs = (0..header.item_count as usize).map(|i| KeyPtr::parse(&bytes[i * 33 .. (i + 1) * 33])).collect();
 
         Self {
             header,
