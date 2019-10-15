@@ -3,7 +3,7 @@ use std::{
     sync::Mutex,
 };
 
-use crate::superblock::Superblock;
+use crate::{superblock::Superblock, tree::Header};
 
 const FIRST_CHUNK_TREE_OBJECTID: u64 = 256;
 
@@ -33,6 +33,9 @@ impl<D: fal::Device> Filesystem<D> {
         assert_eq!(key.offset, first_chunk_tree_item.stripe.offset);
 
         let chunk_tree_bytes = read_range(&mut device, key.offset, first_chunk_tree_item.len as usize);
+
+        let header = Header::parse(superblock.checksum_type, &chunk_tree_bytes[16384..]); // FIXME: Somehow the header started at 0x4000 in the byte range.
+        dbg!(&header);
 
         Self {
             device: Mutex::new(device),

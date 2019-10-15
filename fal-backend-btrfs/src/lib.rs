@@ -1,7 +1,9 @@
 pub mod filesystem;
 pub mod superblock;
+pub mod tree;
 
 use bitflags::bitflags;
+use crc::{crc32, Hasher32};
 use enum_primitive::*;
 use fal::{read_u8, read_u16, read_u32, read_u64, read_uuid};
 
@@ -153,7 +155,7 @@ bitflags! {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Checksum {
     Crc32(u32),
 }
@@ -162,6 +164,15 @@ impl Checksum {
     pub fn new(ty: superblock::ChecksumType, bytes: &[u8]) -> Self {
         match ty {
             superblock::ChecksumType::Crc32 => Self::Crc32(read_u32(bytes, 0)),
+        }
+    }
+    pub fn calculate(ty: superblock::ChecksumType, bytes: &[u8]) -> Self {
+        match ty {
+            superblock::ChecksumType::Crc32 => {
+                let mut hasher = crc32::Digest::new_with_initial(crc32::CASTAGNOLI, 0);
+                hasher.write(bytes);
+                Checksum::Crc32(hasher.sum32())
+            }
         }
     }
 }
