@@ -3,10 +3,9 @@ use std::{
     io::SeekFrom,
 };
 
-use crate::{BlockGroupType, Checksum, DiskChunk, DiskKey, DiskKeyType, HeaderFlags, sizes};
+use crate::{BlockGroupType, Checksum, DiskChunk, DiskKey, DiskKeyType, sizes};
 
 use bitflags::bitflags;
-use crc::{crc32, Hasher32};
 use enum_primitive::*;
 use fal::{read_u16, read_u32, read_u64, read_u8, read_uuid, write_u64, write_u8};
 
@@ -196,17 +195,6 @@ impl Superblock {
                 &block[2859 + index * RootBackup::RAW_SIZE
                     ..2859 + (index + 1) * RootBackup::RAW_SIZE],
             );
-        }
-
-        {
-            let calculated_checksum = {
-                let mut hasher = crc32::Digest::new_with_initial(crc32::CASTAGNOLI, 0);
-                hasher.write(&block[32..]);
-                hasher.sum32()
-            };
-            let stored_checksum = read_u32(&checksum, 0);
-
-            assert_eq!(calculated_checksum, stored_checksum);
         }
 
         Self {

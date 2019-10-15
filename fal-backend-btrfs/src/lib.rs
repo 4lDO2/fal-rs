@@ -5,6 +5,8 @@ pub mod tree;
 use bitflags::bitflags;
 use crc::{crc32, Hasher32};
 use enum_primitive::*;
+use uuid::Uuid;
+
 use fal::{read_u8, read_u16, read_u32, read_u64, read_uuid};
 
 mod sizes {
@@ -105,12 +107,15 @@ pub struct DiskChunk {
     pub sector_size: u32,
     pub stripe_count: u16,
     pub sub_stripe_count: u16,
-    pub stripe: Stripe,
+    pub stripes: Box<[Stripe]>,
 }
 
 impl DiskChunk {
     const LEN: usize = 80;
     pub fn parse(bytes: &[u8]) -> Self {
+        let stripe_count = read_u16(bytes, 44);
+        let sub_stripe_count = read_u16(bytes, 46);
+
         Self {
             len: read_u64(bytes, 0),
             owner: read_u64(bytes, 8),
@@ -122,9 +127,11 @@ impl DiskChunk {
             io_width: read_u32(bytes, 36),
 
             sector_size: read_u32(bytes, 40),
-            stripe_count: read_u16(bytes, 44),
-            sub_stripe_count: read_u16(bytes, 46),
-            stripe: Stripe::parse(&bytes[48..]),
+
+            stripe_count,
+            sub_stripe_count,
+
+            stripes: (0..stripe_count as usize).map(|i| Stripe::parse(&bytes[48 + i * Stripe::LEN..48 + (i + 1) * Stripe::LEN])).collect::<Vec<_>>().into_boxed_slice(), // FIXME: stripe_count & sub_stripe_count length.
         }
     }
 }
@@ -173,6 +180,46 @@ impl Checksum {
                 hasher.write(bytes);
                 Checksum::Crc32(hasher.sum32())
             }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct DevItem {
+    device_id: u64,
+    total_bytes: u64,
+    bytes_used: u64,
+    io_alignment: u32,
+    io_width: u32,
+    sector_size: u32,
+    ty: u64,
+    generation: u64,
+    start_offset: u64,
+    device_group: u32,
+    seek_speed: u8,
+    bandwidth: u8,
+    device_uuid: Uuid,
+    fsid: Uuid,
+}
+
+impl DevItem {
+    pub const LEN: usize = 98;
+    pub fn parse(bytes: &[u8]) -> Self {
+        Self {
+            device_id: read_u64(bytes, 0),
+            total_bytes: read_u64(bytes, 8),
+            bytes_used: read_u64(bytes, 16),
+            io_alignment: read_u32(bytes, 24),
+            io_width: read_u32(bytes, 28),
+            sector_size: read_u32(bytes, 32),
+            ty: read_u64(bytes, 36),
+            generation: read_u64(bytes, 44),
+            start_offset: read_u64(bytes, 52),
+            device_group: read_u32(bytes, 60),
+            seek_speed: read_u8(bytes, 64),
+            bandwidth: read_u8(bytes, 65),
+            device_uuid: read_uuid(bytes, 66),
+            fsid: read_uuid(bytes, 82),
         }
     }
 }
