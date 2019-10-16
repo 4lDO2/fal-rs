@@ -1,4 +1,9 @@
-use crate::{Checksum, DevItem, DiskChunk, DiskKey, DiskKeyType, superblock::ChecksumType};
+use crate::{
+    Checksum, DiskKey, DiskKeyType,
+    filesystem,
+    items::{ChunkItem, DevItem, RootItem},
+    superblock::{ChecksumType, Superblock}
+};
 
 use fal::{read_u8, read_u32, read_u64, read_uuid};
 
@@ -93,21 +98,21 @@ impl Node {
 #[derive(Debug)]
 pub struct Leaf {
     pub header: Header,
-    pub items: Vec<Item>,
-    pub values: Vec<Value>,
+    pub pairs: Vec<(Item, Value)>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Item {
     pub key: DiskKey,
     pub offset: u32,
     pub size: u32,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Value {
-    Chunk(DiskChunk),
+    Chunk(ChunkItem),
     Device(DevItem),
+    Root(RootItem),
 }
 
 impl Item {
@@ -124,21 +129,22 @@ impl Item {
 
 impl Leaf {
     pub fn parse(header: Header, bytes: &[u8]) -> Self {
-        let items = (0..header.item_count as usize).map(|i| Item::parse(&bytes[i * 25 .. (i + 1) * 25])).collect::<Vec<_>>();
-
-        let values = items.iter().map(|item: &Item| {
-            let value_bytes = &bytes[item.offset as usize .. item.offset as usize + item.size as usize];
-            match item.key.ty {
-                DiskKeyType::ChunkItem => Value::Chunk(DiskChunk::parse(value_bytes)),
-                DiskKeyType::DevItem => Value::Device(DevItem::parse(value_bytes)),
-                other => unimplemented!("{:?}", other),
-            }
-        }).collect();
+        let pairs = (0..header.item_count as usize).map(|i| Item::parse(&bytes[i * 25 .. (i + 1) * 25])).map(|item: Item| {
+            let value = {
+                let value_bytes = &bytes[item.offset as usize .. item.offset as usize + item.size as usize];
+                match item.key.ty {
+                    DiskKeyType::ChunkItem => Value::Chunk(ChunkItem::parse(value_bytes)),
+                    DiskKeyType::DevItem => Value::Device(DevItem::parse(value_bytes)),
+                    DiskKeyType::RootItem => Value::Root(RootItem::parse(value_bytes)),
+                    other => unimplemented!("{:?}", other),
+                }
+            };
+            (item, value)
+        }).collect::<Vec<_>>();
 
         Self {
             header,
-            items,
-            values,
+            pairs,
         }
     }
 }
@@ -156,6 +162,28 @@ impl Tree {
         match header.level {
             0 => Self::Leaf(Leaf::parse(header, &bytes[101..])),
             _ => Self::Internal(Node::parse(header, &bytes[101..])),
+        }
+    }
+    pub fn load<D: fal::Device>(device: &mut D, superblock: &Superblock, addr: u64) -> Self {
+        let block = filesystem::read_node_raw(device, superblock, addr);
+        Self::parse(superblock.checksum_type, &block)
+    }
+    pub fn get<D: fal::Device>(&self, device: &mut D, superblock: &Superblock, key: &DiskKey) -> Option<Value> {
+        match self {
+            Self::Leaf(leaf) => {
+                assert_eq!(leaf.header.level, 0);
+                leaf.pairs.iter().find(|(item, _)| &item.key == key).cloned().map(|(_, value)| value)
+            }
+            Self::Internal(internal) => {
+                assert!(internal.header.level > 0);
+                let key_ptr = match internal.key_ptrs.iter().find(|key_ptr| &key_ptr.key == key) {
+                    Some(ptr) => ptr,
+                    None => return None,
+                };
+
+                let subtree = Self::load(device, superblock, key_ptr.block_ptr);
+                subtree.get(device, superblock, key)
+            }
         }
     }
 }

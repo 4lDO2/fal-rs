@@ -3,7 +3,7 @@ use std::{
     io::SeekFrom,
 };
 
-use crate::{BlockGroupType, Checksum, DiskChunk, DiskKey, DiskKeyType, sizes};
+use crate::{Checksum, DiskKey, DiskKeyType, items::{BlockGroupType, ChunkItem}, sizes};
 
 use bitflags::bitflags;
 use enum_primitive::*;
@@ -58,7 +58,7 @@ pub struct Superblock {
     pub root_backups: [RootBackup; 4],
 }
 #[derive(Debug)]
-pub struct SystemChunkArray(pub Vec<(DiskKey, DiskChunk)>);
+pub struct SystemChunkArray(pub Vec<(DiskKey, ChunkItem)>);
 
 #[derive(Debug)]
 pub struct DeviceProperties {
@@ -327,7 +327,7 @@ impl RootBackup {
 
 impl SystemChunkArray {
     pub fn parse(bytes: &[u8]) -> Self {
-        let stride = DiskKey::LEN + DiskChunk::LEN;
+        let stride = DiskKey::LEN + ChunkItem::LEN;
 
         let pairs = (0..bytes.len() / stride).map(|i| {
             let key_bytes = &bytes[i * stride .. i * stride + DiskKey::LEN];
@@ -336,7 +336,7 @@ impl SystemChunkArray {
             let key = DiskKey::parse(key_bytes);
             assert_eq!(key.ty, DiskKeyType::ChunkItem);
 
-            let chunk = DiskChunk::parse(chunk_bytes);
+            let chunk = ChunkItem::parse(chunk_bytes);
             assert!(chunk.ty.contains(BlockGroupType::SYSTEM));
 
             // Only RAID 0 is supported so far.

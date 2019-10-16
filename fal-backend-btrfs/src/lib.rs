@@ -1,13 +1,13 @@
 pub mod filesystem;
+pub mod items;
 pub mod superblock;
 pub mod tree;
 
 use bitflags::bitflags;
 use crc::{crc32, Hasher32};
 use enum_primitive::*;
-use uuid::Uuid;
 
-use fal::{read_u8, read_u16, read_u32, read_u64, read_uuid};
+use fal::{read_u8, read_u32, read_u64};
 
 mod sizes {
     pub const K: u64 = 1024;
@@ -77,83 +77,6 @@ enum_from_primitive! {
     }
 }
 
-bitflags! {
-    /// The type of a block group or chunk.
-    pub struct BlockGroupType: u64 {
-        const DATA = 1 << 0;
-        const SYSTEM = 1 << 1;
-        const METADATA = 1 << 2;
-        const RAID0 = 1 << 3;
-        const RAID1 = 1 << 4;
-        const DUP = 1 << 5;
-        const RAID10 = 1 << 6;
-        const RAID5 = 1 << 7;
-        const RAID6 = 1 << 8;
-        const RESERVED = 1 << 48 | 1 << 49;
-    }
-}
-
-#[derive(Debug)]
-pub struct DiskChunk {
-    pub len: u64,
-    pub owner: u64,
-
-    pub stripe_length: u64,
-    pub ty: BlockGroupType,
-
-    pub io_alignment: u32,
-    pub io_width: u32,
-
-    pub sector_size: u32,
-    pub stripe_count: u16,
-    pub sub_stripe_count: u16,
-    pub stripes: Box<[Stripe]>,
-}
-
-impl DiskChunk {
-    const LEN: usize = 80;
-    pub fn parse(bytes: &[u8]) -> Self {
-        let stripe_count = read_u16(bytes, 44);
-        let sub_stripe_count = read_u16(bytes, 46);
-
-        Self {
-            len: read_u64(bytes, 0),
-            owner: read_u64(bytes, 8),
-
-            stripe_length: read_u64(bytes, 16),
-            ty: BlockGroupType::from_bits(read_u64(bytes, 24)).unwrap(),
-
-            io_alignment: read_u32(bytes, 32),
-            io_width: read_u32(bytes, 36),
-
-            sector_size: read_u32(bytes, 40),
-
-            stripe_count,
-            sub_stripe_count,
-
-            stripes: (0..stripe_count as usize).map(|i| Stripe::parse(&bytes[48 + i * Stripe::LEN..48 + (i + 1) * Stripe::LEN])).collect::<Vec<_>>().into_boxed_slice(), // FIXME: stripe_count & sub_stripe_count length.
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct Stripe {
-    pub device_id: u64,
-    pub offset: u64,
-    pub device_uuid: uuid::Uuid,
-}
-
-impl Stripe {
-    const LEN: usize = 32;
-
-    pub fn parse(bytes: &[u8]) -> Self {
-        Self {
-            device_id: read_u64(bytes, 0),
-            offset: read_u64(bytes, 8),
-            device_uuid: read_uuid(bytes, 16),
-        }
-    }
-}
 
 bitflags! {
     pub struct HeaderFlags: u64 {
@@ -184,42 +107,23 @@ impl Checksum {
     }
 }
 
-#[derive(Debug)]
-pub struct DevItem {
-    device_id: u64,
-    total_bytes: u64,
-    bytes_used: u64,
-    io_alignment: u32,
-    io_width: u32,
-    sector_size: u32,
-    ty: u64,
-    generation: u64,
-    start_offset: u64,
-    device_group: u32,
-    seek_speed: u8,
-    bandwidth: u8,
-    device_uuid: Uuid,
-    fsid: Uuid,
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct Timespec {
+    pub sec: i64,
+    pub nsec: u32,
 }
 
-impl DevItem {
-    pub const LEN: usize = 98;
+impl Timespec {
+    pub const LEN: usize = 12;
+
     pub fn parse(bytes: &[u8]) -> Self {
         Self {
-            device_id: read_u64(bytes, 0),
-            total_bytes: read_u64(bytes, 8),
-            bytes_used: read_u64(bytes, 16),
-            io_alignment: read_u32(bytes, 24),
-            io_width: read_u32(bytes, 28),
-            sector_size: read_u32(bytes, 32),
-            ty: read_u64(bytes, 36),
-            generation: read_u64(bytes, 44),
-            start_offset: read_u64(bytes, 52),
-            device_group: read_u32(bytes, 60),
-            seek_speed: read_u8(bytes, 64),
-            bandwidth: read_u8(bytes, 65),
-            device_uuid: read_uuid(bytes, 66),
-            fsid: read_uuid(bytes, 82),
+            sec: read_u64(bytes, 0) as i64,
+            nsec: read_u32(bytes, 8),
         }
     }
+}
+
+pub fn read_timespec(bytes: &[u8], offset: usize) -> Timespec {
+    Timespec::parse(&bytes[offset..offset + Timespec::LEN])
 }

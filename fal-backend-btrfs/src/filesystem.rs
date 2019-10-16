@@ -7,13 +7,13 @@ use crate::{superblock::Superblock, tree::Tree};
 
 const FIRST_CHUNK_TREE_OBJECTID: u64 = 256;
 
-fn read_node_raw<D: fal::Device>(device: &mut D, superblock: &Superblock, offset: u64) -> Box<[u8]> {
+pub fn read_node_raw<D: fal::Device>(device: &mut D, superblock: &Superblock, offset: u64) -> Box<[u8]> {
     let mut bytes = vec! [0u8; superblock.node_size as usize];
     device.seek(SeekFrom::Start(offset)).unwrap();
     device.read_exact(&mut bytes).unwrap();
     bytes.into_boxed_slice()
 }
-fn read_node<D: fal::Device>(filesystem: &mut Filesystem<D>, offset: u64) -> Box<[u8]> {
+pub fn read_node<D: fal::Device>(filesystem: &mut Filesystem<D>, offset: u64) -> Box<[u8]> {
     read_node_raw(&mut *filesystem.device.lock().unwrap(), &filesystem.superblock, offset)
 }
 
@@ -46,6 +46,8 @@ impl<D: fal::Device> Filesystem<D> {
 
         let root_tree = Tree::parse(superblock.checksum_type, &root_tree_bytes);
         dbg!(&root_tree);
+
+        dbg!(Tree::load(&mut device, &superblock, 25903104));
 
         Self {
             device: Mutex::new(device),
