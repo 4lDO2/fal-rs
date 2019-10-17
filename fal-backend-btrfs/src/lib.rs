@@ -39,6 +39,7 @@ impl DiskKey {
 enum_from_primitive! {
     #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
     pub enum DiskKeyType {
+        Unknown = 0,
         InodeItem = 1,
         InodeRef = 12,
         InodeExtref = 13,
@@ -124,6 +125,8 @@ impl Timespec {
     }
 }
 
-pub fn read_timespec(bytes: &[u8], offset: usize) -> Timespec {
-    Timespec::parse(&bytes[offset..offset + Timespec::LEN])
+pub fn read_timespec(bytes: &[u8], offset: &mut usize) -> Timespec {
+    let ret = Timespec::parse(&bytes[*offset..*offset + Timespec::LEN]);
+    *offset += Timespec::LEN;
+    ret
 }

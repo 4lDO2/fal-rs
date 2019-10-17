@@ -56,6 +56,45 @@ pub fn write_u8(block: &mut [u8], offset: usize, number: u8) {
     block[offset..offset + bytes.len()].copy_from_slice(&bytes)
 }
 
+/// More ergonomic parsing functions.
+pub mod parsing {
+    use uuid::Uuid;
+
+    pub fn read_u8(block: &[u8], offset: &mut usize) -> u8 {
+        let ret = super::read_u8(block, *offset);
+        *offset += 1;
+        ret
+    }
+    pub fn read_u16(block: &[u8], offset: &mut usize) -> u16 {
+        let ret = super::read_u16(block, *offset);
+        *offset += 2;
+        ret
+    }
+    pub fn read_u32(block: &[u8], offset: &mut usize) -> u32 {
+        let ret = super::read_u32(block, *offset);
+        *offset += 4;
+        ret
+    }
+    pub fn read_u64(block: &[u8], offset: &mut usize) -> u64 {
+        let ret = super::read_u64(block, *offset);
+        *offset += 8;
+        ret
+    }
+    pub fn read_uuid(block: &[u8], offset: &mut usize) -> Uuid {
+        let ret = super::read_uuid(block, *offset);
+        *offset += 16;
+        ret
+    }
+    pub fn skip(offset: &mut usize, amount: usize) -> &mut usize {
+        *offset += amount;
+        offset
+    }
+    pub fn assert_eq(offset: &mut usize, eq: usize) -> &mut usize {
+        assert_eq!(*offset, eq);
+        offset
+    }
+}
+
 /// An readonly device, such as the file /dev/sda. Typically implemented by the frontend.
 pub trait Device: Read + Seek {
     // TODO: Add support for querying bad sectors etc.

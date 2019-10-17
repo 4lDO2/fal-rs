@@ -1,7 +1,7 @@
 use crate::{
     Checksum, DiskKey, DiskKeyType,
     filesystem,
-    items::{ChunkItem, DevItem, RootItem},
+    items::{ChunkItem, DevItem, DirItem, FileExtentItem, InodeItem, InodeRef, RootItem, RootRef},
     superblock::{ChecksumType, Superblock}
 };
 
@@ -112,7 +112,12 @@ pub struct Item {
 pub enum Value {
     Chunk(ChunkItem),
     Device(DevItem),
+    DirItem(DirItem),
     Root(RootItem),
+    InodeItem(InodeItem),
+    InodeRef(InodeRef),
+    RootRef(RootRef),
+    ExtentData(FileExtentItem),
 }
 
 impl Item {
@@ -135,11 +140,16 @@ impl Leaf {
                 match item.key.ty {
                     DiskKeyType::ChunkItem => Value::Chunk(ChunkItem::parse(value_bytes)),
                     DiskKeyType::DevItem => Value::Device(DevItem::parse(value_bytes)),
+                    DiskKeyType::DirItem => Value::DirItem(DirItem::parse(value_bytes)),
+                    DiskKeyType::ExtentData => Value::ExtentData(FileExtentItem::parse(value_bytes)),
                     DiskKeyType::RootItem => Value::Root(RootItem::parse(value_bytes)),
+                    DiskKeyType::InodeRef => Value::InodeRef(InodeRef::parse(value_bytes)),
+                    DiskKeyType::RootRef => Value::RootRef(RootRef::parse(value_bytes)),
+                    DiskKeyType::InodeItem => Value::InodeItem(InodeItem::parse(value_bytes)),
                     other => unimplemented!("{:?}", other),
                 }
             };
-            (item, value)
+            (item, dbg!(value))
         }).collect::<Vec<_>>();
 
         Self {

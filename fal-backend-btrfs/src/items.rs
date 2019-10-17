@@ -1,5 +1,5 @@
 use crate::{DiskKey, read_timespec, Timespec};
-use fal::{read_u8, read_u16, read_u32, read_u64, read_uuid};
+use fal::parsing::{assert_eq, read_u8, read_u16, read_u32, read_u64, read_uuid, skip};
 
 use bitflags::bitflags;
 use uuid::Uuid;
@@ -40,26 +40,25 @@ pub struct ChunkItem {
 impl ChunkItem {
     pub const LEN: usize = 80;
     pub fn parse(bytes: &[u8]) -> Self {
-        let stripe_count = read_u16(bytes, 44);
-        let sub_stripe_count = read_u16(bytes, 46);
+        let mut offset = 0;
 
-        Self {
-            len: read_u64(bytes, 0),
-            owner: read_u64(bytes, 8),
+        let len = read_u64(bytes, &mut offset);
+        let owner = read_u64(bytes, &mut offset);
 
-            stripe_length: read_u64(bytes, 16),
-            ty: BlockGroupType::from_bits(read_u64(bytes, 24)).unwrap(),
+        let stripe_length = read_u64(bytes, &mut offset);
+        let ty = BlockGroupType::from_bits(read_u64(bytes, &mut offset)).unwrap();
 
-            io_alignment: read_u32(bytes, 32),
-            io_width: read_u32(bytes, 36),
+        let io_alignment = read_u32(bytes, &mut offset);
+        let io_width = read_u32(bytes, &mut offset);
 
-            sector_size: read_u32(bytes, 40),
+        let sector_size = read_u32(bytes, &mut offset);
 
-            stripe_count,
-            sub_stripe_count,
+        let stripe_count = read_u16(bytes, &mut offset);
+        let sub_stripe_count = read_u16(bytes, &mut offset);
 
-            stripes: (0..stripe_count as usize).map(|i| Stripe::parse(&bytes[48 + i * Stripe::LEN..48 + (i + 1) * Stripe::LEN])).collect::<Vec<_>>().into_boxed_slice(), // FIXME: stripe_count & sub_stripe_count length.
-        }
+        let stripes = (0..stripe_count as usize).map(|i| Stripe::parse(&bytes[offset + i * Stripe::LEN..offset + (i + 1) * Stripe::LEN])).collect::<Vec<_>>().into_boxed_slice(); // FIXME: stripe_count & sub_stripe_count length.
+
+        Self { len, owner, stripe_length, ty, io_alignment, io_width, sector_size, stripe_count, sub_stripe_count, stripes }
     }
 }
 
@@ -74,10 +73,11 @@ impl Stripe {
     const LEN: usize = 32;
 
     pub fn parse(bytes: &[u8]) -> Self {
+        let mut offset = 0;
         Self {
-            device_id: read_u64(bytes, 0),
-            offset: read_u64(bytes, 8),
-            device_uuid: read_uuid(bytes, 16),
+            device_id: read_u64(bytes, &mut offset),
+            offset: read_u64(bytes, &mut offset),
+            device_uuid: read_uuid(bytes, &mut offset),
         }
     }
 }
@@ -103,21 +103,23 @@ pub struct DevItem {
 impl DevItem {
     pub const LEN: usize = 98;
     pub fn parse(bytes: &[u8]) -> Self {
+        let mut offset = 0;
+
         Self {
-            device_id: read_u64(bytes, 0),
-            total_bytes: read_u64(bytes, 8),
-            bytes_used: read_u64(bytes, 16),
-            io_alignment: read_u32(bytes, 24),
-            io_width: read_u32(bytes, 28),
-            sector_size: read_u32(bytes, 32),
-            ty: read_u64(bytes, 36),
-            generation: read_u64(bytes, 44),
-            start_offset: read_u64(bytes, 52),
-            device_group: read_u32(bytes, 60),
-            seek_speed: read_u8(bytes, 64),
-            bandwidth: read_u8(bytes, 65),
-            device_uuid: read_uuid(bytes, 66),
-            fsid: read_uuid(bytes, 82),
+            device_id: read_u64(bytes, &mut offset),
+            total_bytes: read_u64(bytes, &mut offset),
+            bytes_used: read_u64(bytes, &mut offset),
+            io_alignment: read_u32(bytes, &mut offset),
+            io_width: read_u32(bytes, &mut offset),
+            sector_size: read_u32(bytes, &mut offset),
+            ty: read_u64(bytes, &mut offset),
+            generation: read_u64(bytes, &mut offset),
+            start_offset: read_u64(bytes, &mut offset),
+            device_group: read_u32(bytes, &mut offset),
+            seek_speed: read_u8(bytes, &mut offset),
+            bandwidth: read_u8(bytes, &mut offset),
+            device_uuid: read_uuid(bytes, &mut offset),
+            fsid: read_uuid(bytes, &mut offset),
         }
     }
 }
@@ -178,67 +180,160 @@ pub struct InodeItem {
 }
 
 impl InodeItem {
-    pub const LEN: usize = 152;
+    pub const LEN: usize = 160;
 
     pub fn parse(bytes: &[u8]) -> Self {
+        let mut offset = 0;
         Self {
-            generation: read_u64(bytes, 0),
-            transaction_id: read_u64(bytes, 8),
-            size: read_u64(bytes, 16),
-            byte_count: read_u64(bytes, 24),
-            block_group: read_u64(bytes, 32),
-            hardlink_count: read_u32(bytes, 40),
-            uid: read_u32(bytes, 44),
-            gid: read_u32(bytes, 48),
-            mode: read_u32(bytes, 52),
-            rdev: read_u64(bytes, 56),
-            flags: read_u64(bytes, 64),
-            sequence: read_u64(bytes, 72),
+            generation: read_u64(bytes, &mut offset),
+            transaction_id: read_u64(bytes, &mut offset),
+            size: read_u64(bytes, &mut offset),
+            byte_count: read_u64(bytes, &mut offset),
+            block_group: read_u64(bytes, &mut offset),
+            hardlink_count: read_u32(bytes, &mut offset),
+            uid: read_u32(bytes, &mut offset),
+            gid: read_u32(bytes, &mut offset),
+            mode: read_u32(bytes, &mut offset),
+            rdev: read_u64(bytes, &mut offset),
+            flags: read_u64(bytes, &mut offset),
+            sequence: read_u64(bytes, &mut offset),
 
-            // 4 reserved u64s, new offset is 72 + 32 = 104.
-
-            atime: read_timespec(bytes, 104),
-            ctime: read_timespec(bytes, 116),
-            mtime: read_timespec(bytes, 128),
-            otime: read_timespec(bytes, 140),
+            atime: read_timespec(bytes, skip(&mut offset, 32)),
+            ctime: read_timespec(bytes, &mut offset),
+            mtime: read_timespec(bytes, &mut offset),
+            otime: read_timespec(bytes, &mut offset),
         }
     }
 }
 
 impl RootItem {
     pub fn parse(bytes: &[u8]) -> Self {
+        let mut offset = InodeItem::LEN;
+
         Self {
-            inode_item: InodeItem::parse(&bytes[..152]),
+            inode_item: InodeItem::parse(&bytes[..InodeItem::LEN]),
 
-            generation: read_u64(bytes, 152),
-            root_directory_id: read_u64(bytes, 160),
-            addr: read_u64(bytes, 168),
-            byte_limit: read_u64(bytes, 176),
-            bytes_used: read_u64(bytes, 184),
-            last_snapshot: read_u64(bytes, 192),
-            flags: read_u64(bytes, 200),
-            refs: read_u32(bytes, 208),
+            generation: read_u64(bytes, &mut offset),
+            root_directory_id: read_u64(bytes, &mut offset),
+            addr: read_u64(bytes, &mut offset),
+            byte_limit: read_u64(bytes, &mut offset),
+            bytes_used: read_u64(bytes, &mut offset),
+            last_snapshot: read_u64(bytes, &mut offset),
+            flags: read_u64(bytes, &mut offset),
+            refs: read_u32(bytes, &mut offset),
 
-            drop_progress: DiskKey::parse(&bytes[212..229]),
-            drop_level: read_u8(bytes, 229),
-            level: read_u8(bytes, 230),
+            drop_progress: DiskKey::parse(&bytes[offset..offset + 17]),
+            drop_level: read_u8(bytes, skip(&mut offset, 17)),
+            level: read_u8(bytes, &mut offset),
 
-            generation_v2: read_u64(bytes, 231),
-            uuid: read_uuid(bytes, 239),
-            parent_uuid: read_uuid(bytes, 271),
-            received_uuid: read_uuid(bytes, 287),
+            generation_v2: read_u64(bytes, &mut offset),
+            uuid: read_uuid(bytes, &mut offset),
+            parent_uuid: read_uuid(bytes, &mut offset),
+            received_uuid: read_uuid(bytes, &mut offset),
 
-            c_xid: read_u64(bytes, 303),
-            o_xid: read_u64(bytes, 311),
-            s_xid: read_u64(bytes, 319),
-            r_xid: read_u64(bytes, 327),
+            c_xid: read_u64(bytes, &mut offset),
+            o_xid: read_u64(bytes, &mut offset),
+            s_xid: read_u64(bytes, &mut offset),
+            r_xid: read_u64(bytes, &mut offset),
 
-            ctime: read_timespec(bytes, 335),
-            otime: read_timespec(bytes, 347),
-            stime: read_timespec(bytes, 359),
-            rtime: read_timespec(bytes, 371),
+            ctime: read_timespec(bytes, &mut offset),
+            otime: read_timespec(bytes, &mut offset),
+            stime: read_timespec(bytes, &mut offset),
+            rtime: read_timespec(bytes, &mut offset),
 
             // 8 reserved u64s
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct InodeRef {
+    pub index: u64,
+    pub name_len: u16,
+}
+impl InodeRef {
+    pub const LEN: usize = 0;
+    pub fn parse(bytes: &[u8]) -> Self {
+        Self {
+            index: read_u64(bytes, &mut 0),
+            name_len: read_u16(bytes, &mut 8),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct RootRef {
+    pub subtree_id: u64,
+    pub sequence: u64,
+    pub name_len: u16,
+}
+
+impl RootRef {
+    pub const LEN: usize = 18;
+
+    pub fn parse(bytes: &[u8]) -> Self {
+        Self {
+            subtree_id: read_u64(bytes, &mut 0),
+            sequence: read_u64(bytes, &mut 8),
+            name_len: read_u16(bytes, &mut 16),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct DirItem {
+    pub location: DiskKey,
+    pub xid: u64,
+    pub data_len: u16,
+    pub name_len: u16,
+    pub ty: u8,
+}
+
+impl DirItem {
+    pub const LEN: usize = 30;
+
+    pub fn parse(bytes: &[u8]) -> Self {
+        Self {
+            location: DiskKey::parse(&bytes[..17]),
+            xid: read_u64(bytes, &mut 17),
+            data_len: read_u16(bytes, &mut 25),
+            name_len: read_u16(bytes, &mut 27),
+            ty: read_u8(bytes, &mut 29),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct FileExtentItem {
+    pub generation: u64,
+    pub device_size: u64,
+    pub compression: u8,
+    pub encryption: u8,
+    pub other_encoding: u16,
+    pub ty: u8,
+
+    // TODO: The last 4 fields should be wrapped in a struct.
+    pub disk_bytenr: u64,
+    pub disk_byte_count: u64,
+    pub disk_offset: u64,
+    pub byte_count: u64,
+}
+
+impl FileExtentItem {
+    pub fn parse(bytes: &[u8]) -> Self {
+        let mut offset = 0;
+        Self {
+            generation: read_u64(bytes, &mut offset),
+            device_size: read_u64(bytes, &mut offset),
+            compression: read_u8(bytes, &mut offset),
+            encryption: read_u8(bytes, &mut offset),
+            other_encoding: read_u16(bytes, &mut offset),
+            ty: read_u8(bytes, &mut offset),
+
+            disk_bytenr: read_u64(bytes, &mut offset),
+            disk_byte_count: read_u64(bytes, &mut offset),
+            disk_offset: read_u64(bytes, &mut offset),
+            byte_count: read_u64(bytes, &mut offset),
         }
     }
 }
