@@ -1,9 +1,13 @@
 pub mod filesystem;
+pub mod items;
 pub mod superblock;
+pub mod tree;
 
 use bitflags::bitflags;
+use crc::{crc32, Hasher32};
 use enum_primitive::*;
-use fal::{read_u8, read_u16, read_u32, read_u64, read_uuid};
+
+use fal::{read_u8, read_u32, read_u64};
 
 mod sizes {
     pub const K: u64 = 1024;
@@ -73,75 +77,53 @@ enum_from_primitive! {
     }
 }
 
+
 bitflags! {
-    /// The type of a block group or chunk.
-    pub struct BlockGroupType: u64 {
-        const DATA = 1 << 0;
-        const SYSTEM = 1 << 1;
-        const METADATA = 1 << 2;
-        const RAID0 = 1 << 3;
-        const RAID1 = 1 << 4;
-        const DUP = 1 << 5;
-        const RAID10 = 1 << 6;
-        const RAID5 = 1 << 7;
-        const RAID6 = 1 << 8;
-        const RESERVED = 1 << 48 | 1 << 49;
+    pub struct HeaderFlags: u64 {
+        const WRITTEN = 1 << 0;
+        const RELOC = 1 << 1;
     }
 }
 
-#[derive(Debug)]
-pub struct DiskChunk {
-    pub len: u64,
-    pub owner: u64,
-
-    pub stripe_length: u64,
-    pub ty: BlockGroupType,
-
-    pub io_alignment: u32,
-    pub io_width: u32,
-
-    pub sector_size: u32,
-    pub stripe_count: u16,
-    pub sub_stripe_count: u16,
-    pub stripe: Stripe,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Checksum {
+    Crc32(u32),
 }
 
-impl DiskChunk {
-    const LEN: usize = 80;
-    pub fn parse(bytes: &[u8]) -> Self {
-        Self {
-            len: read_u64(bytes, 0),
-            owner: read_u64(bytes, 8),
-
-            stripe_length: read_u64(bytes, 16),
-            ty: BlockGroupType::from_bits(read_u64(bytes, 24)).unwrap(),
-
-            io_alignment: read_u32(bytes, 32),
-            io_width: read_u32(bytes, 36),
-
-            sector_size: read_u32(bytes, 40),
-            stripe_count: read_u16(bytes, 44),
-            sub_stripe_count: read_u16(bytes, 46),
-            stripe: Stripe::parse(&bytes[48..]),
+impl Checksum {
+    pub fn new(ty: superblock::ChecksumType, bytes: &[u8]) -> Self {
+        match ty {
+            superblock::ChecksumType::Crc32 => Self::Crc32(read_u32(bytes, 0)),
+        }
+    }
+    pub fn calculate(ty: superblock::ChecksumType, bytes: &[u8]) -> Self {
+        match ty {
+            superblock::ChecksumType::Crc32 => {
+                let mut hasher = crc32::Digest::new_with_initial(crc32::CASTAGNOLI, 0);
+                hasher.write(bytes);
+                Checksum::Crc32(hasher.sum32())
+            }
         }
     }
 }
 
-#[derive(Debug)]
-pub struct Stripe {
-    pub device_id: u64,
-    pub offset: u64,
-    pub device_uuid: uuid::Uuid,
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct Timespec {
+    pub sec: i64,
+    pub nsec: u32,
 }
 
-impl Stripe {
-    const LEN: usize = 32;
+impl Timespec {
+    pub const LEN: usize = 12;
 
     pub fn parse(bytes: &[u8]) -> Self {
         Self {
-            device_id: read_u64(bytes, 0),
-            offset: read_u64(bytes, 8),
-            device_uuid: read_uuid(bytes, 16),
+            sec: read_u64(bytes, 0) as i64,
+            nsec: read_u32(bytes, 8),
         }
     }
+}
+
+pub fn read_timespec(bytes: &[u8], offset: usize) -> Timespec {
+    Timespec::parse(&bytes[offset..offset + Timespec::LEN])
 }

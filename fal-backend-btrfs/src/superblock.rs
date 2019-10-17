@@ -3,9 +3,9 @@ use std::{
     io::SeekFrom,
 };
 
-use crate::{BlockGroupType, DiskChunk, DiskKey, DiskKeyType, sizes};
+use crate::{Checksum, DiskKey, DiskKeyType, items::{BlockGroupType, ChunkItem}, sizes};
 
-use crc::{crc32, Hasher32};
+use bitflags::bitflags;
 use enum_primitive::*;
 use fal::{read_u16, read_u32, read_u64, read_u8, read_uuid, write_u64, write_u8};
 
@@ -15,10 +15,10 @@ const MAGIC: u64 = 0x4D5F53665248425F; // ASCII for "_BHRfS_M"
 
 #[derive(Debug)]
 pub struct Superblock {
-    pub checksum: [u8; CHECKSUM_SIZE],
+    pub checksum: Checksum,
     pub fs_id: uuid::Uuid,
     pub byte_number: u64,
-    pub flags: u64,
+    pub flags: SuperblockFlags,
     pub magic: u64,
     pub generation: u64,
     pub root: u64,
@@ -58,7 +58,7 @@ pub struct Superblock {
     pub root_backups: [RootBackup; 4],
 }
 #[derive(Debug)]
-pub struct SystemChunkArray(pub Vec<(DiskKey, DiskChunk)>);
+pub struct SystemChunkArray(pub Vec<(DiskKey, ChunkItem)>);
 
 #[derive(Debug)]
 pub struct DeviceProperties {
@@ -105,7 +105,7 @@ impl Superblock {
         let fs_id = read_uuid(&block, 32);
 
         let byte_number = read_u64(&block, 48);
-        let flags = read_u64(&block, 56);
+        let flags = SuperblockFlags::from_bits(read_u64(&block, 56)).unwrap();
         let magic = read_u64(&block, 64);
         assert_eq!(magic, MAGIC);
         let generation = read_u64(&block, 72);
@@ -197,19 +197,8 @@ impl Superblock {
             );
         }
 
-        {
-            let calculated_checksum = {
-                let mut hasher = crc32::Digest::new_with_initial(crc32::CASTAGNOLI, 0);
-                hasher.write(&block[32..]);
-                hasher.sum32()
-            };
-            let stored_checksum = read_u32(&checksum, 0);
-
-            assert_eq!(calculated_checksum, stored_checksum);
-        }
-
         Self {
-            checksum,
+            checksum: Checksum::new(checksum_type, &checksum),
             fs_id,
             byte_number,
             flags,
@@ -338,7 +327,7 @@ impl RootBackup {
 
 impl SystemChunkArray {
     pub fn parse(bytes: &[u8]) -> Self {
-        let stride = DiskKey::LEN + DiskChunk::LEN;
+        let stride = DiskKey::LEN + ChunkItem::LEN;
 
         let pairs = (0..bytes.len() / stride).map(|i| {
             let key_bytes = &bytes[i * stride .. i * stride + DiskKey::LEN];
@@ -347,7 +336,7 @@ impl SystemChunkArray {
             let key = DiskKey::parse(key_bytes);
             assert_eq!(key.ty, DiskKeyType::ChunkItem);
 
-            let chunk = DiskChunk::parse(chunk_bytes);
+            let chunk = ChunkItem::parse(chunk_bytes);
             assert!(chunk.ty.contains(BlockGroupType::SYSTEM));
 
             // Only RAID 0 is supported so far.
@@ -358,5 +347,19 @@ impl SystemChunkArray {
         }).collect();
 
         Self(pairs)
+    }
+}
+
+bitflags! {
+    pub struct SuperblockFlags: u64 {
+        const WRITTEN = 1 << 0;
+        const RELOC = 1 << 1;
+
+        const ERROR = 1 << 2;
+        const SEEDING = 1 << 32;
+        const METADUMP = 1 << 33;
+        const METADUMP_V2 = 1 << 34;
+        const CHANGING_FSID = 1 << 35;
+        const CHANGING_FSID_V2 = 1 << 36;
     }
 }
