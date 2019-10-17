@@ -6,7 +6,7 @@ Allows backends (like ext2, apfs, btrfs, xfs etc.) to communicate with the front
 ## Backends
 - ext2: Read-only (+writing metadata)
 - apfs: WIP (parsing the fundamental container structures is currently being implemented)
-- btrfs: TODO
+- btrfs: WIP (status similar to that of APFS)
 - xfs: TODO
 - f2fs: TODO
 
