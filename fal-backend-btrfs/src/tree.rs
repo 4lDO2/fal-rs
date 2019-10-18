@@ -5,11 +5,13 @@ use crate::{
     superblock::{ChecksumType, Superblock}
 };
 
+use std::borrow::{Borrow, Cow};
+
 use fal::{read_u8, read_u32, read_u64, read_uuid};
 
 use uuid::Uuid;
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct Header {
     pub checksum: Checksum,
     pub fsid: Uuid,
@@ -60,13 +62,13 @@ impl Header {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Node {
     pub header: Header,
     pub key_ptrs: Vec<KeyPtr>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct KeyPtr {
     pub key: DiskKey,
     pub block_ptr: u64,
@@ -95,13 +97,13 @@ impl Node {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Leaf {
     pub header: Header,
     pub pairs: Vec<(Item, Value)>,
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Item {
     pub key: DiskKey,
     pub offset: u32,
@@ -117,7 +119,9 @@ pub enum Value {
     InodeItem(InodeItem),
     InodeRef(InodeRef),
     RootRef(RootRef),
+    RootBackref(RootRef),
     ExtentData(FileExtentItem),
+    Unknown,
 }
 
 impl Item {
@@ -144,12 +148,14 @@ impl Leaf {
                     DiskKeyType::ExtentData => Value::ExtentData(FileExtentItem::parse(value_bytes)),
                     DiskKeyType::RootItem => Value::Root(RootItem::parse(value_bytes)),
                     DiskKeyType::InodeRef => Value::InodeRef(InodeRef::parse(value_bytes)),
+                    DiskKeyType::RootBackref => Value::RootBackref(RootRef::parse(value_bytes)),
                     DiskKeyType::RootRef => Value::RootRef(RootRef::parse(value_bytes)),
                     DiskKeyType::InodeItem => Value::InodeItem(InodeItem::parse(value_bytes)),
+                    DiskKeyType::Unknown => Value::Unknown,
                     other => unimplemented!("{:?}", other),
                 }
             };
-            (item, dbg!(value))
+            (item, value)
         }).collect::<Vec<_>>();
 
         Self {
@@ -159,7 +165,7 @@ impl Leaf {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Tree {
     Internal(Node),
     Leaf(Leaf),
@@ -195,5 +201,74 @@ impl Tree {
                 subtree.get(device, superblock, key)
             }
         }
+    }
+    pub fn pairs<'a, D: fal::Device>(&'a self, device: &'a mut D, superblock: &'a Superblock) -> Pairs<'a, D> {
+        Pairs {
+            device,
+            superblock,
+            path: vec![(Cow::Borrowed(self), 0)],
+        }
+    }
+}
+
+/// Stack-based tree traversal iterator
+pub struct Pairs<'a, D: fal::Device> {
+    device: &'a mut D,
+    superblock: &'a Superblock,
+    path: Vec<(Cow<'a, Tree>, usize)>,
+}
+
+impl<'a, D: fal::Device> Iterator for Pairs<'a, D> {
+    type Item = (Item, Value);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // Only used to escape the borrow checker while retaining logic.
+        enum Action {
+            ClimbUp(KeyPtr),
+            ClimbDown,
+        };
+
+        let (current_tree, current_index) = match self.path.last_mut() {
+            Some(l) => l,
+            None => return None,
+        };
+
+        let action = match (*current_tree).borrow() {
+            Tree::Leaf(leaf) => match leaf.pairs.get(*current_index) {
+                Some((item, value)) => {
+                    *current_index += 1;
+                    return Some((*item, value.clone()))
+                }
+                None => {
+                    // When there are no more elements in the current node, we need to go one node
+                    // back, increase the index there and load a new leaf.
+                    Action::ClimbDown
+                }
+            }
+            Tree::Internal(node) => {
+                match node.key_ptrs.get(*current_index) {
+                    Some(&key_ptr) => {
+                        Action::ClimbUp(key_ptr)
+                    }
+                    None => {
+                        Action::ClimbDown
+                    }
+                }
+            }
+        };
+
+        match action {
+            Action::ClimbUp(key_ptr) => self.path.push((Cow::Owned(Tree::load(self.device, self.superblock, key_ptr.block_ptr)), 0)),
+            Action::ClimbDown => {
+                self.path.pop();
+
+                if let Some((_, i)) = self.path.last_mut() {
+                    *i += 1;
+                }
+            }
+        }
+
+        // Recurse until another pair is found or until the entire tree has been traversed.
+        self.next()
     }
 }

@@ -47,7 +47,7 @@ impl<D: fal::Device> Filesystem<D> {
         let root_tree = Tree::parse(superblock.checksum_type, &root_tree_bytes);
         dbg!(&root_tree);
 
-        dbg!(Tree::load(&mut device, &superblock, 25903104));
+        dbg!(root_tree.pairs(&mut device, &superblock).count());
 
         Self {
             device: Mutex::new(device),

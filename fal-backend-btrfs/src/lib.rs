@@ -3,6 +3,8 @@ pub mod items;
 pub mod superblock;
 pub mod tree;
 
+use std::cmp::Ordering;
+
 use bitflags::bitflags;
 use crc::{crc32, Hasher32};
 use enum_primitive::*;
@@ -33,6 +35,24 @@ impl DiskKey {
             ty: DiskKeyType::from_u8(read_u8(bytes, 8)).unwrap(),
             offset: read_u64(bytes, 9),
         }
+    }
+    fn compare(&self, other: &Self) -> Ordering {
+        self.compare_without_offset(other).then(self.offset.cmp(&other.offset))
+    }
+    pub fn compare_without_offset(&self, other: &Self) -> Ordering {
+        self.oid.cmp(&other.oid)
+            .then((&(self.ty as u8)).cmp(&(other.ty as u8)))
+    }
+}
+
+impl PartialOrd for DiskKey {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.compare(other))
+    }
+}
+impl Ord for DiskKey {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.compare(other)
     }
 }
 
