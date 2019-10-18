@@ -3,6 +3,7 @@ name = "fal-backend-ext2"
 version = "0.1.0"
 authors = ["4lDO2 <4lDO2@protonmail.com>"]
 edition = "2018"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 bitflags = "1.2"
