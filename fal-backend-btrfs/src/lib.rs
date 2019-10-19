@@ -150,3 +150,16 @@ pub fn read_timespec(bytes: &[u8], offset: &mut usize) -> Timespec {
     *offset += Timespec::LEN;
     ret
 }
+
+pub mod oid {
+    pub const ROOT_TREE: u64 = 1;
+    pub const EXTENT_TREE: u64 = 2;
+    pub const CHUNK_TREE: u64 = 3;
+    pub const DEV_TREE: u64 = 4;
+    pub const FS_TREE: u64 = 5;
+    pub const CSUM_TREE: u64 = 7;
+    pub const QUOTA_TREE: u64 = 8;
+    pub const UUID_TREE: u64 = 9;
+    pub const FREE_SPACE_TREE: u64 = 10;
+    pub const DEV_STATS: u64 = 0;
+}

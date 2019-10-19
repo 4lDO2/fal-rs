@@ -1,11 +1,14 @@
 use crate::{
     Checksum, DiskKey, DiskKeyType,
     filesystem,
-    items::{ChunkItem, DevItem, DirItem, FileExtentItem, InodeItem, InodeRef, RootItem, RootRef},
+    items::{BlockGroupItem, ChunkItem, CsumItem, DevExtent, DevItem, DevStatsItem, DirItem, ExtentItem, FileExtentItem, InodeItem, InodeRef, RootItem, RootRef},
     superblock::{ChecksumType, Superblock}
 };
 
-use std::borrow::{Borrow, Cow};
+use std::{
+    borrow::{Borrow, Cow},
+    cmp::Ordering,
+};
 
 use fal::{read_u8, read_u32, read_u64, read_uuid};
 
@@ -112,16 +115,33 @@ pub struct Item {
 
 #[derive(Clone, Debug)]
 pub enum Value {
+    BlockGroupItem(BlockGroupItem),
     Chunk(ChunkItem),
     Device(DevItem),
+    DevExtent(DevExtent),
+    DirIndex(DirItem),
     DirItem(DirItem),
-    Root(RootItem),
+    ExtentCsum(CsumItem),
+    ExtentData(FileExtentItem),
+    ExtentItem(ExtentItem),
     InodeItem(InodeItem),
     InodeRef(InodeRef),
+    MetadataItem(ExtentItem),
+    PersistentItem(DevStatsItem), // NOTE: Currently the only persistent item is the dev stats item.
+    Root(RootItem),
     RootRef(RootRef),
     RootBackref(RootRef),
-    ExtentData(FileExtentItem),
+    XattrItem(DirItem),
     Unknown,
+}
+
+impl Value {
+    pub fn into_root_item(self) -> Option<RootItem> {
+        match self {
+            Self::Root(item) => Some(item),
+            _ => None,
+        }
+    }
 }
 
 impl Item {
@@ -137,20 +157,28 @@ impl Item {
 }
 
 impl Leaf {
-    pub fn parse(header: Header, bytes: &[u8]) -> Self {
+    pub fn parse(checksum_type: ChecksumType, header: Header, bytes: &[u8]) -> Self {
         let pairs = (0..header.item_count as usize).map(|i| Item::parse(&bytes[i * 25 .. (i + 1) * 25])).map(|item: Item| {
             let value = {
                 let value_bytes = &bytes[item.offset as usize .. item.offset as usize + item.size as usize];
                 match item.key.ty {
+                    DiskKeyType::BlockGroupItem => Value::BlockGroupItem(BlockGroupItem::parse(value_bytes)),
                     DiskKeyType::ChunkItem => Value::Chunk(ChunkItem::parse(value_bytes)),
+                    DiskKeyType::DevExtent => Value::DevExtent(DevExtent::parse(value_bytes)),
                     DiskKeyType::DevItem => Value::Device(DevItem::parse(value_bytes)),
+                    DiskKeyType::DirIndex => Value::DirIndex(DirItem::parse(value_bytes)),
                     DiskKeyType::DirItem => Value::DirItem(DirItem::parse(value_bytes)),
+                    DiskKeyType::ExtentCsum => Value::ExtentCsum(CsumItem::parse(checksum_type, value_bytes)),
                     DiskKeyType::ExtentData => Value::ExtentData(FileExtentItem::parse(value_bytes)),
-                    DiskKeyType::RootItem => Value::Root(RootItem::parse(value_bytes)),
-                    DiskKeyType::InodeRef => Value::InodeRef(InodeRef::parse(value_bytes)),
-                    DiskKeyType::RootBackref => Value::RootBackref(RootRef::parse(value_bytes)),
-                    DiskKeyType::RootRef => Value::RootRef(RootRef::parse(value_bytes)),
+                    DiskKeyType::ExtentItem => Value::ExtentItem(ExtentItem::parse(value_bytes)),
                     DiskKeyType::InodeItem => Value::InodeItem(InodeItem::parse(value_bytes)),
+                    DiskKeyType::InodeRef => Value::InodeRef(InodeRef::parse(value_bytes)),
+                    DiskKeyType::MetadataItem => Value::MetadataItem(ExtentItem::parse(value_bytes)),
+                    DiskKeyType::PersistentItem => Value::PersistentItem(DevStatsItem::parse(value_bytes)),
+                    DiskKeyType::RootBackref => Value::RootBackref(RootRef::parse(value_bytes)),
+                    DiskKeyType::RootItem => Value::Root(RootItem::parse(value_bytes)),
+                    DiskKeyType::RootRef => Value::RootRef(RootRef::parse(value_bytes)),
+                    DiskKeyType::XattrItem => Value::XattrItem(DirItem::parse(value_bytes)),
                     DiskKeyType::Unknown => Value::Unknown,
                     other => unimplemented!("{:?}", other),
                 }
@@ -172,35 +200,49 @@ pub enum Tree {
 }
 
 impl Tree {
+    pub fn header(&self) -> &Header {
+        match self {
+            Self::Internal(internal) => &internal.header,
+            Self::Leaf(leaf) => &leaf.header,
+        }
+    }
     pub fn parse(checksum_type: ChecksumType, bytes: &[u8]) -> Self {
         let header = Header::parse(checksum_type, &bytes);
 
         match header.level {
-            0 => Self::Leaf(Leaf::parse(header, &bytes[101..])),
-            _ => Self::Internal(Node::parse(header, &bytes[101..])),
+            0 => Self::Leaf(Leaf::parse(checksum_type, header, &bytes[Header::LEN..])),
+            _ => Self::Internal(Node::parse(header, &bytes[Header::LEN..])),
         }
     }
     pub fn load<D: fal::Device>(device: &mut D, superblock: &Superblock, addr: u64) -> Self {
         let block = filesystem::read_node_raw(device, superblock, addr);
         Self::parse(superblock.checksum_type, &block)
     }
-    pub fn get<D: fal::Device>(&self, device: &mut D, superblock: &Superblock, key: &DiskKey) -> Option<Value> {
+    fn get_generic<D: fal::Device>(&self, device: &mut D, superblock: &Superblock, key: &DiskKey, compare: fn(k1: &DiskKey, k2: &DiskKey) -> Ordering) -> Option<Value> {
         match self {
             Self::Leaf(leaf) => {
                 assert_eq!(leaf.header.level, 0);
+
+                // Leaf nodes are guaranteed to contain the key and the value, if they exist.
                 leaf.pairs.iter().find(|(item, _)| &item.key == key).cloned().map(|(_, value)| value)
             }
             Self::Internal(internal) => {
                 assert!(internal.header.level > 0);
-                let key_ptr = match internal.key_ptrs.iter().find(|key_ptr| &key_ptr.key == key) {
+
+                // Find the closest key ptr. If the key that we are searching for is larger than the
+                // closest key ptr, we search that tree, and so on.
+                let key_ptr = match internal.key_ptrs.iter().filter(|key_ptr| &key_ptr.key <= key).max_by_key(|key_ptr| key_ptr.key) {
                     Some(ptr) => ptr,
                     None => return None,
                 };
 
                 let subtree = Self::load(device, superblock, key_ptr.block_ptr);
-                subtree.get(device, superblock, key)
+                subtree.get_generic(device, superblock, key, compare)
             }
         }
+    }
+    pub fn get<D: fal::Device>(&self, device: &mut D, superblock: &Superblock, key: &DiskKey) -> Option<Value> {
+        self.get_generic(device, superblock, key, Ord::cmp)
     }
     pub fn pairs<'a, D: fal::Device>(&'a self, device: &'a mut D, superblock: &'a Superblock) -> Pairs<'a, D> {
         Pairs {
@@ -212,6 +254,7 @@ impl Tree {
 }
 
 /// Stack-based tree traversal iterator
+#[derive(Debug)]
 pub struct Pairs<'a, D: fal::Device> {
     device: &'a mut D,
     superblock: &'a Superblock,
@@ -236,6 +279,7 @@ impl<'a, D: fal::Device> Iterator for Pairs<'a, D> {
         let action = match (*current_tree).borrow() {
             Tree::Leaf(leaf) => match leaf.pairs.get(*current_index) {
                 Some((item, value)) => {
+                    // If there is a pair available, just yield it and continue.
                     *current_index += 1;
                     return Some((*item, value.clone()))
                 }
@@ -248,9 +292,13 @@ impl<'a, D: fal::Device> Iterator for Pairs<'a, D> {
             Tree::Internal(node) => {
                 match node.key_ptrs.get(*current_index) {
                     Some(&key_ptr) => {
+                        // If there is a new undiscovered leaf node, we climb up the tree (closer
+                        // to the leaves), and search it.
                         Action::ClimbUp(key_ptr)
                     }
                     None => {
+                        // Otherwise, we climb down to the parent node, and continue searching
+                        // there.
                         Action::ClimbDown
                     }
                 }

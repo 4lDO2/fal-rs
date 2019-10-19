@@ -1,7 +1,8 @@
-use crate::{DiskKey, read_timespec, Timespec};
+use crate::{superblock::ChecksumType, DiskKey, read_timespec, Timespec};
 use fal::parsing::{assert_eq, read_u8, read_u16, read_u32, read_u64, read_uuid, skip};
 
 use bitflags::bitflags;
+use enum_primitive::*;
 use uuid::Uuid;
 
 bitflags! {
@@ -310,30 +311,178 @@ pub struct FileExtentItem {
     pub compression: u8,
     pub encryption: u8,
     pub other_encoding: u16,
-    pub ty: u8,
+    pub ty: FileExtentItemType,
 
-    // TODO: The last 4 fields should be wrapped in a struct.
-    pub disk_bytenr: u64,
-    pub disk_byte_count: u64,
-    pub disk_offset: u64,
-    pub byte_count: u64,
+    pub extension: FileExtentItemExtension,
+}
+
+enum_from_primitive! {
+    #[derive(Clone, Copy, Debug)]
+    pub enum FileExtentItemType {
+        Inline = 0,
+        Reg = 1,
+        Prealloc = 2,
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum FileExtentItemExtension {
+    OnDisk {
+        disk_bytenr: u64,
+        disk_byte_count: u64,
+        disk_offset: u64,
+        byte_count: u64,
+    },
+    Inline(Vec<u8>),
 }
 
 impl FileExtentItem {
     pub fn parse(bytes: &[u8]) -> Self {
         let mut offset = 0;
-        Self {
-            generation: read_u64(bytes, &mut offset),
-            device_size: read_u64(bytes, &mut offset),
-            compression: read_u8(bytes, &mut offset),
-            encryption: read_u8(bytes, &mut offset),
-            other_encoding: read_u16(bytes, &mut offset),
-            ty: read_u8(bytes, &mut offset),
 
-            disk_bytenr: read_u64(bytes, &mut offset),
-            disk_byte_count: read_u64(bytes, &mut offset),
-            disk_offset: read_u64(bytes, &mut offset),
-            byte_count: read_u64(bytes, &mut offset),
+        let generation = read_u64(bytes, &mut offset);
+        let device_size = read_u64(bytes, &mut offset);
+        let compression = read_u8(bytes, &mut offset);
+        let encryption = read_u8(bytes, &mut offset);
+        let other_encoding = read_u16(bytes, &mut offset);
+        let ty = FileExtentItemType::from_u8(read_u8(bytes, &mut offset)).unwrap();
+
+        Self {
+            generation,
+            device_size,
+            compression,
+            encryption,
+            other_encoding,
+            ty,
+
+            extension: match ty {
+                FileExtentItemType::Reg | FileExtentItemType::Prealloc => FileExtentItemExtension::OnDisk {
+                    disk_bytenr: read_u64(bytes, &mut offset),
+                    disk_byte_count: read_u64(bytes, &mut offset),
+                    disk_offset: read_u64(bytes, &mut offset),
+                    byte_count: read_u64(bytes, &mut offset),
+                },
+                FileExtentItemType::Inline => FileExtentItemExtension::Inline(bytes[offset..offset + device_size as usize].to_owned()),
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct BlockGroupItem {
+    pub bytes_used: u64,
+    pub chunk_oid: u64,
+    pub flags: BlockGroupType,
+}
+
+impl BlockGroupItem {
+    pub fn parse(bytes: &[u8]) -> Self {
+        let mut offset = 0;
+
+        Self {
+            bytes_used: read_u64(bytes, &mut offset),
+            chunk_oid: read_u64(bytes, &mut offset),
+            flags: BlockGroupType::from_bits(read_u64(bytes, &mut offset)).unwrap(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct ExtentItem {
+    pub reference_count: u64,
+    pub allocation_xid: u64,
+    pub flags: ExtentFlags,
+}
+
+bitflags! {
+    pub struct ExtentFlags: u64 {
+        const DATA = 0x1;
+        const TREE_BLOCK = 0x2;
+        const FULL_BACKREF = 0x80;
+    }
+}
+
+impl ExtentItem {
+    pub fn parse(bytes: &[u8]) -> Self {
+        let mut offset = 0;
+
+        Self {
+            reference_count: read_u64(bytes, &mut offset),
+            allocation_xid: read_u64(bytes, &mut offset),
+            flags: ExtentFlags::from_bits(read_u64(bytes, &mut offset)).unwrap(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct DevStatsItem {
+    pub write_errs: u64,
+    pub read_errs: u64,
+    pub flush_errs: u64,
+
+    pub corruption_errs: u64,
+    pub generation_errs: u64,
+}
+
+impl DevStatsItem {
+    pub const LEN: usize = 48;
+
+    pub fn parse(bytes: &[u8]) -> Self {
+        let mut offset = 0;
+
+        Self {
+            write_errs: read_u64(bytes, &mut offset),
+            read_errs: read_u64(bytes, &mut offset),
+            flush_errs: read_u64(bytes, &mut offset),
+
+            corruption_errs: read_u64(bytes, &mut offset),
+            generation_errs: read_u64(bytes, &mut offset),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct DevExtent {
+    pub chunk_tree: u64,
+    pub chunk_oid: u64,
+    pub chunk_offset: u64,
+    pub len: u64,
+    pub chunk_tree_uuid: Uuid,
+}
+
+impl DevExtent {
+    pub fn parse(bytes: &[u8]) -> Self {
+        let mut offset = 0;
+
+        Self {
+            chunk_tree: read_u64(bytes, &mut offset),
+            chunk_oid: read_u64(bytes, &mut offset),
+            chunk_offset: read_u64(bytes, &mut offset),
+            len: read_u64(bytes, &mut offset),
+            chunk_tree_uuid: read_uuid(bytes, &mut offset),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct CsumItem {
+    checksums: Checksums,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum Checksums {
+    Crc32(Vec<u32>),
+}
+
+impl CsumItem {
+    pub fn parse(checksum_type: ChecksumType, bytes: &[u8]) -> Self {
+        Self {
+            checksums: match checksum_type {
+                ChecksumType::Crc32 => Checksums::Crc32({
+                    assert_eq!(bytes.len() % std::mem::size_of::<u32>(), 0);
+                    (0..bytes.len() / 4).map(|i| fal::read_u32(bytes, i * 4)).collect()
+                })
+            },
         }
     }
 }
