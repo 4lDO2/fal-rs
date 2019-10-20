@@ -95,6 +95,9 @@ enum_from_primitive! {
         TemporaryItem = 248,
         PersistentItem = 249,
         DevReplace = 250,
+        UuidSubvol = 251,
+        UuidReceivedSubvol = 252,
+        StringItem = 253,
     }
 }
 
@@ -161,5 +164,7 @@ pub mod oid {
     pub const QUOTA_TREE: u64 = 8;
     pub const UUID_TREE: u64 = 9;
     pub const FREE_SPACE_TREE: u64 = 10;
+
+    pub const ROOT_TREE_DIR: u64 = 6;
     pub const DEV_STATS: u64 = 0;
 }

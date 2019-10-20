@@ -251,13 +251,19 @@ impl RootItem {
 pub struct InodeRef {
     pub index: u64,
     pub name_len: u16,
+    pub name: Vec<u8>, // TODO: Find a good cross-platform unix OsString lib.
 }
 impl InodeRef {
-    pub const LEN: usize = 0;
     pub fn parse(bytes: &[u8]) -> Self {
+        let mut offset = 0;
+
+        let index = read_u64(bytes, &mut offset);
+        let name_len = read_u16(bytes, &mut offset);
+
         Self {
-            index: read_u64(bytes, &mut 0),
-            name_len: read_u16(bytes, &mut 8),
+            index,
+            name_len,
+            name: bytes[offset..offset + name_len as usize].to_owned(),
         }
     }
 }
@@ -287,19 +293,37 @@ pub struct DirItem {
     pub xid: u64,
     pub data_len: u16,
     pub name_len: u16,
-    pub ty: u8,
+    pub ty: Filetype,
+}
+
+enum_from_primitive! {
+    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+    pub enum Filetype {
+        Unknown = 0,
+        RegularFile = 1,
+        Directory = 2,
+        CharacterDevice = 3,
+        BlockDevice = 4,
+        Fifo = 5,
+        Socket = 6,
+        Symlink = 7,
+
+        // Only interally used, not user-visible.
+        Xattr = 8,
+    }
 }
 
 impl DirItem {
-    pub const LEN: usize = 30;
+    pub const LEN: usize = DiskKey::LEN + 13;
 
     pub fn parse(bytes: &[u8]) -> Self {
+        let mut offset = DiskKey::LEN;
         Self {
-            location: DiskKey::parse(&bytes[..17]),
-            xid: read_u64(bytes, &mut 17),
-            data_len: read_u16(bytes, &mut 25),
-            name_len: read_u16(bytes, &mut 27),
-            ty: read_u8(bytes, &mut 29),
+            location: DiskKey::parse(&bytes[..DiskKey::LEN]),
+            xid: read_u64(bytes, &mut offset),
+            data_len: read_u16(bytes, &mut offset),
+            name_len: read_u16(bytes, &mut offset),
+            ty: Filetype::from_u8(read_u8(bytes, &mut offset)).unwrap(),
         }
     }
 }
@@ -483,6 +507,22 @@ impl CsumItem {
                     (0..bytes.len() / 4).map(|i| fal::read_u32(bytes, i * 4)).collect()
                 })
             },
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct UuidItem {
+    // Based on print-io.c from the btrfs source code. It seems like UUID items are simply an array
+    // of subvolume ids.
+    pub subvolumes: Vec<u64>,
+}
+
+impl UuidItem {
+    pub fn parse(bytes: &[u8]) -> Self {
+        assert_eq!(bytes.len() % std::mem::size_of::<u64>(), 0);
+        Self {
+            subvolumes: (0..bytes.len() / 8).map(|i| fal::read_u64(bytes, i)).collect(),
         }
     }
 }

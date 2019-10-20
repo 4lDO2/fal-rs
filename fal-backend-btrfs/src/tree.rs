@@ -1,7 +1,7 @@
 use crate::{
     Checksum, DiskKey, DiskKeyType,
     filesystem,
-    items::{BlockGroupItem, ChunkItem, CsumItem, DevExtent, DevItem, DevStatsItem, DirItem, ExtentItem, FileExtentItem, InodeItem, InodeRef, RootItem, RootRef},
+    items::{BlockGroupItem, ChunkItem, CsumItem, DevExtent, DevItem, DevStatsItem, DirItem, ExtentItem, FileExtentItem, InodeItem, InodeRef, RootItem, RootRef, UuidItem},
     superblock::{ChecksumType, Superblock}
 };
 
@@ -131,6 +131,8 @@ pub enum Value {
     Root(RootItem),
     RootRef(RootRef),
     RootBackref(RootRef),
+    UuidSubvol(UuidItem),
+    UuidReceivedSubvol(UuidItem),
     XattrItem(DirItem),
     Unknown,
 }
@@ -178,6 +180,8 @@ impl Leaf {
                     DiskKeyType::RootBackref => Value::RootBackref(RootRef::parse(value_bytes)),
                     DiskKeyType::RootItem => Value::Root(RootItem::parse(value_bytes)),
                     DiskKeyType::RootRef => Value::RootRef(RootRef::parse(value_bytes)),
+                    DiskKeyType::UuidSubvol => Value::UuidSubvol(UuidItem::parse(value_bytes)),
+                    DiskKeyType::UuidReceivedSubvol => Value::UuidReceivedSubvol(UuidItem::parse(value_bytes)),
                     DiskKeyType::XattrItem => Value::XattrItem(DirItem::parse(value_bytes)),
                     DiskKeyType::Unknown => Value::Unknown,
                     other => unimplemented!("{:?}", other),
