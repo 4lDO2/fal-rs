@@ -1,5 +1,6 @@
 use crate::{
     Checksum, DiskKey, DiskKeyType,
+    chunk_map::ChunkMap,
     filesystem,
     items::{BlockGroupItem, ChunkItem, CsumItem, DevExtent, DevItem, DevStatsItem, DirItem, ExtentItem, FileExtentItem, InodeItem, InodeRef, RootItem, RootRef, UuidItem},
     superblock::{ChecksumType, Superblock}
@@ -144,6 +145,12 @@ impl Value {
             _ => None,
         }
     }
+    pub fn into_chunk_item(self) -> Option<ChunkItem> {
+        match self {
+            Self::Chunk(item) => Some(item),
+            _ => None,
+        }
+    }
 }
 
 impl Item {
@@ -218,11 +225,11 @@ impl Tree {
             _ => Self::Internal(Node::parse(header, &bytes[Header::LEN..])),
         }
     }
-    pub fn load<D: fal::Device>(device: &mut D, superblock: &Superblock, addr: u64) -> Self {
-        let block = filesystem::read_node_raw(device, superblock, addr);
+    pub fn load<D: fal::Device>(device: &mut D, superblock: &Superblock, chunk_map: &ChunkMap, addr: u64) -> Self {
+        let block = filesystem::read_node(device, superblock, chunk_map, addr);
         Self::parse(superblock.checksum_type, &block)
     }
-    fn get_generic<D: fal::Device>(&self, device: &mut D, superblock: &Superblock, key: &DiskKey, compare: fn(k1: &DiskKey, k2: &DiskKey) -> Ordering) -> Option<Value> {
+    fn get_generic<D: fal::Device>(&self, device: &mut D, superblock: &Superblock, chunk_map: &ChunkMap, key: &DiskKey, compare: fn(k1: &DiskKey, k2: &DiskKey) -> Ordering) -> Option<Value> {
         match self {
             Self::Leaf(leaf) => {
                 assert_eq!(leaf.header.level, 0);
@@ -240,16 +247,17 @@ impl Tree {
                     None => return None,
                 };
 
-                let subtree = Self::load(device, superblock, key_ptr.block_ptr);
-                subtree.get_generic(device, superblock, key, compare)
+                let subtree = Self::load(device, superblock, chunk_map, key_ptr.block_ptr);
+                subtree.get_generic(device, superblock, chunk_map, key, compare)
             }
         }
     }
-    pub fn get<D: fal::Device>(&self, device: &mut D, superblock: &Superblock, key: &DiskKey) -> Option<Value> {
-        self.get_generic(device, superblock, key, Ord::cmp)
+    pub fn get<D: fal::Device>(&self, device: &mut D, superblock: &Superblock, chunk_map: &ChunkMap, key: &DiskKey) -> Option<Value> {
+        self.get_generic(device, superblock, chunk_map, key, Ord::cmp)
     }
-    pub fn pairs<'a, D: fal::Device>(&'a self, device: &'a mut D, superblock: &'a Superblock) -> Pairs<'a, D> {
+    pub fn pairs<'a, D: fal::Device>(&'a self, device: &'a mut D, superblock: &'a Superblock, chunk_map: &'a ChunkMap) -> Pairs<'a, D> {
         Pairs {
+            chunk_map,
             device,
             superblock,
             path: vec![(Cow::Borrowed(self), 0)],
@@ -262,11 +270,12 @@ impl Tree {
 pub struct Pairs<'a, D: fal::Device> {
     device: &'a mut D,
     superblock: &'a Superblock,
+    chunk_map: &'a ChunkMap,
     path: Vec<(Cow<'a, Tree>, usize)>,
 }
 
 impl<'a, D: fal::Device> Iterator for Pairs<'a, D> {
-    type Item = (Item, Value);
+    type Item = (DiskKey, Value);
 
     fn next(&mut self) -> Option<Self::Item> {
         // Only used to escape the borrow checker while retaining logic.
@@ -285,7 +294,7 @@ impl<'a, D: fal::Device> Iterator for Pairs<'a, D> {
                 Some((item, value)) => {
                     // If there is a pair available, just yield it and continue.
                     *current_index += 1;
-                    return Some((*item, value.clone()))
+                    return Some((item.key, value.clone()))
                 }
                 None => {
                     // When there are no more elements in the current node, we need to go one node
@@ -310,7 +319,7 @@ impl<'a, D: fal::Device> Iterator for Pairs<'a, D> {
         };
 
         match action {
-            Action::ClimbUp(key_ptr) => self.path.push((Cow::Owned(Tree::load(self.device, self.superblock, key_ptr.block_ptr)), 0)),
+            Action::ClimbUp(key_ptr) => self.path.push((Cow::Owned(Tree::load(self.device, self.superblock, self.chunk_map, key_ptr.block_ptr)), 0)),
             Action::ClimbDown => {
                 self.path.pop();
 

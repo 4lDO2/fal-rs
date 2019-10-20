@@ -1,3 +1,4 @@
+pub mod chunk_map;
 pub mod filesystem;
 pub mod items;
 pub mod superblock;
