@@ -1,5 +1,5 @@
 use std::{
-    convert::TryInto,
+    convert::{TryFrom, TryInto},
     ffi::{OsStr, OsString},
     fs::File,
     os::unix::ffi::OsStrExt,
@@ -126,8 +126,9 @@ impl<Backend: fal::FilesystemMut<File>> SchemeMut for RedoxFilesystem<Backend> {
             let file_size = inode.attrs().size;
             let offset = self.inner().fh(fh as u64).offset();
 
-            let buf_end = std::cmp::min(buf.len(), file_size as usize);
-            let buf = &mut buf[..buf_end];
+            let bytes_to_read = std::cmp::min(offset + u64::try_from(buf.len()).unwrap(), file_size) - offset;
+
+            let buf = &mut buf[..bytes_to_read.try_into().unwrap()];
 
             syscall_result(self.inner().read(fh as u64, offset, buf))
         }
