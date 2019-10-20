@@ -34,6 +34,8 @@ fn main() {
 
     let matches = app.get_matches();
 
+    let filesystem_type = matches.value_of("FILESYSTEM_TYPE").unwrap();
+
     if let Some(matches) = matches.subcommand_matches("mount") {
         let device = matches.value_of("DEVICE").unwrap();
         let mount_point = matches.value_of("MOUNTPOINT").unwrap();
@@ -61,8 +63,6 @@ fn main() {
             .iter()
             .map(|option| option.as_os_str())
             .collect::<Vec<_>>();
-
-        let filesystem_type = matches.value_of("FILESYSTEM_TYPE").unwrap();
 
         match filesystem_type {
             #[cfg(feature = "ext2")]
