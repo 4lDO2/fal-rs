@@ -1,5 +1,5 @@
-use crate::{superblock::ChecksumType, DiskKey, read_timespec, Timespec};
-use fal::parsing::{assert_eq, read_u8, read_u16, read_u32, read_u64, read_uuid, skip};
+use crate::{superblock::{ChecksumType, Superblock}, DiskKey, read_timespec, Timespec};
+use fal::parsing::{read_u8, read_u16, read_u32, read_u64, read_uuid, skip};
 
 use bitflags::bitflags;
 use enum_primitive::*;
@@ -60,6 +60,9 @@ impl ChunkItem {
         let stripes = (0..stripe_count as usize).map(|i| Stripe::parse(&bytes[offset + i * Stripe::LEN..offset + (i + 1) * Stripe::LEN])).collect::<Vec<_>>().into_boxed_slice(); // FIXME: stripe_count & sub_stripe_count length.
 
         Self { len, owner, stripe_length, ty, io_alignment, io_width, sector_size, stripe_count, sub_stripe_count, stripes }
+    }
+    pub fn stripe(&self, superblock: &Superblock) -> &Stripe {
+        self.stripes.iter().find(|stripe| &stripe.device_uuid == &superblock.device_properties.uuid).expect("Using the superblock of a different filesystem")
     }
 }
 
@@ -134,7 +137,7 @@ pub struct RootItem {
     pub byte_limit: u64,
     pub bytes_used: u64,
     pub last_snapshot: u64,
-    pub flags: u64,
+    pub flags: RootItemFlags,
     pub refs: u32,
 
     pub drop_progress: DiskKey,
@@ -169,7 +172,7 @@ pub struct InodeItem {
     pub gid: u32,
     pub mode: u32,
     pub rdev: u64,
-    pub flags: u64,
+    pub flags: InodeFlags,
     pub sequence: u64,
 
     // 4 reserved u64s.
@@ -178,6 +181,29 @@ pub struct InodeItem {
     pub ctime: Timespec,
     pub mtime: Timespec,
     pub otime: Timespec,
+}
+
+bitflags! {
+    pub struct InodeFlags: u64 {
+        const NO_DATA_SUM = 0x1;
+        const NO_DATA_COW = 0x2;
+        const READONLY = 0x4;
+        const DONT_COMPRESS = 0x8;
+        const PREALLOCATE = 0x10;
+        const SYNCHRONOUS = 0x20;
+        const IMMUTABLE = 0x40;
+        const APPEND_ONLY = 0x80;
+        const NO_DUMP = 0x100;
+        const NOATIME = 0x200;
+        const SYNCHRONOUS_DIR_OPS = 0x400;
+        const COMPRESS = 0x800;
+        const ROOT_ITEM_INIT = 0x80000000;
+    }
+}
+bitflags! {
+    pub struct RootItemFlags: u64 {
+        const SUBVOLUME_READONLY = 0x1;
+    }
 }
 
 impl InodeItem {
@@ -196,7 +222,7 @@ impl InodeItem {
             gid: read_u32(bytes, &mut offset),
             mode: read_u32(bytes, &mut offset),
             rdev: read_u64(bytes, &mut offset),
-            flags: read_u64(bytes, &mut offset),
+            flags: InodeFlags::from_bits_truncate(read_u64(bytes, &mut offset)),
             sequence: read_u64(bytes, &mut offset),
 
             atime: read_timespec(bytes, skip(&mut offset, 32)),
@@ -220,7 +246,7 @@ impl RootItem {
             byte_limit: read_u64(bytes, &mut offset),
             bytes_used: read_u64(bytes, &mut offset),
             last_snapshot: read_u64(bytes, &mut offset),
-            flags: read_u64(bytes, &mut offset),
+            flags: RootItemFlags::from_bits(read_u64(bytes, &mut offset)).unwrap(),
             refs: read_u32(bytes, &mut offset),
 
             drop_progress: DiskKey::parse(&bytes[offset..offset + 17]),

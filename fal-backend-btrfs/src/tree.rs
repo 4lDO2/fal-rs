@@ -151,6 +151,12 @@ impl Value {
             _ => None,
         }
     }
+    pub fn is_chunk_item(&self) -> bool {
+        match self {
+            Self::Chunk(_) => true,
+            _ => false,
+        }
+    }
 }
 
 impl Item {

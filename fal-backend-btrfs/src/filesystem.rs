@@ -21,7 +21,7 @@ pub fn read_node_phys<D: fal::Device>(device: &mut D, superblock: &Superblock, o
 }
 
 pub fn read_node<D: fal::Device>(device: &mut D, superblock: &Superblock, chunk_map: &ChunkMap, offset: u64) -> Box<[u8]> {
-    read_node_phys(device, superblock, chunk_map.get(offset).unwrap())
+    read_node_phys(device, superblock, chunk_map.get(superblock, offset).unwrap())
 }
 
 #[derive(Debug)]
@@ -36,17 +36,17 @@ impl<D: fal::Device> Filesystem<D> {
     pub fn mount(mut device: D) -> Self {
         let superblock = Superblock::load(&mut device);
 
-        let chunk_map = ChunkMap::read_sys_chunk_array(&superblock);
+        let mut chunk_map = ChunkMap::read_sys_chunk_array(&superblock);
 
         let chunk_tree = Tree::load(&mut device, &superblock, &chunk_map, superblock.chunk_root);
+        chunk_map.read_chunk_tree(&mut device, &superblock, &chunk_tree);
+
         let root_tree = Tree::load(&mut device, &superblock, &chunk_map, superblock.root);
 
         let extent_tree = Self::load_tree(&mut device, &superblock, &chunk_map, &root_tree, oid::EXTENT_TREE).unwrap();
         let dev_tree = Self::load_tree(&mut device, &superblock, &chunk_map, &root_tree, oid::DEV_TREE).unwrap();
         let fs_tree = Self::load_tree(&mut device, &superblock, &chunk_map, &root_tree, oid::FS_TREE).unwrap();
         let csum_tree = Self::load_tree(&mut device, &superblock, &chunk_map, &root_tree, oid::CSUM_TREE).unwrap();
-
-        Self::verify_root_backups(&superblock, &chunk_map, &root_tree, &chunk_tree, &extent_tree, &fs_tree, &dev_tree, &csum_tree);
 
         // It seems like the quota tree may not necessarily exist. Or, the quota tree is simply
         // stored somewhere else.
@@ -64,7 +64,11 @@ impl<D: fal::Device> Filesystem<D> {
                 assert_eq!(key.offset, item.stripes[0].offset);
             }
         }
-        for _ in root_tree.pairs(&mut device, &superblock, &chunk_map) {}
+        for (k, v) in root_tree.pairs(&mut device, &superblock, &chunk_map) {
+            if k.ty == DiskKeyType::RootItem {
+                dbg!(k, v);
+            }
+        }
         for _ in extent_tree.pairs(&mut device, &superblock, &chunk_map) {}
         for _ in dev_tree.pairs(&mut device, &superblock, &chunk_map) {}
         for _ in fs_tree.pairs(&mut device, &superblock, &chunk_map) {}
@@ -92,24 +96,5 @@ impl<D: fal::Device> Filesystem<D> {
         let root_item = value.into_root_item().unwrap();
 
         Some(Tree::load(device, superblock, chunk_map, root_item.addr))
-    }
-    fn verify_root_backups(superblock: &Superblock, chunk_map: &ChunkMap, root_tree: &Tree, chunk_tree: &Tree, extent_tree: &Tree, fs_tree: &Tree, device_tree: &Tree, csum_tree: &Tree) {
-        // TODO: Add some kind of error handling, such as updating the file system state to
-        // "has errors" or something.
-        for root_backup in &superblock.root_backups {
-            Self::verify_tree(root_tree, chunk_map, root_backup.tree_root, root_backup.tree_root_generation, root_backup.tree_root_level);
-            Self::verify_tree(chunk_tree, chunk_map, root_backup.chunk_root, root_backup.chunk_root_generation, root_backup.chunk_root_level);
-            Self::verify_tree(extent_tree, chunk_map, root_backup.extent_root, root_backup.extent_root_generation, root_backup.extent_root_level);
-            Self::verify_tree(fs_tree, chunk_map, root_backup.filesystem_root, root_backup.filesystem_root_generation, root_backup.filesystem_root_level);
-            Self::verify_tree(device_tree, chunk_map, root_backup.device_root, root_backup.device_root_generation, root_backup.device_root_level);
-            Self::verify_tree(csum_tree, chunk_map, root_backup.checksum_root, root_backup.checksum_root_generation, root_backup.checksum_root_level);
-            dbg!();
-        }
-    }
-    fn verify_tree(tree: &Tree, chunk_map: &ChunkMap, addr: u64, generation: u64, level: u8) {
-        let header = tree.header();
-        assert_eq!(Some(header.logical_addr), chunk_map.get(addr));
-        assert_eq!(header.generation, generation);
-        assert_eq!(header.level, level);
     }
 }

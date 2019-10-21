@@ -26,7 +26,7 @@ impl ChunkMap {
         // Use the suboptimal O(n) approach.
         self.map.iter().filter(|(key, _)| *key <= &virt).max_by_key(|(k, _)| *k).map(|(&k, v)| (k, v))
     }
-    pub fn get(&self, virt: u64) -> Option<u64> {
+    pub fn get(&self, superblock: &Superblock, virt: u64) -> Option<u64> {
         // TODO: RAID (multiple stripes)
         let (key, chunk_item) = match self.get_full(virt) {
             Some(p) => p,
@@ -34,10 +34,11 @@ impl ChunkMap {
         };
 
         let offset = virt - key;
-        Some(chunk_item.stripes[0].offset + offset)
+        if offset >= chunk_item.len { return None }
+        Some(chunk_item.stripe(superblock).offset + offset)
     }
     pub fn read_chunk_tree<D: fal::Device>(&mut self, device: &mut D, superblock: &Superblock, tree: &Tree) {
-        let new_pairs = tree.pairs(device, superblock, self).map(|(k, v)| (k.offset, v.into_chunk_item().unwrap())).collect::<Vec<_>>();
+        let new_pairs = tree.pairs(device, superblock, self).filter_map(|(k, v)| v.into_chunk_item().map(|v| (k.offset, v))).collect::<Vec<_>>();
         self.map.extend(new_pairs)
     }
 }
