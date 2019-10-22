@@ -30,6 +30,16 @@ pub struct Filesystem<D: fal::Device> {
     pub superblock: Superblock,
 
     pub chunk_map: ChunkMap,
+
+    pub root_tree: Tree,
+    pub chunk_tree: Tree,
+    pub extent_tree: Tree,
+    pub dev_tree: Tree,
+    pub fs_tree: Tree,
+    pub csum_tree: Tree,
+    pub quota_tree: Option<Tree>,
+    pub uuid_tree: Tree,
+    pub free_space_tree: Option<Tree>,
 }
 
 impl<D: fal::Device> Filesystem<D> {
@@ -58,30 +68,21 @@ impl<D: fal::Device> Filesystem<D> {
         // fs tree, right?
         let free_space_tree = Self::load_tree(&mut device, &superblock, &chunk_map, &root_tree, oid::FREE_SPACE_TREE);
 
-        // Simply iterate through the tree to see if a disk key type is unimplemented.
-        for (key, chunk_item) in chunk_tree.pairs(&mut device, &superblock, &chunk_map) {
-            if let crate::tree::Value::Chunk(item) = chunk_item {
-                assert_eq!(key.offset, item.stripes[0].offset);
-            }
-        }
-        for (k, v) in root_tree.pairs(&mut device, &superblock, &chunk_map) {
-            if k.ty == DiskKeyType::RootItem {
-                dbg!(k, v);
-            }
-        }
-        for _ in extent_tree.pairs(&mut device, &superblock, &chunk_map) {}
-        for _ in dev_tree.pairs(&mut device, &superblock, &chunk_map) {}
-        for _ in fs_tree.pairs(&mut device, &superblock, &chunk_map) {}
-        for _ in csum_tree.pairs(&mut device, &superblock, &chunk_map) {}
-        if let Some(quota_tree) = quota_tree { for _ in quota_tree.pairs(&mut device, &superblock, &chunk_map) {} }
-        for _ in uuid_tree.pairs(&mut device, &superblock, &chunk_map) {}
-        if let Some(free_space_tree) = free_space_tree { for _ in free_space_tree.pairs(&mut device, &superblock, &chunk_map) {} }
-
         Self {
             device: Mutex::new(device),
             superblock,
 
             chunk_map,
+
+            root_tree,
+            chunk_tree,
+            extent_tree,
+            dev_tree,
+            fs_tree,
+            csum_tree,
+            quota_tree,
+            uuid_tree,
+            free_space_tree,
         }
     }
     fn load_tree(device: &mut D, superblock: &Superblock, chunk_map: &ChunkMap, tree: &Tree, oid: u64) -> Option<Tree> {

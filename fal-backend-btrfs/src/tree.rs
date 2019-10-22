@@ -265,8 +265,7 @@ impl Tree {
                     assert_eq!(leaf.header.level, 0);
 
                     // Leaf nodes are guaranteed to contain the key and the value, if they exist.
-                    break leaf.pairs.iter().position(|(item, _)| &item.key == key);
-
+                    break leaf.pairs.iter().position(|(item, _)| compare(&item.key, key) == Ordering::Equal);
                 }
                 Self::Internal(internal) => {
                     assert!(internal.header.level > 0);
