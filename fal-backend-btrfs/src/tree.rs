@@ -15,6 +15,9 @@ use fal::{read_u8, read_u32, read_u64, read_uuid};
 
 use uuid::Uuid;
 
+// TODO: Paths are small and smallvec / arrayvec should be used.
+type Path<'a> = Vec<(Cow<'a, Tree>, usize)>;
+
 #[derive(Clone, Copy, Debug)]
 pub struct Header {
     pub checksum: Checksum,
@@ -216,7 +219,23 @@ pub enum Tree {
     Leaf(Leaf),
 }
 
+fn always_equal<'b>(_: &'b DiskKey, _: &'b DiskKey) -> Ordering {
+    Ordering::Equal
+}
+
 impl Tree {
+    pub fn as_leaf(&self) -> Option<&Leaf> {
+        match self {
+            Self::Leaf(l) => Some(l),
+            Self::Internal(_) => None,
+        }
+    }
+    pub fn as_internal(&self) -> Option<&Node> {
+        match self {
+            Self::Internal(n) => Some(n),
+            Self::Leaf(_) => None,
+        }
+    }
     pub fn header(&self) -> &Header {
         match self {
             Self::Internal(internal) => &internal.header,
@@ -235,31 +254,47 @@ impl Tree {
         let block = filesystem::read_node(device, superblock, chunk_map, addr);
         Self::parse(superblock.checksum_type, &block)
     }
-    fn get_generic<D: fal::Device>(&self, device: &mut D, superblock: &Superblock, chunk_map: &ChunkMap, key: &DiskKey, compare: fn(k1: &DiskKey, k2: &DiskKey) -> Ordering) -> Option<Value> {
-        match self {
-            Self::Leaf(leaf) => {
-                assert_eq!(leaf.header.level, 0);
+    fn get_generic<D: fal::Device>(&self, device: &mut D, superblock: &Superblock, chunk_map: &ChunkMap, key: &DiskKey, compare: fn(k1: &DiskKey, k2: &DiskKey) -> Ordering) -> Option<((DiskKey, Value), Path)> {
+        let mut path = Vec::with_capacity(self.header().level as usize);
 
-                // Leaf nodes are guaranteed to contain the key and the value, if they exist.
-                leaf.pairs.iter().find(|(item, _)| &item.key == key).cloned().map(|(_, value)| value)
+        path.push((Cow::Borrowed(self), 0));
+
+        let item_index = loop {
+            match path.last().map(|(tree, _)| tree).unwrap().borrow() {
+                Self::Leaf(leaf) => {
+                    assert_eq!(leaf.header.level, 0);
+
+                    // Leaf nodes are guaranteed to contain the key and the value, if they exist.
+                    break leaf.pairs.iter().position(|(item, _)| &item.key == key);
+
+                }
+                Self::Internal(internal) => {
+                    assert!(internal.header.level > 0);
+
+                    // Find the closest key ptr. If the key that we are searching for is larger than the
+                    // closest key ptr, we search that tree, and so on.
+                    let (i, key_ptr) = match internal.key_ptrs.iter().enumerate().filter(|(_, key_ptr)| compare(&key_ptr.key, key) != Ordering::Greater).max_by(|(_, key_ptr1), (_, key_ptr2)| compare(&key_ptr1.key, &key_ptr2.key)) {
+                        Some(ptr) => ptr,
+                        None => return None,
+                    };
+
+                    let subtree = Self::load(device, superblock, chunk_map, key_ptr.block_ptr);
+                    path.push((Cow::Owned(subtree), i));
+                    continue;
+                }
             }
-            Self::Internal(internal) => {
-                assert!(internal.header.level > 0);
-
-                // Find the closest key ptr. If the key that we are searching for is larger than the
-                // closest key ptr, we search that tree, and so on.
-                let key_ptr = match internal.key_ptrs.iter().filter(|key_ptr| &key_ptr.key <= key).max_by_key(|key_ptr| key_ptr.key) {
-                    Some(ptr) => ptr,
-                    None => return None,
-                };
-
-                let subtree = Self::load(device, superblock, chunk_map, key_ptr.block_ptr);
-                subtree.get_generic(device, superblock, chunk_map, key, compare)
-            }
-        }
+        };
+        item_index.map(|i| {
+            path.last_mut().unwrap().1 = i;
+            let (key, ref value) = path.last().map(|(node, _)| node.as_leaf().unwrap()).unwrap().pairs[i];
+            ((key.key, value.clone()), path)
+        })
     }
     pub fn get<D: fal::Device>(&self, device: &mut D, superblock: &Superblock, chunk_map: &ChunkMap, key: &DiskKey) -> Option<Value> {
-        self.get_generic(device, superblock, chunk_map, key, Ord::cmp)
+        self.get_with_path(device, superblock, chunk_map, key).map(|(value, _)| value)
+    }
+    pub fn get_with_path<D: fal::Device>(&self, device: &mut D, superblock: &Superblock, chunk_map: &ChunkMap, key: &DiskKey) -> Option<(Value, Path)> {
+        self.get_generic(device, superblock, chunk_map, key, Ord::cmp).map(|((_, value), path)| (value, path))
     }
     pub fn pairs<'a, D: fal::Device>(&'a self, device: &'a mut D, superblock: &'a Superblock, chunk_map: &'a ChunkMap) -> Pairs<'a, D> {
         Pairs {
@@ -267,17 +302,37 @@ impl Tree {
             device,
             superblock,
             path: vec![(Cow::Borrowed(self), 0)],
+            previous_key: None,
+            function: Box::new(always_equal),
         }
+    }
+    /// Find similar pairs, i.e. pairs which key have the same oid and type, but possibly different offsets.
+    pub fn similar_pairs<'a, D: fal::Device>(&'a self, device: &'a mut D, superblock: &'a Superblock, chunk_map: &'a ChunkMap, partial_key: &DiskKey) -> Option<Pairs<'a, D>> {
+        let (_, path) = match self.get_generic(device, superblock, chunk_map, partial_key, DiskKey::compare_without_offset) {
+            Some(p) => p,
+            None => return None,
+        };
+
+        Some(Pairs {
+            chunk_map,
+            device,
+            superblock,
+            path,
+            previous_key: None,
+            function: Box::new(DiskKey::compare_without_offset),
+        })
     }
 }
 
 /// Stack-based tree traversal iterator
-#[derive(Debug)]
 pub struct Pairs<'a, D: fal::Device> {
     device: &'a mut D,
     superblock: &'a Superblock,
     chunk_map: &'a ChunkMap,
     path: Vec<(Cow<'a, Tree>, usize)>,
+
+    function: Box<for<'b> fn(k1: &'b DiskKey, k2: &'b DiskKey) -> Ordering>,
+    previous_key: Option<DiskKey>,
 }
 
 impl<'a, D: fal::Device> Iterator for Pairs<'a, D> {
@@ -300,6 +355,13 @@ impl<'a, D: fal::Device> Iterator for Pairs<'a, D> {
                 Some((item, value)) => {
                     // If there is a pair available, just yield it and continue.
                     *current_index += 1;
+                    if let Some(previous_key) = self.previous_key {
+                        let function = &self.function;
+                        if function(&previous_key, &item.key) != Ordering::Equal {
+                            return None
+                        }
+                        self.previous_key = Some(item.key);
+                    }
                     return Some((item.key, value.clone()))
                 }
                 None => {
