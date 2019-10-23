@@ -225,14 +225,14 @@ impl BTreeNode {
         Self::parse(&read_block(superblock, device, addr))
     }
     pub fn parse(bytes: &[u8]) -> Self {
-        let mut offset = ObjPhys::LEN;
+        let mut offset = 0;
 
         let header = read_obj_phys(bytes, &mut offset);
 
         let flags = BTreeNodeFlags::from_bits(read_u16(bytes, &mut offset)).unwrap();
+        let level = read_u16(bytes, &mut offset);
 
         let key_count = read_u32(bytes, &mut offset);
-        let level = read_u16(bytes, &mut offset);
         let table_space = read_nloc(bytes, &mut offset);
         let free_space = read_nloc(bytes, &mut offset);
         let key_free_list = read_nloc(bytes, &mut offset);
@@ -413,6 +413,21 @@ impl BTree {
             compare: Ord::cmp,
             previous_key: None,
         }
+    }
+    pub fn similar_pairs<'a, D: fal::Device>(&'a self, device: &'a mut D, superblock: &'a NxSuperblock, key: &BTreeKey, compare: Compare) -> Option<Pairs<'a, D>> {
+        let path = match self.get_generic(device, superblock, key, compare).map(|(_, path)| path) {
+            Some(p) => p,
+            None => return None,
+        };
+
+        Some(Pairs {
+            device,
+            superblock,
+            path,
+
+            compare: Ord::cmp,
+            previous_key: None,
+        })
     }
     pub fn keys<'a, D: fal::Device>(&'a self, device: &'a mut D, superblock: &'a NxSuperblock) -> impl Iterator<Item = BTreeKey> + 'a {
         self.pairs(device, superblock).map(|(k, _)| k)

@@ -190,9 +190,12 @@ impl Volume {
     }
     pub fn root_oid<D: fal::Device>(&self, device: &mut D, superblock: &NxSuperblock) -> OmapValue {
         dbg!(&self.superblock);
-        self.omap_tree.get_as_omap(device, superblock, OmapKey {
+
+        let (_, value) = self.omap_tree.similar_pairs(device, superblock, &BTreeKey::OmapKey(OmapKey {
             oid: self.superblock.root_tree_oid,
             xid: self.superblock.header.transaction_id,
-        }).unwrap()
+        }), OmapKey::compare_partial).unwrap().map(|(k, v)| (k.into_omap_key().unwrap(), v.into_omap_value().unwrap())).max_by_key(|(k, _)| k.xid).unwrap();
+
+        value
     }
 }
