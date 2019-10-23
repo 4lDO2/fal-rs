@@ -2,18 +2,39 @@ use bitflags::bitflags;
 
 use crate::{
     omap::{OmapKey, OmapValue},
-    ObjPhys, ObjectType,
+    superblock::NxSuperblock,
+    BlockAddr, ObjPhys, ObjectIdentifier, ObjectType, read_block, read_obj_phys,
 };
 
-use fal::{read_u16, read_u32, read_u64};
+use fal::parsing::{read_u16, read_u32, read_u64};
 
-use std::ops::Range;
+use std::{
+    borrow::{Borrow, Cow},
+    cmp::Ordering
+};
 
-pub type NodeLocation = Range<u16>;
+pub type Compare = fn(_: &BTreeKey, _: &BTreeKey) -> Ordering;
+pub type Path<'a> = Vec<(Cow<'a, BTreeNode>, usize)>;
 
-pub fn read_nloc(bytes: &[u8], off: usize) -> NodeLocation {
-    let start = read_u16(bytes, off);
-    start..start + read_u16(bytes, off + 2)
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct NodeLocation {
+    pub start: u16,
+    pub len: u16,
+}
+impl NodeLocation {
+    pub fn start(&self) -> u16 {
+        self.start
+    }
+    pub fn end(&self) -> u16 {
+        self.start + self.len
+    }
+}
+
+pub fn read_nloc(bytes: &[u8], off: &mut usize) -> NodeLocation {
+    NodeLocation {
+        start: read_u16(bytes, off),
+        len: read_u16(bytes, off),
+    }
 }
 
 bitflags! {
@@ -37,7 +58,7 @@ bitflags! {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct BTreeInfoFixed {
     pub flags: BTreeFlags,
     pub node_size: u32,
@@ -46,17 +67,20 @@ pub struct BTreeInfoFixed {
 }
 
 impl BTreeInfoFixed {
+    pub const LEN: usize = 16;
+
     pub fn parse(bytes: &[u8]) -> Self {
+        let mut offset = 0;
         Self {
-            flags: BTreeFlags::from_bits(read_u32(bytes, 0)).unwrap(),
-            node_size: read_u32(bytes, 4),
-            key_size: read_u32(bytes, 8),
-            val_size: read_u32(bytes, 12),
+            flags: BTreeFlags::from_bits(read_u32(bytes, &mut offset)).unwrap(),
+            node_size: read_u32(bytes, &mut offset),
+            key_size: read_u32(bytes, &mut offset),
+            val_size: read_u32(bytes, &mut offset),
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct BTreeInfo {
     pub fixed: BTreeInfoFixed,
     pub longest_key: u32,
@@ -68,12 +92,14 @@ pub struct BTreeInfo {
 impl BTreeInfo {
     pub const LEN: usize = 40;
     pub fn parse(bytes: &[u8]) -> Self {
+        let mut offset = BTreeInfoFixed::LEN;
+
         Self {
-            fixed: BTreeInfoFixed::parse(&bytes[..16]),
-            longest_key: read_u32(bytes, 16),
-            longest_val: read_u32(bytes, 20),
-            key_count: read_u64(bytes, 24),
-            node_count: read_u64(bytes, 32),
+            fixed: BTreeInfoFixed::parse(&bytes[..offset]),
+            longest_key: read_u32(bytes, &mut offset),
+            longest_val: read_u32(bytes, &mut offset),
+            key_count: read_u64(bytes, &mut offset),
+            node_count: read_u64(bytes, &mut offset),
         }
     }
 }
@@ -88,9 +114,10 @@ impl KvLocation {
     pub const LEN: usize = 8;
 
     pub fn parse(bytes: &[u8]) -> Self {
+        let mut offset = 0;
         Self {
-            key: read_nloc(bytes, 0),
-            value: read_nloc(bytes, 4),
+            key: read_nloc(bytes, &mut offset),
+            value: read_nloc(bytes, &mut offset),
         }
     }
 }
@@ -105,21 +132,28 @@ impl KvOffset {
     pub const LEN: usize = 4;
 
     pub fn parse(bytes: &[u8]) -> Self {
+        let mut offset = 0;
         Self {
-            key: read_u16(bytes, 0),
-            value: read_u16(bytes, 2),
+            key: read_u16(bytes, &mut offset),
+            value: read_u16(bytes, &mut offset),
         }
     }
 }
 
 fn off2loc(offset: KvOffset, key_size: u16, val_size: u16) -> KvLocation {
     KvLocation {
-        key: offset.key..offset.key + key_size,
-        value: offset.value..offset.value + val_size,
+        key: NodeLocation {
+            start: offset.key,
+            len: key_size,
+        },
+        value: NodeLocation {
+            start: offset.value,
+            len: val_size,
+        },
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum BTreeToc {
     Locations(Vec<KvLocation>),
     Offsets(Vec<KvOffset>),
@@ -135,7 +169,7 @@ impl BTreeToc {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct BTreeNode {
     pub header: ObjPhys,
     pub flags: BTreeNodeFlags,
@@ -150,12 +184,25 @@ pub struct BTreeNode {
     pub toc: BTreeToc,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub enum BTreeKey {
     OmapKey(OmapKey),
 }
 
-#[derive(Debug)]
+impl BTreeKey {
+    pub fn into_omap_key(self) -> Option<OmapKey> {
+        match self {
+            Self::OmapKey(key) => Some(key),
+        }
+    }
+    pub fn as_omap_key(&self) -> Option<&OmapKey> {
+        match self {
+            Self::OmapKey(ref key) => Some(key),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BTreeValue {
     OmapValue(OmapValue),
 }
@@ -166,22 +213,37 @@ impl BTreeValue {
             Self::OmapValue(val) => Some(val),
         }
     }
+    pub fn as_omap_value(&self) -> Option<&OmapValue> {
+        match self {
+            Self::OmapValue(ref val) => Some(val),
+        }
+    }
 }
 
 impl BTreeNode {
+    pub fn load<D: fal::Device>(device: &mut D, superblock: &NxSuperblock, addr: BlockAddr) -> Self {
+        Self::parse(&read_block(superblock, device, addr))
+    }
     pub fn parse(bytes: &[u8]) -> Self {
-        let header = ObjPhys::parse(&bytes[..32]);
+        let mut offset = ObjPhys::LEN;
 
-        let flags = BTreeNodeFlags::from_bits(read_u16(bytes, 32)).unwrap();
+        let header = read_obj_phys(bytes, &mut offset);
 
-        let table_space = read_nloc(bytes, 40);
+        let flags = BTreeNodeFlags::from_bits(read_u16(bytes, &mut offset)).unwrap();
 
-        let key_count = read_u32(bytes, 36);
+        let key_count = read_u32(bytes, &mut offset);
+        let level = read_u16(bytes, &mut offset);
+        let table_space = read_nloc(bytes, &mut offset);
+        let free_space = read_nloc(bytes, &mut offset);
+        let key_free_list = read_nloc(bytes, &mut offset);
+        let val_free_list = read_nloc(bytes, &mut offset);
+
+        assert_eq!(offset, 56);
 
         let toc = if flags.contains(BTreeNodeFlags::FIXED_KV_SIZE) {
             BTreeToc::Offsets(
-                ((56 + table_space.start) / KvOffset::LEN as u16
-                    ..(56 + table_space.end) / KvOffset::LEN as u16)
+                ((offset as u16 + table_space.start) / KvOffset::LEN as u16
+                    ..(offset as u16 + table_space.end()) / KvOffset::LEN as u16)
                     .map(|i| {
                         KvOffset::parse(
                             &bytes[i as usize * KvOffset::LEN..(i as usize + 1) * KvOffset::LEN],
@@ -192,8 +254,8 @@ impl BTreeNode {
             )
         } else {
             BTreeToc::Locations(
-                ((56 + table_space.start) as usize / KvLocation::LEN
-                    ..(56 + table_space.end) as usize / KvLocation::LEN)
+                ((offset as u16 + table_space.start) as usize / KvLocation::LEN
+                    ..(offset as u16 + table_space.end()) as usize / KvLocation::LEN)
                     .map(|i| {
                         KvLocation::parse(&bytes[i * KvLocation::LEN..(i + 1) * KvLocation::LEN])
                     })
@@ -201,107 +263,246 @@ impl BTreeNode {
                     .collect(),
             )
         };
+        let keyval_area = bytes[offset + table_space.end() as usize
+            ..(bytes.len()
+                - if header.object_type.ty == ObjectType::Btree {
+                    BTreeInfo::LEN
+                } else {
+                    0
+                })]
+            .to_owned();
+
+        let info = if header.object_type.ty == ObjectType::Btree {
+            Some(BTreeInfo::parse(&bytes[bytes.len() - BTreeInfo::LEN..]))
+        } else {
+            None
+        };
 
         Self {
             header,
             flags,
             key_count,
-            level: read_u16(bytes, 34),
-            free_space: read_nloc(bytes, 44),
-            key_free_list: read_nloc(bytes, 48),
-            val_free_list: read_nloc(bytes, 52),
-            keyval_area: bytes[56 + table_space.end as usize
-                ..(bytes.len()
-                    - if header.object_type.ty == ObjectType::Btree {
-                        BTreeInfo::LEN
-                    } else {
-                        0
-                    })]
-                .to_owned(),
-            info: if header.object_type.ty == ObjectType::Btree {
-                Some(BTreeInfo::parse(&bytes[bytes.len() - BTreeInfo::LEN..]))
-            } else {
-                None
-            },
+            keyval_area,
+            free_space,
+            info,
+            key_free_list,
+            level,
+            val_free_list,
             table_space,
             toc,
         }
     }
-    pub fn get(&self, key: &BTreeKey, key_size: u16, val_size: u16) -> Option<BTreeValue> {
-        if self.header.object_subtype != ObjectType::ObjectMap {
-            unimplemented!()
-        }
-        if !self.flags.contains(BTreeNodeFlags::LEAF) {
-            unimplemented!()
-        }
-        let toc_index = match self
-            .keys(key_size, val_size)
-            .unwrap()
-            .position(|k| k == *key)
-        {
-            Some(idx) => idx,
-            None => return None,
+    fn get_generic<D: fal::Device>(&self, device: &mut D, superblock: &NxSuperblock, key: &BTreeKey, key_size: u16, val_size: u16, compare: Compare) -> Option<((BTreeKey, BTreeValue), Path)> {
+        let mut path = Vec::with_capacity(self.level as usize);
+        path.push((Cow::Borrowed(self), 0));
+
+        let leaf_index = loop {
+            if self.is_leaf() {
+                match self
+                    .current_node_keys(key_size, val_size)
+                    .position(|k| compare(&k, key) == Ordering::Equal)
+                {
+                    Some(idx) => break idx,
+                    None => return None,
+                };
+            } else {
+                // TODO: Are the subtree oids virtual or physical?
+                let (index, _) = match self.current_node_closest_key(key, key_size, val_size, compare) {
+                    Some(t) => t,
+                    None => return None,
+                };
+
+                let subtree = Self::load(device, superblock, self.internal_key_ptr(index, key_size, val_size).unwrap().0 as i64);
+                path.push((Cow::Owned(subtree), index));
+                continue;
+            }
         };
-
-        let toc = self.toc.get(toc_index, key_size, val_size).unwrap();
-        let start = self.keyval_area.len() - toc.value.start as usize;
-
-        // TODO: Let NodeLocation be its own structure instead of the std range.
-
-        let value_bytes = &self.keyval_area[start..start + val_size as usize];
-        Some(BTreeValue::OmapValue(OmapValue::parse(&value_bytes)))
+        path.last_mut().unwrap().1 = leaf_index;
+        Some(((*key, self.leaf_value(leaf_index, key_size, val_size).unwrap()), path))
     }
-    pub fn get_from_root(&self, key: &BTreeKey) -> Option<BTreeValue> {
-        self.get(
-            key,
-            self.info.as_ref().unwrap().fixed.key_size as u16,
-            self.info.as_ref().unwrap().fixed.val_size as u16,
-        )
+    pub fn is_root(&self) -> bool {
+        self.flags.contains(BTreeNodeFlags::ROOT)
     }
-    pub fn keys<'a>(&'a self, key_size: u16, val_size: u16) -> Option<Keys<'a>> {
-        if self.flags.contains(BTreeNodeFlags::LEAF) {
-            Some(Keys {
-                btree: self,
-                index: 0,
-                key_size,
-                val_size,
-            })
-        } else {
-            None
-        }
+    pub fn is_leaf(&self) -> bool {
+        self.flags.contains(BTreeNodeFlags::LEAF)
     }
-    pub fn key(&self, index: usize, key_size: u16, val_size: u16) -> Option<BTreeKey> {
-        if index >= self.key_count as usize {
-            return None;
-        }
-        if !self.flags.contains(BTreeNodeFlags::LEAF) {
-            unimplemented!()
-        }
+    fn current_node_key(&self, index: usize, key_size: u16, val_size: u16) -> Option<BTreeKey> {
         let toc_entry = match self.toc.get(index, key_size, val_size) {
             Some(entry) => entry,
             None => return None,
         };
-        let key_bytes = &self.keyval_area[toc_entry.key.start as usize..toc_entry.key.end as usize];
+        let key_bytes = &self.keyval_area[toc_entry.key.start as usize..toc_entry.key.end() as usize];
         match self.header.object_subtype {
             ObjectType::ObjectMap => Some(BTreeKey::OmapKey(OmapKey::parse(key_bytes))),
             _ => unimplemented!(),
         }
     }
+    fn current_node_closest_key(&self, key: &BTreeKey, key_size: u16, val_size: u16, compare: Compare) -> Option<(usize, BTreeKey)> {
+        self.current_node_keys(key_size, val_size).enumerate().filter(|(_, current_key)| compare(&current_key, key) != Ordering::Greater).max_by(|(_, k1), (_, k2)| compare(&k1, &k2))
+    }
+    fn leaf_value(&self, index: usize, key_size: u16, val_size: u16) -> Option<BTreeValue> {
+        assert!(self.is_leaf());
+
+        let toc_entry = match self.toc.get(index, key_size, val_size) {
+            Some(entry) => entry,
+            None => return None,
+        };
+
+        let start = self.keyval_area.len() - toc_entry.value.start as usize;
+
+        let value_bytes = &self.keyval_area[start..start + toc_entry.value.len as usize];
+
+        match self.header.object_subtype {
+            ObjectType::ObjectMap => Some(BTreeValue::OmapValue(OmapValue::parse(&value_bytes))),
+            _ => unimplemented!(),
+        }
+    }
+    fn internal_key_ptr(&self, index: usize, key_size: u16, val_size: u16) -> Option<ObjectIdentifier> {
+        assert!(!self.is_leaf());
+
+        let toc_entry = match self.toc.get(index, key_size, val_size) {
+            Some(entry) => entry,
+            None => return None,
+        };
+
+        let start = self.keyval_area.len() - toc_entry.value.start as usize;
+
+        let value_bytes = &self.keyval_area[start..start + toc_entry.value.len as usize];
+        Some(ObjectIdentifier::from(fal::read_u64(value_bytes, 0)))
+    }
+    fn current_node_keys<'a>(&'a self, key_size: u16, val_size: u16) -> impl Iterator<Item = BTreeKey> + 'a {
+        (0..self.key_count as usize).map(move |i| self.current_node_key(i, key_size, val_size).unwrap())
+    }
 }
 
-pub struct Keys<'a> {
-    btree: &'a BTreeNode,
-    index: usize,
-    key_size: u16,
-    val_size: u16,
+#[derive(Debug)]
+pub struct BTree {
+    pub root: BTreeNode,
 }
 
-impl Iterator for Keys<'_> {
-    type Item = BTreeKey;
-    fn next(&mut self) -> Option<BTreeKey> {
-        let index = self.index;
-        let next = self.btree.key(index, self.key_size, self.val_size);
-        self.index += 1;
-        next
+impl BTree {
+    pub fn load<D: fal::Device>(device: &mut D, superblock: &NxSuperblock, addr: BlockAddr) -> Self {
+        let root = BTreeNode::load(device, superblock, addr);
+
+        assert!(root.is_root());
+
+        Self {
+            root,
+        }
+    }
+    pub fn info(&self) -> &BTreeInfo {
+        self.root.info.as_ref().unwrap()
+    }
+    pub fn get_generic<D: fal::Device>(&self, device: &mut D, superblock: &NxSuperblock, key: &BTreeKey, compare: Compare) -> Option<((BTreeKey, BTreeValue), Path)> {
+        let fixed = &self.root.info.unwrap().fixed;
+        self.root.get_generic(device, superblock, key, fixed.key_size as u16, fixed.val_size as u16, compare)
+    }
+    pub fn get<D: fal::Device>(&self, device: &mut D, superblock: &NxSuperblock, key: &BTreeKey) -> Option<BTreeValue> {
+        self.get_generic(device, superblock, key, Ord::cmp).map(|((_, value), _)| value)
+    }
+    pub fn get_as_omap<D: fal::Device>(&self, device: &mut D, superblock: &NxSuperblock, key: OmapKey) -> Option<OmapValue> {
+        assert_eq!(self.root.header.object_subtype, ObjectType::ObjectMap);
+        self.get(device, superblock, &BTreeKey::OmapKey(key)).map(|value| value.into_omap_value().unwrap())
+    }
+    pub fn pairs<'a, D: fal::Device>(&'a self, device: &'a mut D, superblock: &'a NxSuperblock) -> Pairs<'a, D> {
+        Pairs {
+            device,
+            superblock,
+            path: vec! [(Cow::Borrowed(&self.root), 0)],
+
+            compare: Ord::cmp,
+            previous_key: None,
+        }
+    }
+    pub fn keys<'a, D: fal::Device>(&'a self, device: &'a mut D, superblock: &'a NxSuperblock) -> impl Iterator<Item = BTreeKey> + 'a {
+        self.pairs(device, superblock).map(|(k, _)| k)
+    }
+    pub fn values<'a, D: fal::Device>(&'a self, device: &'a mut D, superblock: &'a NxSuperblock) -> impl Iterator<Item = BTreeValue> + 'a {
+        self.pairs(device, superblock).map(|(_, v)| v)
+    }
+}
+
+/// Stack-based tree traversal iterator
+pub struct Pairs<'a, D: fal::Device> {
+    device: &'a mut D,
+    superblock: &'a NxSuperblock,
+    path: Path<'a>,
+
+    compare: Compare,
+    previous_key: Option<BTreeKey>,
+}
+
+// Based on the btrfs Pairs code with some modifications.
+impl<'a, D: fal::Device> Iterator for Pairs<'a, D> {
+    type Item = (BTreeKey, BTreeValue);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        enum Action {
+            ClimbDown,
+            ClimbUp(ObjectIdentifier),
+        }
+
+        let info = self.path[0].0.info.unwrap().fixed;
+
+        let (current_tree, current_index) = match self.path.last_mut() {
+            Some(l) => l,
+            None => return None,
+        };
+
+        let action = if current_tree.is_leaf() {
+            // Leaf
+            match current_tree.current_node_key(*current_index, info.key_size as u16, info.val_size as u16) {
+                Some(key) => {
+                    // If there is a pair available, just yield it and continue.
+                    *current_index += 1;
+                    if let Some(previous_key) = self.previous_key {
+                        let compare = &self.compare;
+                        if compare(&previous_key, &key) != Ordering::Equal {
+                            return None
+                        }
+                        self.previous_key = Some(key);
+                    }
+                    let value = match current_tree.leaf_value(*current_index, info.key_size as u16, info.val_size as u16) {
+                        Some(v) => v,
+                        None => return None,
+                    };
+                    return Some((key, value.clone()))
+                }
+                None => {
+                    // When there are no more elements in the current node, we need to go one node
+                    // back, increase the index there and load a new leaf.
+                    Action::ClimbDown
+                }
+            }
+        } else {
+            // Internal
+            match current_tree.internal_key_ptr(*current_index, info.key_size as u16, info.val_size as u16) {
+                Some(ptr) => {
+                    // If there is a new undiscovered leaf node, we climb up the tree (closer
+                    // to the leaves), and search it.
+                    Action::ClimbUp(ptr)
+                }
+                None => {
+                    // Otherwise, we climb down to the parent node, and continue searching
+                    // there.
+                    Action::ClimbDown
+                }
+            }
+        };
+
+        match action {
+            Action::ClimbUp(ptr) => self.path.push((Cow::Owned(BTreeNode::load(self.device, self.superblock, ptr.0 as i64)), 0)),
+
+            Action::ClimbDown => {
+                self.path.pop();
+
+                if let Some((_, i)) = self.path.last_mut() {
+                    *i += 1;
+                }
+            }
+        }
+
+        // Recurse until another pair is found or until the entire tree has been traversed.
+        self.next()
     }
 }

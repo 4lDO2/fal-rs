@@ -1,4 +1,4 @@
-use crate::{BlockAddr, ObjPhys, ObjectIdentifier, TransactionIdentifier};
+use crate::{BlockAddr, ObjPhys, ObjectIdentifier, TransactionIdentifier, btree::BTreeKey};
 use fal::{read_u32, read_u64};
 use std::cmp::Ordering;
 
@@ -18,32 +18,38 @@ pub struct OmapPhys {
     pub pending_revert_max: TransactionIdentifier,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct OmapKey {
     pub oid: ObjectIdentifier,
     pub xid: TransactionIdentifier,
 }
 
 impl OmapKey {
+    pub const LEN: usize = 16;
+
     pub fn parse(bytes: &[u8]) -> Self {
         Self {
             oid: read_u64(bytes, 0).into(),
             xid: read_u64(bytes, 8),
         }
     }
+    pub fn compare(k1: &BTreeKey, k2: &BTreeKey) -> Ordering {
+        Ord::cmp(k1, k2)
+    }
+    // Skip the xids. Useful when you want to find the key with the greatest xid.
+    pub fn compare_partial(k1: &BTreeKey, k2: &BTreeKey) -> Ordering {
+        Ord::cmp(&k1.as_omap_key().unwrap().oid, &k2.as_omap_key().unwrap().oid)
+    }
 }
 
 impl PartialOrd for OmapKey {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.oid.cmp(&other.oid) {
-            Ordering::Equal => Some(self.xid.cmp(&other.xid)),
-            other_ordering => Some(other_ordering),
-        }
+        Some(self.cmp(other))
     }
 }
 impl Ord for OmapKey {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.partial_cmp(other).unwrap()
+        self.oid.cmp(&other.oid).then(self.xid.cmp(&other.xid))
     }
 }
 
@@ -57,7 +63,7 @@ bitflags! {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OmapValue {
     pub flags: OmapValueFlags,
     pub size: u32,
@@ -65,6 +71,8 @@ pub struct OmapValue {
 }
 
 impl OmapValue {
+    pub const LEN: usize = 16;
+
     pub fn parse(bytes: &[u8]) -> Self {
         Self {
             flags: OmapValueFlags::from_bits(read_u32(bytes, 0)).unwrap(),

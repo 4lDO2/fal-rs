@@ -85,6 +85,26 @@ pub mod parsing {
         *offset += 16;
         ret
     }
+    pub fn write_u8(block: &mut [u8], offset: &mut usize, number: u8) {
+        super::write_u8(block, *offset, number);
+        *offset += 1;
+    }
+    pub fn write_u16(block: &mut [u8], offset: &mut usize, number: u16) {
+        super::write_u16(block, *offset, number);
+        *offset += 2;
+    }
+    pub fn write_u32(block: &mut [u8], offset: &mut usize, number: u32) {
+        super::write_u32(block, *offset, number);
+        *offset += 4;
+    }
+    pub fn write_u64(block: &mut [u8], offset: &mut usize, number: u64) {
+        super::write_u64(block, *offset, number);
+        *offset += 8;
+    }
+    pub fn write_uuid(block: &mut [u8], offset: &mut usize, uuid: &Uuid) {
+        super::write_uuid(block, *offset, uuid);
+        *offset += 16;
+    }
     pub fn skip(offset: &mut usize, amount: usize) -> &mut usize {
         *offset += amount;
         offset
@@ -149,7 +169,6 @@ pub struct Attributes<InodeAddr: Into<u64>> {
     pub change_time: Timespec,
     pub access_time: Timespec,
 
-    /// macOS only
     pub flags: u32,
 }
 

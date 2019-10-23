@@ -6,12 +6,15 @@ pub mod reaper;
 pub mod spacemanager;
 pub mod superblock;
 
-use fal::{read_u32, read_u64, write_u32, write_u64};
+use std::io::SeekFrom;
+use fal::parsing::{read_u32, read_u64, write_u32, write_u64};
 
 use bitflags::bitflags;
 use enum_primitive::{
     enum_from_primitive, enum_from_primitive_impl, enum_from_primitive_impl_ty, FromPrimitive,
 };
+
+use superblock::NxSuperblock;
 
 /// A block address (paddr_t). Never negative.
 pub type BlockAddr = i64;
@@ -31,6 +34,10 @@ impl ObjectIdentifier {
     const NX_SUPERBLOCK: Self = Self(1);
     const INVALID: Self = Self(0);
     const RESERVED_COUNT: u64 = 1024;
+
+    pub fn is_valid(&self) -> bool {
+        *self != Self::INVALID
+    }
 }
 
 impl From<u64> for ObjectIdentifier {
@@ -145,20 +152,23 @@ pub struct ObjPhys {
 impl ObjPhys {
     pub const LEN: usize = 32;
     pub fn parse(bytes: &[u8]) -> Self {
+
+        let mut offset = 0;
         Self {
-            checksum: read_u64(bytes, 0),
-            object_id: ObjectIdentifier::from(read_u64(bytes, 8)),
-            transaction_id: read_u64(bytes, 16),
-            object_type: ObjectTypeAndFlags::from_raw(read_u32(bytes, 24)),
-            object_subtype: ObjectType::from_u32(read_u32(bytes, 28)).unwrap(),
+            checksum: read_u64(bytes, &mut offset),
+            object_id: ObjectIdentifier::from(read_u64(bytes, &mut offset)),
+            transaction_id: read_u64(bytes, &mut offset),
+            object_type: ObjectTypeAndFlags::from_raw(read_u32(bytes, &mut offset)),
+            object_subtype: ObjectType::from_u32(read_u32(bytes, &mut offset)).unwrap(),
         }
     }
     pub fn serialize(this: &Self, bytes: &mut [u8]) {
-        write_u64(bytes, 0, this.checksum);
-        write_u64(bytes, 8, this.object_id.into());
-        write_u64(bytes, 16, this.transaction_id.into());
-        write_u32(bytes, 24, ObjectTypeAndFlags::into_raw(this.object_type));
-        write_u32(bytes, 28, this.object_subtype as u32);
+        let mut offset = 0;
+        write_u64(bytes, &mut offset, this.checksum);
+        write_u64(bytes, &mut offset, this.object_id.into());
+        write_u64(bytes, &mut offset, this.transaction_id.into());
+        write_u32(bytes, &mut offset, ObjectTypeAndFlags::into_raw(this.object_type));
+        write_u32(bytes, &mut offset, this.object_subtype as u32);
     }
     pub fn is_ephemeral(&self) -> bool {
         self.object_type.is_ephemeral()
@@ -169,4 +179,36 @@ impl ObjPhys {
     pub fn is_virtual(&self) -> bool {
         self.object_type.is_virtual()
     }
+}
+
+pub fn read_obj_phys(bytes: &[u8], offset: &mut usize) -> ObjPhys {
+    let obj_phys = ObjPhys::parse(&bytes[*offset..*offset + ObjPhys::LEN]);
+    *offset += ObjPhys::LEN;
+    obj_phys
+}
+
+pub fn read_block_to<D: fal::Device>(
+    superblock: &NxSuperblock,
+    device: &mut D,
+    block: &mut [u8],
+    address: crate::BlockAddr,
+) {
+    debug_assert!(address >= 0);
+    debug_assert_eq!(block.len(), superblock.block_size as usize);
+
+    device
+        .seek(SeekFrom::Start(
+            address as u64 * u64::from(superblock.block_size),
+        ))
+        .unwrap();
+    device.read_exact(block).unwrap();
+}
+pub fn read_block<D: fal::Device>(
+    superblock: &NxSuperblock,
+    device: &mut D,
+    address: crate::BlockAddr,
+) -> Box<[u8]> {
+    let mut block_bytes = vec![0u8; superblock.block_size as usize].into_boxed_slice();
+    read_block_to(superblock, device, &mut block_bytes, address);
+    block_bytes
 }

@@ -3,8 +3,9 @@ use enum_primitive::FromPrimitive;
 use fal::{read_u32, read_u64};
 
 use crate::{
-    btree::BTreeNode, filesystem::Filesystem, reaper::ReaperPhys, spacemanager::SpacemanagerPhys,
+    btree::BTreeNode, reaper::ReaperPhys, spacemanager::SpacemanagerPhys,
     superblock::NxSuperblock, ObjPhys, ObjectIdentifier, ObjectType, ObjectTypeAndFlags,
+    read_block,
 };
 
 #[derive(Debug)]
@@ -104,7 +105,7 @@ pub fn read_from_desc_area<D: fal::Device>(
     superblock: &NxSuperblock,
     index: u32,
 ) -> CheckpointDescAreaEntry {
-    let block_bytes = Filesystem::read_block(
+    let block_bytes = read_block(
         superblock,
         device,
         superblock.chkpnt_desc_base + i64::from(index),
@@ -128,7 +129,7 @@ pub fn read_from_data_area<D: fal::Device>(
     superblock: &NxSuperblock,
     index: u32,
 ) -> Option<GenericObject> {
-    let block_bytes = Filesystem::read_block(
+    let block_bytes = read_block(
         superblock,
         device,
         superblock.chkpnt_data_base + i64::from(index),
