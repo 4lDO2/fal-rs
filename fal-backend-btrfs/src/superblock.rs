@@ -1,9 +1,9 @@
-use std::{
-    ffi::CString,
-    io::SeekFrom,
-};
+use std::{ffi::CString, io::SeekFrom};
 
-use crate::{Checksum, DiskKey, DiskKeyType, items::{BlockGroupType, ChunkItem}, sizes};
+use crate::{
+    items::{BlockGroupType, ChunkItem},
+    sizes, Checksum, DiskKey, DiskKeyType,
+};
 
 use bitflags::bitflags;
 use enum_primitive::*;
@@ -91,12 +91,18 @@ impl Superblock {
 
         let mut block = [0u8; 4096];
 
-        SUPERBLOCK_OFFSETS.iter().copied().filter(|offset| offset + 4096 < disk_size).map(|offset| {
-            device.seek(SeekFrom::Start(offset)).unwrap();
-            device.read_exact(&mut block).unwrap();
+        SUPERBLOCK_OFFSETS
+            .iter()
+            .copied()
+            .filter(|offset| offset + 4096 < disk_size)
+            .map(|offset| {
+                device.seek(SeekFrom::Start(offset)).unwrap();
+                device.read_exact(&mut block).unwrap();
 
-            Self::parse(&block)
-        }).max_by_key(|sb| sb.generation).unwrap()
+                Self::parse(&block)
+            })
+            .max_by_key(|sb| sb.generation)
+            .unwrap()
     }
     pub fn parse(block: &[u8]) -> Self {
         let mut checksum = [0u8; CHECKSUM_SIZE];
@@ -230,7 +236,9 @@ impl Superblock {
             cache_generation,
             uuid_tree_generation,
             metadata_uuid,
-            system_chunk_array: SystemChunkArray::parse(&system_chunk_array[..system_chunk_array_size as usize]),
+            system_chunk_array: SystemChunkArray::parse(
+                &system_chunk_array[..system_chunk_array_size as usize],
+            ),
             root_backups,
         }
     }
@@ -322,29 +330,36 @@ impl RootBackup {
     }
 }
 
-
-
-
 impl SystemChunkArray {
     pub fn parse(bytes: &[u8]) -> Self {
         let stride = DiskKey::LEN + ChunkItem::LEN;
 
-        let pairs = (0..bytes.len() / stride).map(|i| {
-            let key_bytes = &bytes[i * stride .. i * stride + DiskKey::LEN];
-            let chunk_bytes = &bytes[i * stride + DiskKey::LEN  .. (i + 1) * stride];
+        let pairs = (0..bytes.len() / stride)
+            .map(|i| {
+                let key_bytes = &bytes[i * stride..i * stride + DiskKey::LEN];
+                let chunk_bytes = &bytes[i * stride + DiskKey::LEN..(i + 1) * stride];
 
-            let key = DiskKey::parse(key_bytes);
-            assert_eq!(key.ty, DiskKeyType::ChunkItem);
+                let key = DiskKey::parse(key_bytes);
+                assert_eq!(key.ty, DiskKeyType::ChunkItem);
 
-            let chunk = ChunkItem::parse(chunk_bytes);
-            assert!(chunk.ty.contains(BlockGroupType::SYSTEM));
+                let chunk = ChunkItem::parse(chunk_bytes);
+                assert!(chunk.ty.contains(BlockGroupType::SYSTEM));
 
-            // Only RAID 0 is supported so far.
-            assert_eq!(chunk.stripe_count, 1, "Unimplemented RAID configuration with stripe count {}", chunk.stripe_count);
-            assert_eq!(chunk.sub_stripe_count, 0, "Unimplemented RAID configuration with sub stripe count (used for RAID 10) {}", chunk.sub_stripe_count);
+                // Only RAID 0 is supported so far.
+                assert_eq!(
+                    chunk.stripe_count, 1,
+                    "Unimplemented RAID configuration with stripe count {}",
+                    chunk.stripe_count
+                );
+                assert_eq!(
+                    chunk.sub_stripe_count, 0,
+                    "Unimplemented RAID configuration with sub stripe count (used for RAID 10) {}",
+                    chunk.sub_stripe_count
+                );
 
-            (key, chunk)
-        }).collect();
+                (key, chunk)
+            })
+            .collect();
 
         Self(pairs)
     }

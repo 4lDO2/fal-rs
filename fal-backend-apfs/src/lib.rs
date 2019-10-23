@@ -6,8 +6,8 @@ pub mod reaper;
 pub mod spacemanager;
 pub mod superblock;
 
-use std::io::SeekFrom;
 use fal::parsing::{read_u32, read_u64, write_u32, write_u64};
+use std::io::SeekFrom;
 
 use bitflags::bitflags;
 use enum_primitive::{
@@ -152,7 +152,6 @@ pub struct ObjPhys {
 impl ObjPhys {
     pub const LEN: usize = 32;
     pub fn parse(bytes: &[u8]) -> Self {
-
         let mut offset = 0;
         Self {
             checksum: read_u64(bytes, &mut offset),
@@ -167,7 +166,11 @@ impl ObjPhys {
         write_u64(bytes, &mut offset, this.checksum);
         write_u64(bytes, &mut offset, this.object_id.into());
         write_u64(bytes, &mut offset, this.transaction_id.into());
-        write_u32(bytes, &mut offset, ObjectTypeAndFlags::into_raw(this.object_type));
+        write_u32(
+            bytes,
+            &mut offset,
+            ObjectTypeAndFlags::into_raw(this.object_type),
+        );
         write_u32(bytes, &mut offset, this.object_subtype as u32);
     }
     pub fn is_ephemeral(&self) -> bool {

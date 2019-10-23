@@ -126,7 +126,8 @@ impl<Backend: fal::FilesystemMut<File>> SchemeMut for RedoxFilesystem<Backend> {
             let file_size = inode.attrs().size;
             let offset = self.inner().fh(fh as u64).offset();
 
-            let bytes_to_read = std::cmp::min(offset + u64::try_from(buf.len()).unwrap(), file_size) - offset;
+            let bytes_to_read =
+                std::cmp::min(offset + u64::try_from(buf.len()).unwrap(), file_size) - offset;
 
             let buf = &mut buf[..bytes_to_read.try_into().unwrap()];
 

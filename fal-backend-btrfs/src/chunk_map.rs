@@ -1,8 +1,4 @@
-use crate::{
-    items::ChunkItem,
-    superblock::Superblock,
-    tree::Tree,
-};
+use crate::{items::ChunkItem, superblock::Superblock, tree::Tree};
 
 use std::collections::BTreeMap;
 
@@ -16,7 +12,13 @@ pub struct ChunkMap {
 impl ChunkMap {
     pub fn read_sys_chunk_array(superblock: &Superblock) -> Self {
         Self {
-            map: superblock.system_chunk_array.0.iter().cloned().map(|(disk_key, chunk_item)| (disk_key.offset, chunk_item)).collect(),
+            map: superblock
+                .system_chunk_array
+                .0
+                .iter()
+                .cloned()
+                .map(|(disk_key, chunk_item)| (disk_key.offset, chunk_item))
+                .collect(),
         }
     }
     pub fn get_full(&self, virt: u64) -> Option<(u64, &ChunkItem)> {
@@ -24,7 +26,11 @@ impl ChunkMap {
         // below the searched item (used to retrieve which range an address belongs to).
 
         // Use the suboptimal O(n) approach.
-        self.map.iter().filter(|(key, _)| *key <= &virt).max_by_key(|(k, _)| *k).map(|(&k, v)| (k, v))
+        self.map
+            .iter()
+            .filter(|(key, _)| *key <= &virt)
+            .max_by_key(|(k, _)| *k)
+            .map(|(&k, v)| (k, v))
     }
     pub fn get(&self, superblock: &Superblock, virt: u64) -> Option<u64> {
         // TODO: RAID (multiple stripes)
@@ -34,11 +40,21 @@ impl ChunkMap {
         };
 
         let offset = virt - key;
-        if offset >= chunk_item.len { return None }
+        if offset >= chunk_item.len {
+            return None;
+        }
         Some(chunk_item.stripe(superblock).offset + offset)
     }
-    pub fn read_chunk_tree<D: fal::Device>(&mut self, device: &mut D, superblock: &Superblock, tree: &Tree) {
-        let new_pairs = tree.pairs(device, superblock, self).filter_map(|(k, v)| v.into_chunk_item().map(|v| (k.offset, v))).collect::<Vec<_>>();
+    pub fn read_chunk_tree<D: fal::Device>(
+        &mut self,
+        device: &mut D,
+        superblock: &Superblock,
+        tree: &Tree,
+    ) {
+        let new_pairs = tree
+            .pairs(device, superblock, self)
+            .filter_map(|(k, v)| v.into_chunk_item().map(|v| (k.offset, v)))
+            .collect::<Vec<_>>();
         self.map.extend(new_pairs)
     }
 }

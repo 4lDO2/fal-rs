@@ -1,9 +1,12 @@
 use crate::{
-    Checksum, DiskKey, DiskKeyType,
     chunk_map::ChunkMap,
     filesystem,
-    items::{BlockGroupItem, ChunkItem, CsumItem, DevExtent, DevItem, DevStatsItem, DirItem, ExtentItem, FileExtentItem, InodeItem, InodeRef, RootItem, RootRef, UuidItem},
-    superblock::{ChecksumType, Superblock}
+    items::{
+        BlockGroupItem, ChunkItem, CsumItem, DevExtent, DevItem, DevStatsItem, DirItem, ExtentItem,
+        FileExtentItem, InodeItem, InodeRef, RootItem, RootRef, UuidItem,
+    },
+    superblock::{ChecksumType, Superblock},
+    Checksum, DiskKey, DiskKeyType,
 };
 
 use std::{
@@ -11,7 +14,7 @@ use std::{
     cmp::Ordering,
 };
 
-use fal::{read_u8, read_u32, read_u64, read_uuid};
+use fal::{read_u32, read_u64, read_u8, read_uuid};
 
 use uuid::Uuid;
 
@@ -43,7 +46,7 @@ impl Header {
         assert_eq!(checksum, Checksum::calculate(checksum_type, &bytes[32..]));
 
         let fsid = read_uuid(bytes, 32);
-        
+
         let logical_addr = read_u64(bytes, 48);
         let flags = read_u64(bytes, 56);
 
@@ -95,12 +98,11 @@ impl KeyPtr {
 
 impl Node {
     pub fn parse(header: Header, bytes: &[u8]) -> Self {
-        let key_ptrs = (0..header.item_count as usize).map(|i| KeyPtr::parse(&bytes[i * 33 .. (i + 1) * 33])).collect();
+        let key_ptrs = (0..header.item_count as usize)
+            .map(|i| KeyPtr::parse(&bytes[i * 33..(i + 1) * 33]))
+            .collect();
 
-        Self {
-            header,
-            key_ptrs,
-        }
+        Self { header, key_ptrs }
     }
 }
 
@@ -176,40 +178,55 @@ impl Item {
 
 impl Leaf {
     pub fn parse(checksum_type: ChecksumType, header: Header, bytes: &[u8]) -> Self {
-        let pairs = (0..header.item_count as usize).map(|i| Item::parse(&bytes[i * 25 .. (i + 1) * 25])).map(|item: Item| {
-            let value = {
-                let value_bytes = &bytes[item.offset as usize .. item.offset as usize + item.size as usize];
-                match item.key.ty {
-                    DiskKeyType::BlockGroupItem => Value::BlockGroupItem(BlockGroupItem::parse(value_bytes)),
-                    DiskKeyType::ChunkItem => Value::Chunk(ChunkItem::parse(value_bytes)),
-                    DiskKeyType::DevExtent => Value::DevExtent(DevExtent::parse(value_bytes)),
-                    DiskKeyType::DevItem => Value::Device(DevItem::parse(value_bytes)),
-                    DiskKeyType::DirIndex => Value::DirIndex(DirItem::parse(value_bytes)),
-                    DiskKeyType::DirItem => Value::DirItem(DirItem::parse(value_bytes)),
-                    DiskKeyType::ExtentCsum => Value::ExtentCsum(CsumItem::parse(checksum_type, value_bytes)),
-                    DiskKeyType::ExtentData => Value::ExtentData(FileExtentItem::parse(value_bytes)),
-                    DiskKeyType::ExtentItem => Value::ExtentItem(ExtentItem::parse(value_bytes)),
-                    DiskKeyType::InodeItem => Value::InodeItem(InodeItem::parse(value_bytes)),
-                    DiskKeyType::InodeRef => Value::InodeRef(InodeRef::parse(value_bytes)),
-                    DiskKeyType::MetadataItem => Value::MetadataItem(ExtentItem::parse(value_bytes)),
-                    DiskKeyType::PersistentItem => Value::PersistentItem(DevStatsItem::parse(value_bytes)),
-                    DiskKeyType::RootBackref => Value::RootBackref(RootRef::parse(value_bytes)),
-                    DiskKeyType::RootItem => Value::Root(RootItem::parse(value_bytes)),
-                    DiskKeyType::RootRef => Value::RootRef(RootRef::parse(value_bytes)),
-                    DiskKeyType::UuidSubvol => Value::UuidSubvol(UuidItem::parse(value_bytes)),
-                    DiskKeyType::UuidReceivedSubvol => Value::UuidReceivedSubvol(UuidItem::parse(value_bytes)),
-                    DiskKeyType::XattrItem => Value::XattrItem(DirItem::parse(value_bytes)),
-                    DiskKeyType::Unknown => Value::Unknown,
-                    other => unimplemented!("{:?}", other),
-                }
-            };
-            (item, value)
-        }).collect::<Vec<_>>();
+        let pairs = (0..header.item_count as usize)
+            .map(|i| Item::parse(&bytes[i * 25..(i + 1) * 25]))
+            .map(|item: Item| {
+                let value = {
+                    let value_bytes =
+                        &bytes[item.offset as usize..item.offset as usize + item.size as usize];
+                    match item.key.ty {
+                        DiskKeyType::BlockGroupItem => {
+                            Value::BlockGroupItem(BlockGroupItem::parse(value_bytes))
+                        }
+                        DiskKeyType::ChunkItem => Value::Chunk(ChunkItem::parse(value_bytes)),
+                        DiskKeyType::DevExtent => Value::DevExtent(DevExtent::parse(value_bytes)),
+                        DiskKeyType::DevItem => Value::Device(DevItem::parse(value_bytes)),
+                        DiskKeyType::DirIndex => Value::DirIndex(DirItem::parse(value_bytes)),
+                        DiskKeyType::DirItem => Value::DirItem(DirItem::parse(value_bytes)),
+                        DiskKeyType::ExtentCsum => {
+                            Value::ExtentCsum(CsumItem::parse(checksum_type, value_bytes))
+                        }
+                        DiskKeyType::ExtentData => {
+                            Value::ExtentData(FileExtentItem::parse(value_bytes))
+                        }
+                        DiskKeyType::ExtentItem => {
+                            Value::ExtentItem(ExtentItem::parse(value_bytes))
+                        }
+                        DiskKeyType::InodeItem => Value::InodeItem(InodeItem::parse(value_bytes)),
+                        DiskKeyType::InodeRef => Value::InodeRef(InodeRef::parse(value_bytes)),
+                        DiskKeyType::MetadataItem => {
+                            Value::MetadataItem(ExtentItem::parse(value_bytes))
+                        }
+                        DiskKeyType::PersistentItem => {
+                            Value::PersistentItem(DevStatsItem::parse(value_bytes))
+                        }
+                        DiskKeyType::RootBackref => Value::RootBackref(RootRef::parse(value_bytes)),
+                        DiskKeyType::RootItem => Value::Root(RootItem::parse(value_bytes)),
+                        DiskKeyType::RootRef => Value::RootRef(RootRef::parse(value_bytes)),
+                        DiskKeyType::UuidSubvol => Value::UuidSubvol(UuidItem::parse(value_bytes)),
+                        DiskKeyType::UuidReceivedSubvol => {
+                            Value::UuidReceivedSubvol(UuidItem::parse(value_bytes))
+                        }
+                        DiskKeyType::XattrItem => Value::XattrItem(DirItem::parse(value_bytes)),
+                        DiskKeyType::Unknown => Value::Unknown,
+                        other => unimplemented!("{:?}", other),
+                    }
+                };
+                (item, value)
+            })
+            .collect::<Vec<_>>();
 
-        Self {
-            header,
-            pairs,
-        }
+        Self { header, pairs }
     }
 }
 
@@ -250,11 +267,23 @@ impl Tree {
             _ => Self::Internal(Node::parse(header, &bytes[Header::LEN..])),
         }
     }
-    pub fn load<D: fal::Device>(device: &mut D, superblock: &Superblock, chunk_map: &ChunkMap, addr: u64) -> Self {
+    pub fn load<D: fal::Device>(
+        device: &mut D,
+        superblock: &Superblock,
+        chunk_map: &ChunkMap,
+        addr: u64,
+    ) -> Self {
         let block = filesystem::read_node(device, superblock, chunk_map, addr);
         Self::parse(superblock.checksum_type, &block)
     }
-    fn get_generic<D: fal::Device>(&self, device: &mut D, superblock: &Superblock, chunk_map: &ChunkMap, key: &DiskKey, compare: fn(k1: &DiskKey, k2: &DiskKey) -> Ordering) -> Option<((DiskKey, Value), Path)> {
+    fn get_generic<D: fal::Device>(
+        &self,
+        device: &mut D,
+        superblock: &Superblock,
+        chunk_map: &ChunkMap,
+        key: &DiskKey,
+        compare: fn(k1: &DiskKey, k2: &DiskKey) -> Ordering,
+    ) -> Option<((DiskKey, Value), Path)> {
         let mut path = Vec::with_capacity(self.header().level as usize);
 
         path.push((Cow::Borrowed(self), 0));
@@ -265,14 +294,24 @@ impl Tree {
                     assert_eq!(leaf.header.level, 0);
 
                     // Leaf nodes are guaranteed to contain the key and the value, if they exist.
-                    break leaf.pairs.iter().position(|(item, _)| compare(&item.key, key) == Ordering::Equal);
+                    break leaf
+                        .pairs
+                        .iter()
+                        .position(|(item, _)| compare(&item.key, key) == Ordering::Equal);
                 }
                 Self::Internal(internal) => {
                     assert!(internal.header.level > 0);
 
                     // Find the closest key ptr. If the key that we are searching for is larger than the
                     // closest key ptr, we search that tree, and so on.
-                    let (i, key_ptr) = match internal.key_ptrs.iter().enumerate().filter(|(_, key_ptr)| compare(&key_ptr.key, key) != Ordering::Greater).max_by(|(_, key_ptr1), (_, key_ptr2)| compare(&key_ptr1.key, &key_ptr2.key)) {
+                    let (i, key_ptr) = match internal
+                        .key_ptrs
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, key_ptr)| compare(&key_ptr.key, key) != Ordering::Greater)
+                        .max_by(|(_, key_ptr1), (_, key_ptr2)| {
+                            compare(&key_ptr1.key, &key_ptr2.key)
+                        }) {
                         Some(ptr) => ptr,
                         None => return None,
                     };
@@ -285,17 +324,40 @@ impl Tree {
         };
         item_index.map(|i| {
             path.last_mut().unwrap().1 = i;
-            let (key, ref value) = path.last().map(|(node, _)| node.as_leaf().unwrap()).unwrap().pairs[i];
+            let (key, ref value) = path
+                .last()
+                .map(|(node, _)| node.as_leaf().unwrap())
+                .unwrap()
+                .pairs[i];
             ((key.key, value.clone()), path)
         })
     }
-    pub fn get<D: fal::Device>(&self, device: &mut D, superblock: &Superblock, chunk_map: &ChunkMap, key: &DiskKey) -> Option<Value> {
-        self.get_with_path(device, superblock, chunk_map, key).map(|(value, _)| value)
+    pub fn get<D: fal::Device>(
+        &self,
+        device: &mut D,
+        superblock: &Superblock,
+        chunk_map: &ChunkMap,
+        key: &DiskKey,
+    ) -> Option<Value> {
+        self.get_with_path(device, superblock, chunk_map, key)
+            .map(|(value, _)| value)
     }
-    pub fn get_with_path<D: fal::Device>(&self, device: &mut D, superblock: &Superblock, chunk_map: &ChunkMap, key: &DiskKey) -> Option<(Value, Path)> {
-        self.get_generic(device, superblock, chunk_map, key, Ord::cmp).map(|((_, value), path)| (value, path))
+    pub fn get_with_path<D: fal::Device>(
+        &self,
+        device: &mut D,
+        superblock: &Superblock,
+        chunk_map: &ChunkMap,
+        key: &DiskKey,
+    ) -> Option<(Value, Path)> {
+        self.get_generic(device, superblock, chunk_map, key, Ord::cmp)
+            .map(|((_, value), path)| (value, path))
     }
-    pub fn pairs<'a, D: fal::Device>(&'a self, device: &'a mut D, superblock: &'a Superblock, chunk_map: &'a ChunkMap) -> Pairs<'a, D> {
+    pub fn pairs<'a, D: fal::Device>(
+        &'a self,
+        device: &'a mut D,
+        superblock: &'a Superblock,
+        chunk_map: &'a ChunkMap,
+    ) -> Pairs<'a, D> {
         Pairs {
             chunk_map,
             device,
@@ -306,8 +368,20 @@ impl Tree {
         }
     }
     /// Find similar pairs, i.e. pairs which key have the same oid and type, but possibly different offsets.
-    pub fn similar_pairs<'a, D: fal::Device>(&'a self, device: &'a mut D, superblock: &'a Superblock, chunk_map: &'a ChunkMap, partial_key: &DiskKey) -> Option<Pairs<'a, D>> {
-        let (_, path) = match self.get_generic(device, superblock, chunk_map, partial_key, DiskKey::compare_without_offset) {
+    pub fn similar_pairs<'a, D: fal::Device>(
+        &'a self,
+        device: &'a mut D,
+        superblock: &'a Superblock,
+        chunk_map: &'a ChunkMap,
+        partial_key: &DiskKey,
+    ) -> Option<Pairs<'a, D>> {
+        let (_, path) = match self.get_generic(
+            device,
+            superblock,
+            chunk_map,
+            partial_key,
+            DiskKey::compare_without_offset,
+        ) {
             Some(p) => p,
             None => return None,
         };
@@ -357,18 +431,18 @@ impl<'a, D: fal::Device> Iterator for Pairs<'a, D> {
                     if let Some(previous_key) = self.previous_key {
                         let function = &self.function;
                         if function(&previous_key, &item.key) != Ordering::Equal {
-                            return None
+                            return None;
                         }
                         self.previous_key = Some(item.key);
                     }
-                    return Some((item.key, value.clone()))
+                    return Some((item.key, value.clone()));
                 }
                 None => {
                     // When there are no more elements in the current node, we need to go one node
                     // back, increase the index there and load a new leaf.
                     Action::ClimbDown
                 }
-            }
+            },
             Tree::Internal(node) => {
                 match node.key_ptrs.get(*current_index) {
                     Some(&key_ptr) => {
@@ -386,7 +460,15 @@ impl<'a, D: fal::Device> Iterator for Pairs<'a, D> {
         };
 
         match action {
-            Action::ClimbUp(key_ptr) => self.path.push((Cow::Owned(Tree::load(self.device, self.superblock, self.chunk_map, key_ptr.block_ptr)), 0)),
+            Action::ClimbUp(key_ptr) => self.path.push((
+                Cow::Owned(Tree::load(
+                    self.device,
+                    self.superblock,
+                    self.chunk_map,
+                    key_ptr.block_ptr,
+                )),
+                0,
+            )),
             Action::ClimbDown => {
                 self.path.pop();
 

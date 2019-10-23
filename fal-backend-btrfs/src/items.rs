@@ -1,5 +1,9 @@
-use crate::{superblock::{ChecksumType, Superblock}, DiskKey, read_timespec, Timespec};
-use fal::parsing::{read_u8, read_u16, read_u32, read_u64, read_uuid, skip};
+use crate::{
+    read_timespec,
+    superblock::{ChecksumType, Superblock},
+    DiskKey, Timespec,
+};
+use fal::parsing::{read_u16, read_u32, read_u64, read_u8, read_uuid, skip};
 
 use bitflags::bitflags;
 use enum_primitive::*;
@@ -57,12 +61,31 @@ impl ChunkItem {
         let stripe_count = read_u16(bytes, &mut offset);
         let sub_stripe_count = read_u16(bytes, &mut offset);
 
-        let stripes = (0..stripe_count as usize).map(|i| Stripe::parse(&bytes[offset + i * Stripe::LEN..offset + (i + 1) * Stripe::LEN])).collect::<Vec<_>>().into_boxed_slice(); // FIXME: stripe_count & sub_stripe_count length.
+        let stripes = (0..stripe_count as usize)
+            .map(|i| {
+                Stripe::parse(&bytes[offset + i * Stripe::LEN..offset + (i + 1) * Stripe::LEN])
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice(); // FIXME: stripe_count & sub_stripe_count length.
 
-        Self { len, owner, stripe_length, ty, io_alignment, io_width, sector_size, stripe_count, sub_stripe_count, stripes }
+        Self {
+            len,
+            owner,
+            stripe_length,
+            ty,
+            io_alignment,
+            io_width,
+            sector_size,
+            stripe_count,
+            sub_stripe_count,
+            stripes,
+        }
     }
     pub fn stripe(&self, superblock: &Superblock) -> &Stripe {
-        self.stripes.iter().find(|stripe| &stripe.device_uuid == &superblock.device_properties.uuid).expect("Using the superblock of a different filesystem")
+        self.stripes
+            .iter()
+            .find(|stripe| &stripe.device_uuid == &superblock.device_properties.uuid)
+            .expect("Using the superblock of a different filesystem")
     }
 }
 
@@ -176,7 +199,6 @@ pub struct InodeItem {
     pub sequence: u64,
 
     // 4 reserved u64s.
-
     pub atime: Timespec,
     pub ctime: Timespec,
     pub mtime: Timespec,
@@ -267,7 +289,6 @@ impl RootItem {
             otime: read_timespec(bytes, &mut offset),
             stime: read_timespec(bytes, &mut offset),
             rtime: read_timespec(bytes, &mut offset),
-
             // 8 reserved u64s
         }
     }
@@ -406,13 +427,17 @@ impl FileExtentItem {
             ty,
 
             extension: match ty {
-                FileExtentItemType::Reg | FileExtentItemType::Prealloc => FileExtentItemExtension::OnDisk {
-                    disk_bytenr: read_u64(bytes, &mut offset),
-                    disk_byte_count: read_u64(bytes, &mut offset),
-                    disk_offset: read_u64(bytes, &mut offset),
-                    byte_count: read_u64(bytes, &mut offset),
-                },
-                FileExtentItemType::Inline => FileExtentItemExtension::Inline(bytes[offset..offset + device_size as usize].to_owned()),
+                FileExtentItemType::Reg | FileExtentItemType::Prealloc => {
+                    FileExtentItemExtension::OnDisk {
+                        disk_bytenr: read_u64(bytes, &mut offset),
+                        disk_byte_count: read_u64(bytes, &mut offset),
+                        disk_offset: read_u64(bytes, &mut offset),
+                        byte_count: read_u64(bytes, &mut offset),
+                    }
+                }
+                FileExtentItemType::Inline => FileExtentItemExtension::Inline(
+                    bytes[offset..offset + device_size as usize].to_owned(),
+                ),
             },
         }
     }
@@ -530,8 +555,10 @@ impl CsumItem {
             checksums: match checksum_type {
                 ChecksumType::Crc32 => Checksums::Crc32({
                     assert_eq!(bytes.len() % std::mem::size_of::<u32>(), 0);
-                    (0..bytes.len() / 4).map(|i| fal::read_u32(bytes, i * 4)).collect()
-                })
+                    (0..bytes.len() / 4)
+                        .map(|i| fal::read_u32(bytes, i * 4))
+                        .collect()
+                }),
             },
         }
     }
@@ -548,7 +575,9 @@ impl UuidItem {
     pub fn parse(bytes: &[u8]) -> Self {
         assert_eq!(bytes.len() % std::mem::size_of::<u64>(), 0);
         Self {
-            subvolumes: (0..bytes.len() / 8).map(|i| fal::read_u64(bytes, i)).collect(),
+            subvolumes: (0..bytes.len() / 8)
+                .map(|i| fal::read_u64(bytes, i))
+                .collect(),
         }
     }
 }

@@ -1,4 +1,4 @@
-use crate::{BlockAddr, ObjPhys, ObjectIdentifier, TransactionIdentifier, btree::BTreeKey};
+use crate::{btree::BTreeKey, BlockAddr, ObjPhys, ObjectIdentifier, TransactionIdentifier};
 use fal::{read_u32, read_u64};
 use std::cmp::Ordering;
 
@@ -38,7 +38,10 @@ impl OmapKey {
     }
     // Skip the xids. Useful when you want to find the key with the greatest xid.
     pub fn compare_partial(k1: &BTreeKey, k2: &BTreeKey) -> Ordering {
-        Ord::cmp(&k1.as_omap_key().unwrap().oid, &k2.as_omap_key().unwrap().oid)
+        Ord::cmp(
+            &k1.as_omap_key().unwrap().oid,
+            &k2.as_omap_key().unwrap().oid,
+        )
     }
 }
 

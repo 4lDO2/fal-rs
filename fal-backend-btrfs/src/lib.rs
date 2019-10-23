@@ -10,7 +10,7 @@ use bitflags::bitflags;
 use crc::{crc32, Hasher32};
 use enum_primitive::*;
 
-use fal::{read_u8, read_u32, read_u64};
+use fal::{read_u32, read_u64, read_u8};
 
 mod sizes {
     pub const K: u64 = 1024;
@@ -38,10 +38,12 @@ impl DiskKey {
         }
     }
     fn compare(&self, other: &Self) -> Ordering {
-        self.compare_without_offset(other).then(self.offset.cmp(&other.offset))
+        self.compare_without_offset(other)
+            .then(self.offset.cmp(&other.offset))
     }
     pub fn compare_without_offset(&self, other: &Self) -> Ordering {
-        self.oid.cmp(&other.oid)
+        self.oid
+            .cmp(&other.oid)
             .then((&(self.ty as u8)).cmp(&(other.ty as u8)))
     }
 }
@@ -101,7 +103,6 @@ enum_from_primitive! {
         StringItem = 253,
     }
 }
-
 
 bitflags! {
     pub struct HeaderFlags: u64 {

@@ -3,9 +3,8 @@ use enum_primitive::FromPrimitive;
 use fal::{read_u32, read_u64};
 
 use crate::{
-    btree::BTreeNode, reaper::ReaperPhys, spacemanager::SpacemanagerPhys,
+    btree::BTreeNode, read_block, reaper::ReaperPhys, spacemanager::SpacemanagerPhys,
     superblock::NxSuperblock, ObjPhys, ObjectIdentifier, ObjectType, ObjectTypeAndFlags,
-    read_block,
 };
 
 #[derive(Debug)]
