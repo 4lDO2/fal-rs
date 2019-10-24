@@ -1,7 +1,7 @@
 use bitflags::bitflags;
 
 use crate::{
-    omap::{OmapKey, OmapValue},
+    omap::{Omap, OmapKey, OmapValue},
     read_block, read_obj_phys,
     superblock::NxSuperblock,
     BlockAddr, ObjPhys, ObjectIdentifier, ObjectType,
@@ -10,7 +10,7 @@ use crate::{
 use fal::parsing::{read_u16, read_u32, read_u64};
 
 use std::{
-    borrow::{Borrow, Cow},
+    borrow::Cow,
     cmp::Ordering,
 };
 
@@ -301,6 +301,7 @@ impl BTreeNode {
         &self,
         device: &mut D,
         superblock: &NxSuperblock,
+        omap: Option<&Omap>,
         key: &BTreeKey,
         key_size: u16,
         val_size: u16,
@@ -331,6 +332,11 @@ impl BTreeNode {
                     superblock,
                     self.internal_key_ptr(index, key_size, val_size).unwrap().0 as i64,
                 );
+                assert_eq!(subtree.level, path.last().unwrap().0.level - 1);
+
+                if omap.is_none() && subtree.header.object_type.is_virtual() {
+                    panic!("Loaded a virtual subtree without access to an omap");
+                }
                 path.push((Cow::Owned(subtree), index));
                 continue;
             }
@@ -405,6 +411,7 @@ impl BTreeNode {
         };
 
         let start = self.keyval_area.len() - toc_entry.value.start as usize;
+        assert_eq!(toc_entry.value.len, 8);
 
         let value_bytes = &self.keyval_area[start..start + toc_entry.value.len as usize];
         Some(ObjectIdentifier::from(fal::read_u64(value_bytes, 0)))
@@ -443,6 +450,7 @@ impl BTree {
         &self,
         device: &mut D,
         superblock: &NxSuperblock,
+        omap: Option<&Omap>,
         key: &BTreeKey,
         compare: Compare,
     ) -> Option<((BTreeKey, BTreeValue), Path)> {
@@ -450,6 +458,7 @@ impl BTree {
         self.root.get_generic(
             device,
             superblock,
+            omap,
             key,
             fixed.key_size as u16,
             fixed.val_size as u16,
@@ -460,29 +469,27 @@ impl BTree {
         &self,
         device: &mut D,
         superblock: &NxSuperblock,
+        omap: Option<&Omap>,
         key: &BTreeKey,
     ) -> Option<BTreeValue> {
-        self.get_generic(device, superblock, key, Ord::cmp)
+        self.get_generic(device, superblock, omap, key, Ord::cmp)
             .map(|((_, value), _)| value)
-    }
-    pub fn get_as_omap<D: fal::Device>(
-        &self,
-        device: &mut D,
-        superblock: &NxSuperblock,
-        key: OmapKey,
-    ) -> Option<OmapValue> {
-        assert_eq!(self.root.header.object_subtype, ObjectType::ObjectMap);
-        self.get(device, superblock, &BTreeKey::OmapKey(key))
-            .map(|value| value.into_omap_value().unwrap())
     }
     pub fn pairs<'a, D: fal::Device>(
         &'a self,
         device: &'a mut D,
         superblock: &'a NxSuperblock,
+        omap: Option<&'a Omap>,
     ) -> Pairs<'a, D> {
+
+        if omap.is_none() && self.root.header.object_type.is_virtual() {
+            panic!("Iterating over the pairs of a virtual object (tree) without an omap.");
+        }
+
         Pairs {
             device,
             superblock,
+            omap,
             path: vec![(Cow::Borrowed(&self.root), 0)],
 
             compare: Ord::cmp,
@@ -493,23 +500,29 @@ impl BTree {
         &'a self,
         device: &'a mut D,
         superblock: &'a NxSuperblock,
+        omap: Option<&'a Omap>,
         key: &BTreeKey,
         compare: Compare,
     ) -> Option<Pairs<'a, D>> {
         let path = match self
-            .get_generic(device, superblock, key, compare)
+            .get_generic(device, superblock, omap, key, compare)
             .map(|(_, path)| path)
         {
             Some(p) => p,
             None => return None,
         };
 
+        if omap.is_none() && self.root.header.object_type.is_virtual() {
+            panic!("Iterating over the pairs of a virtual object (tree) without an omap.");
+        }
+
         Some(Pairs {
             device,
             superblock,
+            omap,
             path,
 
-            compare: Ord::cmp,
+            compare,
             previous_key: None,
         })
     }
@@ -517,15 +530,17 @@ impl BTree {
         &'a self,
         device: &'a mut D,
         superblock: &'a NxSuperblock,
+        omap: Option<&'a Omap>,
     ) -> impl Iterator<Item = BTreeKey> + 'a {
-        self.pairs(device, superblock).map(|(k, _)| k)
+        self.pairs(device, superblock, omap).map(|(k, _)| k)
     }
     pub fn values<'a, D: fal::Device>(
         &'a self,
         device: &'a mut D,
         superblock: &'a NxSuperblock,
+        omap: Option<&'a Omap>,
     ) -> impl Iterator<Item = BTreeValue> + 'a {
-        self.pairs(device, superblock).map(|(_, v)| v)
+        self.pairs(device, superblock, omap).map(|(_, v)| v)
     }
 }
 
@@ -534,6 +549,7 @@ pub struct Pairs<'a, D: fal::Device> {
     device: &'a mut D,
     superblock: &'a NxSuperblock,
     path: Path<'a>,
+    omap: Option<&'a Omap>,
 
     compare: Compare,
     previous_key: Option<BTreeKey>,
@@ -565,14 +581,13 @@ impl<'a, D: fal::Device> Iterator for Pairs<'a, D> {
             ) {
                 Some(key) => {
                     // If there is a pair available, just yield it and continue.
-                    *current_index += 1;
                     if let Some(previous_key) = self.previous_key {
                         let compare = &self.compare;
                         if compare(&previous_key, &key) != Ordering::Equal {
                             return None;
                         }
-                        self.previous_key = Some(key);
                     }
+                    self.previous_key = Some(key);
                     let value = match current_tree.leaf_value(
                         *current_index,
                         info.key_size as u16,
@@ -581,6 +596,7 @@ impl<'a, D: fal::Device> Iterator for Pairs<'a, D> {
                         Some(v) => v,
                         None => return None,
                     };
+                    *current_index += 1;
                     return Some((key, value.clone()));
                 }
                 None => {
@@ -611,7 +627,24 @@ impl<'a, D: fal::Device> Iterator for Pairs<'a, D> {
 
         match action {
             Action::ClimbUp(ptr) => self.path.push((
-                Cow::Owned(BTreeNode::load(self.device, self.superblock, ptr.0 as i64)),
+                Cow::Owned({
+                    // If the subtree ptrs are virtual, then make sure nothing bad happens without
+                    // noticing.
+
+                    let baddr = match self.omap {
+                        Some(omap) => omap.get_partial_latest(self.device, self.superblock, OmapKey::partial(ptr)).unwrap().1.paddr,
+                        None => ptr.0 as i64,
+                    };
+
+                    let subtree = BTreeNode::load(self.device, self.superblock, baddr);
+
+                    assert_eq!(subtree.level, self.path.last().unwrap().0.level - 1);
+
+                    if self.omap.is_none() && subtree.header.object_type.is_virtual() {
+                        panic!("Loaded a virtual subtree without access to an omap");
+                    }
+                    subtree
+                }),
                 0,
             )),
 
@@ -620,6 +653,8 @@ impl<'a, D: fal::Device> Iterator for Pairs<'a, D> {
 
                 if let Some((_, i)) = self.path.last_mut() {
                     *i += 1;
+                } else {
+                    return None;
                 }
             }
         }

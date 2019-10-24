@@ -427,7 +427,6 @@ impl<'a, D: fal::Device> Iterator for Pairs<'a, D> {
             Tree::Leaf(leaf) => match leaf.pairs.get(*current_index) {
                 Some((item, value)) => {
                     // If there is a pair available, just yield it and continue.
-                    *current_index += 1;
                     if let Some(previous_key) = self.previous_key {
                         let function = &self.function;
                         if function(&previous_key, &item.key) != Ordering::Equal {
@@ -435,6 +434,7 @@ impl<'a, D: fal::Device> Iterator for Pairs<'a, D> {
                         }
                         self.previous_key = Some(item.key);
                     }
+                    *current_index += 1;
                     return Some((item.key, value.clone()));
                 }
                 None => {

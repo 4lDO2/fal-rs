@@ -9,7 +9,7 @@ use crate::{
     checkpoint::{
         self, CheckpointDescAreaEntry, CheckpointMapping, CheckpointMappingPhys, GenericObject,
     },
-    omap::{OmapKey, OmapPhys, OmapValue},
+    omap::{Omap, OmapKey, OmapPhys, OmapValue},
     read_block, read_block_to,
     superblock::{ApfsSuperblock, NxSuperblock},
     BlockAddr, ObjectIdentifier,
@@ -99,13 +99,7 @@ impl<D: fal::Device> Filesystem<D> {
 
         let container_superblock: NxSuperblock = superblock;
 
-        let omap = OmapPhys::parse(&read_block(
-            &container_superblock,
-            &mut device,
-            container_superblock.object_map_oid.0 as i64,
-        ));
-
-        let omap_tree = BTree::load(&mut device, &container_superblock, omap.tree_oid.0 as i64);
+        let omap = Omap::load(&mut device, &container_superblock, container_superblock.object_map_oid.0 as i64);
 
         let mounted_volumes = container_superblock
             .volumes_oids
@@ -113,24 +107,11 @@ impl<D: fal::Device> Filesystem<D> {
             .copied()
             .take_while(|oid| oid.is_valid())
             .map(|volume| {
-                let omap_value: OmapValue = omap_tree
-                    .get_as_omap(
-                        &mut device,
-                        &container_superblock,
-                        OmapKey {
-                            oid: volume,
-                            xid: container_superblock.header.transaction_id,
-                        },
-                    )
-                    .expect("Volume virtual oid_t wasn't found in the omap B+ tree.");
+                let (_, omap_value) = omap.get_partial_latest(&mut device, &container_superblock, OmapKey::partial(volume)).expect("Volume virtual oid_t wasn't found in the omap B+ tree.");
 
                 Volume::load(&mut device, &container_superblock, omap_value.paddr)
             })
             .collect::<Vec<_>>();
-
-        for volume in &mounted_volumes {
-            dbg!(volume.root_oid(&mut device, &container_superblock));
-        }
 
         Self {
             container_superblock,
@@ -160,46 +141,26 @@ impl<D: fal::DeviceMut> Filesystem<D> {
 #[derive(Debug)]
 pub struct Volume {
     pub superblock: ApfsSuperblock,
-    pub omap: OmapPhys,
-    pub omap_tree: BTree,
+    pub omap: Omap,
+    pub root_tree: BTree,
 }
 
 impl Volume {
     pub fn load<D: fal::Device>(device: &mut D, nx_super: &NxSuperblock, phys: BlockAddr) -> Self {
         let superblock = ApfsSuperblock::parse(&read_block(nx_super, device, phys));
 
-        let omap = OmapPhys::parse(&read_block(nx_super, device, superblock.omap_oid.0 as i64));
-        let omap_tree = BTree::load(device, nx_super, omap.tree_oid.0 as i64);
-        dbg!(omap_tree.info());
-        for key in omap_tree.keys(device, nx_super) {
-            dbg!(key);
-        }
+        let omap = Omap::load(device, nx_super, superblock.omap_oid.0 as i64);
+
+        let root_oid_phys = Self::root_oid_phys(device, nx_super, &omap, &superblock).paddr;
+        let root_tree = BTree::load(device, nx_super, root_oid_phys);
 
         Self {
-            superblock,
             omap,
-            omap_tree,
+            superblock,
+            root_tree,
         }
     }
-    pub fn root_oid<D: fal::Device>(&self, device: &mut D, superblock: &NxSuperblock) -> OmapValue {
-        dbg!(&self.superblock);
-
-        let (_, value) = self
-            .omap_tree
-            .similar_pairs(
-                device,
-                superblock,
-                &BTreeKey::OmapKey(OmapKey {
-                    oid: self.superblock.root_tree_oid,
-                    xid: self.superblock.header.transaction_id,
-                }),
-                OmapKey::compare_partial,
-            )
-            .unwrap()
-            .map(|(k, v)| (k.into_omap_key().unwrap(), v.into_omap_value().unwrap()))
-            .max_by_key(|(k, _)| k.xid)
-            .unwrap();
-
-        value
+    fn root_oid_phys<D: fal::Device>(device: &mut D, superblock: &NxSuperblock, omap: &Omap, vol_superblock: &ApfsSuperblock) -> OmapValue {
+        omap.get_partial_latest(device, superblock, OmapKey::partial(vol_superblock.root_tree_oid)).unwrap().1
     }
 }

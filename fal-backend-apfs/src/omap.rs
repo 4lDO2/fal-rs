@@ -1,5 +1,9 @@
-use crate::{btree::BTreeKey, BlockAddr, ObjPhys, ObjectIdentifier, TransactionIdentifier};
-use fal::{read_u32, read_u64};
+use crate::{
+    btree::{BTree, BTreeKey},
+    superblock::NxSuperblock,
+    BlockAddr, ObjPhys, ObjectIdentifier, ObjectTypeAndFlags, TransactionIdentifier, read_block, read_obj_phys
+};
+use fal::parsing::{read_u32, read_u64};
 use std::cmp::Ordering;
 
 use bitflags::bitflags;
@@ -9,8 +13,8 @@ pub struct OmapPhys {
     pub header: ObjPhys,
     pub flags: u32,
     pub snapshot_count: u32,
-    pub tree_type: u32,
-    pub snapshot_tree_type: u32,
+    pub tree_type: ObjectTypeAndFlags,
+    pub snapshot_tree_type: ObjectTypeAndFlags,
     pub tree_oid: ObjectIdentifier,
     pub snapshot_tree_oid: ObjectIdentifier,
     pub most_recent_snapshot: TransactionIdentifier,
@@ -28,9 +32,16 @@ impl OmapKey {
     pub const LEN: usize = 16;
 
     pub fn parse(bytes: &[u8]) -> Self {
+        let mut offset = 0;
         Self {
-            oid: read_u64(bytes, 0).into(),
-            xid: read_u64(bytes, 8),
+            oid: read_u64(bytes, &mut offset).into(),
+            xid: read_u64(bytes, &mut offset),
+        }
+    }
+    pub fn partial(oid: ObjectIdentifier) -> Self {
+        Self {
+            oid,
+            xid: 0,
         }
     }
     pub fn compare(k1: &BTreeKey, k2: &BTreeKey) -> Ordering {
@@ -77,10 +88,11 @@ impl OmapValue {
     pub const LEN: usize = 16;
 
     pub fn parse(bytes: &[u8]) -> Self {
+        let mut offset = 0;
         Self {
-            flags: OmapValueFlags::from_bits(read_u32(bytes, 0)).unwrap(),
-            size: read_u32(bytes, 4),
-            paddr: read_u64(bytes, 8) as i64,
+            flags: OmapValueFlags::from_bits(read_u32(bytes, &mut offset)).unwrap(),
+            size: read_u32(bytes, &mut offset),
+            paddr: read_u64(bytes, &mut offset) as i64,
         }
     }
 }
@@ -94,19 +106,56 @@ pub struct OmapSnapshot {
 
 impl OmapPhys {
     pub fn parse(bytes: &[u8]) -> Self {
-        let header = ObjPhys::parse(&bytes[..32]);
+        let mut offset = 0;
 
         Self {
-            header,
-            flags: read_u32(bytes, 32),
-            snapshot_count: read_u32(bytes, 36),
-            tree_type: read_u32(bytes, 40),
-            snapshot_tree_type: read_u32(bytes, 44),
-            tree_oid: read_u64(bytes, 48).into(),
-            snapshot_tree_oid: read_u64(bytes, 56).into(),
-            most_recent_snapshot: read_u64(bytes, 64),
-            pending_revert_min: read_u64(bytes, 72),
-            pending_revert_max: read_u64(bytes, 80),
+            header: read_obj_phys(bytes, &mut offset),
+            flags: read_u32(bytes, &mut offset),
+            snapshot_count: read_u32(bytes, &mut offset),
+            tree_type: ObjectTypeAndFlags::from_raw(read_u32(bytes, &mut offset)),
+            snapshot_tree_type: ObjectTypeAndFlags::from_raw(read_u32(bytes, &mut offset)),
+            tree_oid: read_u64(bytes, &mut offset).into(),
+            snapshot_tree_oid: read_u64(bytes, &mut offset).into(),
+            most_recent_snapshot: read_u64(bytes, &mut offset),
+            pending_revert_min: read_u64(bytes, &mut offset),
+            pending_revert_max: read_u64(bytes, &mut offset),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Omap {
+    pub omap: OmapPhys,
+    pub tree: BTree,
+}
+
+impl Omap {
+    pub fn load<D: fal::Device>(device: &mut D, superblock: &NxSuperblock, baddr: BlockAddr) -> Self {
+        let block = read_block(superblock, device, baddr);
+
+        let omap = OmapPhys::parse(&block);
+
+        if omap.tree_type.is_virtual() {
+            unimplemented!("Omaps with virtual addresses aren't implemented");
+        }
+
+        let tree = BTree::load(device, superblock, omap.tree_oid.0 as i64);
+
+        Self {
+            omap,
+            tree,
+        }
+    }
+    pub fn get<D: fal::Device>(&self, device: &mut D, superblock: &NxSuperblock, key: OmapKey) -> Option<OmapValue> {
+        self.tree.get(device, superblock, None, &BTreeKey::OmapKey(key)).map(|v| v.into_omap_value().unwrap())
+    }
+    pub fn get_partial<'a, D: fal::Device>(&'a self, device: &'a mut D, superblock: &'a NxSuperblock, key: OmapKey) -> Option<impl Iterator<Item = (OmapKey, OmapValue)> + 'a> {
+        self.tree.similar_pairs(device, superblock, None, &BTreeKey::OmapKey(key), OmapKey::compare_partial).map(|iter| iter.map(|(k, v)| (k.into_omap_key().unwrap(), v.into_omap_value().unwrap())))
+    }
+    pub fn get_partial_latest<'a, D: fal::Device>(&'a self, device: &'a mut D, superblock: &'a NxSuperblock, key: OmapKey) -> Option<(OmapKey, OmapValue)> {
+        match self.get_partial(device, superblock, key).map(|iter| iter.filter(|(k, _)| OmapKey::compare_partial(&BTreeKey::OmapKey(*k), &BTreeKey::OmapKey(key)) != Ordering::Greater).max_by_key(|(k, _)| k.xid)) {
+            Some(Some(t)) => Some(t),
+            _ => None,
         }
     }
 }
