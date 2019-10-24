@@ -35,6 +35,10 @@ pub fn read_nloc(bytes: &[u8], off: &mut usize) -> NodeLocation {
     }
 }
 
+fn always_equal(k1: &BTreeKey, k2: &BTreeKey) -> Ordering {
+    Ordering::Equal
+}
+
 bitflags! {
     pub struct BTreeFlags: u32 {
         const U64_KEYS = 0x1;
@@ -510,7 +514,7 @@ impl BTree {
             omap,
             path: vec![(Cow::Borrowed(&self.root), 0)],
 
-            compare: Ord::cmp,
+            compare: always_equal,
             previous_key: None,
         }
     }
