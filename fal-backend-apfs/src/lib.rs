@@ -1,6 +1,8 @@
 pub mod btree;
 pub mod checkpoint;
+pub mod crypto;
 pub mod filesystem;
+pub mod fsobjects;
 pub mod omap;
 pub mod reaper;
 pub mod spacemanager;

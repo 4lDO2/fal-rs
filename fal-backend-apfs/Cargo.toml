@@ -9,8 +9,10 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 fal = { version = "0.1", path = "../fal" }
+
+arrayvec = "0.5"
 bitflags = "1.2"
-libc = "0.2"
-uuid = "0.7"
-time = "0.1"
 enum_primitive = "0.1"
+libc = "0.2"
+time = "0.1"
+uuid = "0.7"

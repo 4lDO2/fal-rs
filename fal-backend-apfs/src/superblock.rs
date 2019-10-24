@@ -8,6 +8,7 @@ use fal::{read_u16, read_u32, read_u64, read_uuid, write_u32, write_u64, write_u
 
 use crate::{
     BlockAddr, BlockRange, ObjPhys, ObjectIdentifier, ObjectTypeAndFlags, TransactionIdentifier,
+    crypto::WrappedMetaCryptoState,
 };
 
 bitflags! {
@@ -392,52 +393,6 @@ impl ApfsModifiedBy {
     }
 }
 
-#[derive(Debug)]
-pub struct CryptoFlags;
-
-enum_from_primitive! {
-    #[derive(Debug)]
-    pub enum CryptoKeyClass {
-        DirNone = 0,
-        A = 1,
-        B = 2,
-        C = 3,
-        D = 4,
-        F = 6,
-    }
-}
-
-// TODO
-type CryptoKeyOsVersion = u32;
-
-type CryptoKeyRevision = u16;
-
-#[derive(Debug)]
-pub struct WrappedMetaCryptoState {
-    major_version: u16,
-    minor_version: u16,
-    cpflags: CryptoFlags,
-    persistent_class: CryptoKeyClass,
-    key_os_version: CryptoKeyOsVersion,
-    key_revision: CryptoKeyRevision,
-    unused: u16,
-}
-
-impl WrappedMetaCryptoState {
-    pub fn parse(bytes: &[u8]) -> Self {
-        const LEN: usize = 20;
-
-        Self {
-            major_version: read_u16(bytes, 0),
-            minor_version: read_u16(bytes, 2),
-            cpflags: CryptoFlags, // takes up 4 bytes
-            persistent_class: CryptoKeyClass::from_u32(read_u32(bytes, 8)).unwrap(),
-            key_os_version: read_u32(bytes, 12),
-            key_revision: read_u16(bytes, 16),
-            unused: read_u16(bytes, 18),
-        }
-    }
-}
 
 impl ApfsSuperblock {
     pub const MAGIC: u32 = 0x42535041; // 'BSPA'

@@ -1,15 +1,15 @@
 use std::{
     collections::HashMap,
-    io::{prelude::*, SeekFrom},
+    io::SeekFrom,
     sync::Mutex,
 };
 
 use crate::{
-    btree::{BTree, BTreeKey, BTreeNode},
+    btree::BTree,
     checkpoint::{
-        self, CheckpointDescAreaEntry, CheckpointMapping, CheckpointMappingPhys, GenericObject,
+        self, CheckpointMapping, CheckpointMappingPhys, GenericObject,
     },
-    omap::{Omap, OmapKey, OmapPhys, OmapValue},
+    omap::{Omap, OmapKey, OmapValue},
     read_block, read_block_to,
     superblock::{ApfsSuperblock, NxSuperblock},
     BlockAddr, ObjectIdentifier,
@@ -163,6 +163,8 @@ impl Volume {
 
         let root_oid_phys = Self::root_oid_phys(device, nx_super, &omap, &superblock).paddr;
         let root_tree = BTree::load(device, nx_super, root_oid_phys);
+
+        dbg!(root_tree.pairs(device, nx_super, Some(&omap)).collect::<Vec<_>>());
 
         Self {
             omap,

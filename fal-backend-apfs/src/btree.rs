@@ -1,10 +1,10 @@
 use bitflags::bitflags;
 
 use crate::{
+    fsobjects::{JInodeKey, JDrecKey, JDrecHashedKey, JDirStatsKey, JKey, JXattrKey, JDrecVal, JInodeVal},
     omap::{Omap, OmapKey, OmapValue},
-    read_block, read_obj_phys,
     superblock::NxSuperblock,
-    BlockAddr, ObjPhys, ObjectIdentifier, ObjectType,
+    BlockAddr, ObjPhys, ObjectIdentifier, ObjectType, read_block, read_obj_phys,
 };
 
 use fal::parsing::{read_u16, read_u32, read_u64};
@@ -185,35 +185,47 @@ pub struct BTreeNode {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub enum BTreeKey {
     OmapKey(OmapKey),
+    AnyKey(JKey),
+    InodeKey(JInodeKey),
+    DrecKey(JDrecKey),
+    DrecHashedKey(JDrecHashedKey),
+    DirStatsKey(JDirStatsKey),
+    XattrKey(JXattrKey),
 }
 
 impl BTreeKey {
     pub fn into_omap_key(self) -> Option<OmapKey> {
         match self {
             Self::OmapKey(key) => Some(key),
+            _ => None,
         }
     }
     pub fn as_omap_key(&self) -> Option<&OmapKey> {
         match self {
             Self::OmapKey(ref key) => Some(key),
+            _ => None,
         }
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum BTreeValue {
     OmapValue(OmapValue),
+    Inode(JInodeVal),
+    DirRecord(JDrecVal),
 }
 
 impl BTreeValue {
     pub fn into_omap_value(self) -> Option<OmapValue> {
         match self {
             Self::OmapValue(val) => Some(val),
+            _ => None,
         }
     }
     pub fn as_omap_value(&self) -> Option<&OmapValue> {
         match self {
             Self::OmapValue(ref val) => Some(val),
+            _ => None,
         }
     }
 }
@@ -360,10 +372,13 @@ impl BTreeNode {
         };
         let key_bytes =
             &self.keyval_area[toc_entry.key.start as usize..toc_entry.key.end() as usize];
-        match self.header.object_subtype {
-            ObjectType::ObjectMap => Some(BTreeKey::OmapKey(OmapKey::parse(key_bytes))),
-            _ => unimplemented!(),
-        }
+        Some(match self.header.object_subtype {
+            ObjectType::ObjectMap => BTreeKey::OmapKey(OmapKey::parse(key_bytes)),
+            ObjectType::FsTree => {
+                BTreeKey::parse_jkey(key_bytes)
+            }
+            ty => unimplemented!("B+ tree subtype {:?}", ty),
+        })
     }
     fn current_node_closest_key(
         &self,
@@ -375,7 +390,7 @@ impl BTreeNode {
         self.current_node_keys(key_size, val_size)
             .enumerate()
             .filter(|(_, current_key)| compare(&current_key, key) != Ordering::Greater)
-            .max_by(|(_, k1), (_, k2)| compare(&k1, &k2))
+            .max_by(|(_, k1), (_, k2)| Ord::cmp(&k1, &k2))
     }
     fn leaf_value(&self, index: usize, key_size: u16, val_size: u16) -> Option<BTreeValue> {
         assert!(self.is_leaf());
@@ -391,7 +406,14 @@ impl BTreeNode {
 
         match self.header.object_subtype {
             ObjectType::ObjectMap => Some(BTreeValue::OmapValue(OmapValue::parse(&value_bytes))),
-            _ => unimplemented!(),
+            ObjectType::FsTree => {
+                let key_bytes =
+                    &self.keyval_area[toc_entry.key.start as usize..toc_entry.key.end() as usize];
+                let jkey = JKey::parse(key_bytes);
+
+                Some(BTreeValue::parse_from_jkey(&jkey, value_bytes))
+            }
+            other => unimplemented!("leaf_value from a tree with subtype: {:?}", other),
         }
     }
     fn internal_key_ptr(
