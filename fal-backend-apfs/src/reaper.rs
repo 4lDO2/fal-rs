@@ -25,7 +25,7 @@ impl ReaperPhys {
     pub fn parse(bytes: &[u8]) -> Self {
         let state_buffer_size = read_u32(bytes, 108);
         Self {
-            header: ObjPhys::parse(&bytes[..32]),
+            header: ObjPhys::parse(&bytes),
             next_reaper_id: read_u64(bytes, 32),
             completed_id: read_u64(bytes, 40),
             head: read_u64(bytes, 48).into(),

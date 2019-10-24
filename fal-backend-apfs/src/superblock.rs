@@ -94,7 +94,7 @@ impl NxSuperblock {
         Self::parse(&block_bytes)
     }
     pub fn parse(block_bytes: &[u8]) -> Self {
-        let header = ObjPhys::parse(&block_bytes[..ObjPhys::LEN]);
+        let header = ObjPhys::parse(&block_bytes);
 
         let magic = read_u32(block_bytes, 32);
         assert_eq!(magic, Self::MAGIC);
@@ -443,7 +443,7 @@ impl ApfsSuperblock {
     pub const MAGIC: u32 = 0x42535041; // 'BSPA'
 
     pub fn parse(bytes: &[u8]) -> Self {
-        let header = ObjPhys::parse(&bytes[..32]);
+        let header = ObjPhys::parse(&bytes);
 
         assert_eq!(read_u32(bytes, 32), Self::MAGIC);
 

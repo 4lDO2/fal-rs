@@ -7,7 +7,7 @@ pub mod spacemanager;
 pub mod superblock;
 
 use fal::parsing::{read_u32, read_u64, write_u32, write_u64};
-use std::io::SeekFrom;
+use std::{io::SeekFrom, mem};
 
 use bitflags::bitflags;
 use enum_primitive::{
@@ -153,8 +153,13 @@ impl ObjPhys {
     pub const LEN: usize = 32;
     pub fn parse(bytes: &[u8]) -> Self {
         let mut offset = 0;
+
+        let checksum = read_u64(bytes, &mut offset);
+        let calculated_checksum = fletcher64(&bytes[8..]);
+        assert_eq!(checksum, calculated_checksum);
+
         Self {
-            checksum: read_u64(bytes, &mut offset),
+            checksum,
             object_id: ObjectIdentifier::from(read_u64(bytes, &mut offset)),
             transaction_id: read_u64(bytes, &mut offset),
             object_type: ObjectTypeAndFlags::from_raw(read_u32(bytes, &mut offset)),
@@ -185,7 +190,7 @@ impl ObjPhys {
 }
 
 pub fn read_obj_phys(bytes: &[u8], offset: &mut usize) -> ObjPhys {
-    let obj_phys = ObjPhys::parse(&bytes[*offset..*offset + ObjPhys::LEN]);
+    let obj_phys = ObjPhys::parse(&bytes);
     *offset += ObjPhys::LEN;
     obj_phys
 }
@@ -214,4 +219,37 @@ pub fn read_block<D: fal::Device>(
     let mut block_bytes = vec![0u8; superblock.block_size as usize].into_boxed_slice();
     read_block_to(superblock, device, &mut block_bytes, address);
     block_bytes
+}
+
+// TODO: Optimize this algorithm more.
+/// Zero-padded little-endian Fletcher 64 checksum.
+pub fn fletcher64(data: &[u8]) -> u64 {
+    const MOD: u64 = 0xFFFFFFFF;
+
+    let (mut a, mut b): (u64, u64) = (0, 0);
+
+    for i in 0..data.len() / mem::size_of::<u32>() {
+        a = (a + u64::from(fal::read_u32(data, i * 4))) % MOD;
+        b = (b + a) % MOD;
+    }
+
+    let overlapping = data.len() % mem::size_of::<u32>();
+
+    if overlapping != 0 {
+        let padded_last_bytes = match &data[data.len() - overlapping..] {
+            &[a] => [a, 0, 0, 0],
+            &[a, b] => [a, b, 0, 0],
+            &[a, b, c] => [a, b, c, 0],
+            _ => unreachable!(),
+        };
+        a = (a + u64::from(u32::from_le_bytes(padded_last_bytes))) % MOD;
+        b = (b + a) % MOD;
+    }
+
+    let checksum_low = MOD - (a + b) % MOD;
+    let checksum_high = MOD - (a + checksum_low) % MOD;
+
+    assert!(a <= std::u32::MAX.into());
+    assert!(b <= std::u32::MAX.into());
+    (u64::from(checksum_high) << (mem::size_of::<u32>() * 8)) | u64::from(checksum_low)
 }

@@ -47,7 +47,7 @@ impl CheckpointMappingPhys {
     pub const BASE_LEN: usize = ObjPhys::LEN + 8;
 
     pub fn parse(bytes: &[u8]) -> Self {
-        let header = ObjPhys::parse(&bytes[..32]);
+        let header = ObjPhys::parse(&bytes);
         let flags = read_u32(bytes, 32);
         let count = read_u32(bytes, 36);
 
@@ -110,7 +110,7 @@ pub fn read_from_desc_area<D: fal::Device>(
         superblock.chkpnt_desc_base + i64::from(index),
     );
 
-    let obj_phys = ObjPhys::parse(&block_bytes[..32]);
+    let obj_phys = ObjPhys::parse(&block_bytes);
     match obj_phys.object_type.ty {
         ObjectType::NxSuperblock => {
             CheckpointDescAreaEntry::Superblock(NxSuperblock::parse(&block_bytes))
@@ -134,7 +134,7 @@ pub fn read_from_data_area<D: fal::Device>(
         superblock.chkpnt_data_base + i64::from(index),
     );
 
-    let obj_phys = ObjPhys::parse(&block_bytes[..32]);
+    let obj_phys = ObjPhys::parse(&block_bytes);
     match obj_phys.object_type.ty {
         ObjectType::SpaceManager => Some(GenericObject::SpaceManager(SpacemanagerPhys::parse(
             &block_bytes,
