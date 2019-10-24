@@ -99,7 +99,11 @@ impl<D: fal::Device> Filesystem<D> {
 
         let container_superblock: NxSuperblock = superblock;
 
-        let omap = Omap::load(&mut device, &container_superblock, container_superblock.object_map_oid.0 as i64);
+        let omap = Omap::load(
+            &mut device,
+            &container_superblock,
+            container_superblock.object_map_oid.0 as i64,
+        );
 
         let mounted_volumes = container_superblock
             .volumes_oids
@@ -107,7 +111,13 @@ impl<D: fal::Device> Filesystem<D> {
             .copied()
             .take_while(|oid| oid.is_valid())
             .map(|volume| {
-                let (_, omap_value) = omap.get_partial_latest(&mut device, &container_superblock, OmapKey::partial(volume)).expect("Volume virtual oid_t wasn't found in the omap B+ tree.");
+                let (_, omap_value) = omap
+                    .get_partial_latest(
+                        &mut device,
+                        &container_superblock,
+                        OmapKey::partial(volume),
+                    )
+                    .expect("Volume virtual oid_t wasn't found in the omap B+ tree.");
 
                 Volume::load(&mut device, &container_superblock, omap_value.paddr)
             })
@@ -160,7 +170,18 @@ impl Volume {
             root_tree,
         }
     }
-    fn root_oid_phys<D: fal::Device>(device: &mut D, superblock: &NxSuperblock, omap: &Omap, vol_superblock: &ApfsSuperblock) -> OmapValue {
-        omap.get_partial_latest(device, superblock, OmapKey::partial(vol_superblock.root_tree_oid)).unwrap().1
+    fn root_oid_phys<D: fal::Device>(
+        device: &mut D,
+        superblock: &NxSuperblock,
+        omap: &Omap,
+        vol_superblock: &ApfsSuperblock,
+    ) -> OmapValue {
+        omap.get_partial_latest(
+            device,
+            superblock,
+            OmapKey::partial(vol_superblock.root_tree_oid),
+        )
+        .unwrap()
+        .1
     }
 }

@@ -9,10 +9,7 @@ use crate::{
 
 use fal::parsing::{read_u16, read_u32, read_u64};
 
-use std::{
-    borrow::Cow,
-    cmp::Ordering,
-};
+use std::{borrow::Cow, cmp::Ordering};
 
 pub type Compare = fn(_: &BTreeKey, _: &BTreeKey) -> Ordering;
 pub type Path<'a> = Vec<(Cow<'a, BTreeNode>, usize)>;
@@ -481,7 +478,6 @@ impl BTree {
         superblock: &'a NxSuperblock,
         omap: Option<&'a Omap>,
     ) -> Pairs<'a, D> {
-
         if omap.is_none() && self.root.header.object_type.is_virtual() {
             panic!("Iterating over the pairs of a virtual object (tree) without an omap.");
         }
@@ -632,7 +628,16 @@ impl<'a, D: fal::Device> Iterator for Pairs<'a, D> {
                     // noticing.
 
                     let baddr = match self.omap {
-                        Some(omap) => omap.get_partial_latest(self.device, self.superblock, OmapKey::partial(ptr)).unwrap().1.paddr,
+                        Some(omap) => {
+                            omap.get_partial_latest(
+                                self.device,
+                                self.superblock,
+                                OmapKey::partial(ptr),
+                            )
+                            .unwrap()
+                            .1
+                            .paddr
+                        }
                         None => ptr.0 as i64,
                     };
 

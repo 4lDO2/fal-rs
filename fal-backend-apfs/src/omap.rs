@@ -1,7 +1,8 @@
 use crate::{
     btree::{BTree, BTreeKey},
+    read_block, read_obj_phys,
     superblock::NxSuperblock,
-    BlockAddr, ObjPhys, ObjectIdentifier, ObjectTypeAndFlags, TransactionIdentifier, read_block, read_obj_phys
+    BlockAddr, ObjPhys, ObjectIdentifier, ObjectTypeAndFlags, TransactionIdentifier,
 };
 use fal::parsing::{read_u32, read_u64};
 use std::cmp::Ordering;
@@ -39,10 +40,7 @@ impl OmapKey {
         }
     }
     pub fn partial(oid: ObjectIdentifier) -> Self {
-        Self {
-            oid,
-            xid: 0,
-        }
+        Self { oid, xid: 0 }
     }
     pub fn compare(k1: &BTreeKey, k2: &BTreeKey) -> Ordering {
         Ord::cmp(k1, k2)
@@ -130,7 +128,11 @@ pub struct Omap {
 }
 
 impl Omap {
-    pub fn load<D: fal::Device>(device: &mut D, superblock: &NxSuperblock, baddr: BlockAddr) -> Self {
+    pub fn load<D: fal::Device>(
+        device: &mut D,
+        superblock: &NxSuperblock,
+        baddr: BlockAddr,
+    ) -> Self {
         let block = read_block(superblock, device, baddr);
 
         let omap = OmapPhys::parse(&block);
@@ -141,19 +143,49 @@ impl Omap {
 
         let tree = BTree::load(device, superblock, omap.tree_oid.0 as i64);
 
-        Self {
-            omap,
-            tree,
-        }
+        Self { omap, tree }
     }
-    pub fn get<D: fal::Device>(&self, device: &mut D, superblock: &NxSuperblock, key: OmapKey) -> Option<OmapValue> {
-        self.tree.get(device, superblock, None, &BTreeKey::OmapKey(key)).map(|v| v.into_omap_value().unwrap())
+    pub fn get<D: fal::Device>(
+        &self,
+        device: &mut D,
+        superblock: &NxSuperblock,
+        key: OmapKey,
+    ) -> Option<OmapValue> {
+        self.tree
+            .get(device, superblock, None, &BTreeKey::OmapKey(key))
+            .map(|v| v.into_omap_value().unwrap())
     }
-    pub fn get_partial<'a, D: fal::Device>(&'a self, device: &'a mut D, superblock: &'a NxSuperblock, key: OmapKey) -> Option<impl Iterator<Item = (OmapKey, OmapValue)> + 'a> {
-        self.tree.similar_pairs(device, superblock, None, &BTreeKey::OmapKey(key), OmapKey::compare_partial).map(|iter| iter.map(|(k, v)| (k.into_omap_key().unwrap(), v.into_omap_value().unwrap())))
+    pub fn get_partial<'a, D: fal::Device>(
+        &'a self,
+        device: &'a mut D,
+        superblock: &'a NxSuperblock,
+        key: OmapKey,
+    ) -> Option<impl Iterator<Item = (OmapKey, OmapValue)> + 'a> {
+        self.tree
+            .similar_pairs(
+                device,
+                superblock,
+                None,
+                &BTreeKey::OmapKey(key),
+                OmapKey::compare_partial,
+            )
+            .map(|iter| {
+                iter.map(|(k, v)| (k.into_omap_key().unwrap(), v.into_omap_value().unwrap()))
+            })
     }
-    pub fn get_partial_latest<'a, D: fal::Device>(&'a self, device: &'a mut D, superblock: &'a NxSuperblock, key: OmapKey) -> Option<(OmapKey, OmapValue)> {
-        match self.get_partial(device, superblock, key).map(|iter| iter.filter(|(k, _)| OmapKey::compare_partial(&BTreeKey::OmapKey(*k), &BTreeKey::OmapKey(key)) != Ordering::Greater).max_by_key(|(k, _)| k.xid)) {
+    pub fn get_partial_latest<'a, D: fal::Device>(
+        &'a self,
+        device: &'a mut D,
+        superblock: &'a NxSuperblock,
+        key: OmapKey,
+    ) -> Option<(OmapKey, OmapValue)> {
+        match self.get_partial(device, superblock, key).map(|iter| {
+            iter.filter(|(k, _)| {
+                OmapKey::compare_partial(&BTreeKey::OmapKey(*k), &BTreeKey::OmapKey(key))
+                    != Ordering::Greater
+            })
+            .max_by_key(|(k, _)| k.xid)
+        }) {
             Some(Some(t)) => Some(t),
             _ => None,
         }
