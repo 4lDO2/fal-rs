@@ -59,6 +59,11 @@ impl JAnyKey {
             Self::FileExtentKey(key) => &key.header,
         }
     }
+    /// A partial comparison functions for filesystem-layer objects. Only compares the object ID
+    /// and the type, and ignores filenames or virtual addresses (for extents).
+    pub fn partial_compare(k1: &BTreeKey, k2: &BTreeKey) -> Ordering {
+        Ord::cmp(k1.as_fs_layer_key().unwrap().header(), k2.as_fs_layer_key().unwrap().header())
+    }
 }
 
 impl Ord for JAnyKey {
@@ -128,7 +133,7 @@ impl JInodeKey {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct JInodeVal {
     pub parent_id: u64,
     pub private_id: u64,
@@ -159,7 +164,7 @@ pub struct JInodeVal {
 }
 
 enum_from_primitive! {
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub enum InodeType {
         Fifo = 0o10000,
         CharDev = 0o20000,
@@ -195,7 +200,7 @@ bitflags! {
         const ALLOCATION_SPILLEDOVER = 0x10000;
     }
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ChildrenOrHardlinkCount {
     ChildrenCount(i32),
     HardlinkCount(i32),
@@ -279,7 +284,7 @@ impl JDrecKey {
         let mut offset = 0;
         let header = read_jkey(bytes, &mut offset);
         let name_len = read_u16(bytes, &mut offset) as usize;
-        dbg!(offset, name_len);
+
         let name = String::from_utf8(bytes[offset..offset + (name_len - 1)].to_owned()).unwrap();
 
         Self {
@@ -306,6 +311,18 @@ pub struct JDrecHashedKey {
     pub header: JKey,
     pub hash: u32,
     pub name: String,
+}
+impl JDrecHashedKey {
+    pub fn partial(oid: ObjectIdentifier) -> Self {
+        Self {
+            header: JKey {
+                oid,
+                ty: JObjType::DirRecord,
+            },
+            hash: 0,
+            name: String::new(),
+        }
+    }
 }
 
 impl Ord for JDrecHashedKey {
@@ -343,7 +360,7 @@ impl JDrecHashedKey {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct JDrecVal {
     pub file_id: u64,
     pub date_added: u64,
@@ -353,7 +370,7 @@ pub struct JDrecVal {
 }
 
 enum_from_primitive! {
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub enum JDrecType {
         Unknown = 0,
         Fifo = 1,
@@ -373,7 +390,7 @@ bitflags! {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct JDrecTypeAndFlags {
     pub ty: JDrecType,
     pub flags: JDrecFlags,
@@ -492,7 +509,7 @@ pub struct JDatastreamIdKey {
     pub header: JKey,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct JDatastreamIdVal {
     pub reference_count: u32,
 }
@@ -532,7 +549,7 @@ impl PartialOrd for JFileExtentKey {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct JFileExtentVal {
     pub length: u64,
     pub flags: (),

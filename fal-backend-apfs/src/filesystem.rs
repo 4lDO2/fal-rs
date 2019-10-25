@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
     btree::{BTree, BTreeKey},
-    fsobjects::{JAnyKey, JInodeKey},
+    fsobjects::{JAnyKey, JDrecHashedKey, JInodeKey},
     checkpoint::{
         self, CheckpointMapping, CheckpointMappingPhys, GenericObject,
     },
@@ -162,13 +162,13 @@ impl Volume {
         let root_oid_phys = Self::root_oid_phys(device, nx_super, &omap, &superblock).paddr;
         let root_tree = BTree::load(device, nx_super, root_oid_phys);
 
-        //dbg!(root_tree.pairs(device, nx_super, Some(&omap)).collect::<Vec<_>>());
-
-        let root_inode = root_tree.pairs(device, nx_super, Some(&omap)).find(|(k, v)| k == &BTreeKey::FsLayerKey(JAnyKey::InodeKey(JInodeKey::new(ObjectIdentifier::from(2)))));
-        //dbg!(root_inode);
+        dbg!(root_tree.pairs(device, nx_super, Some(&omap)).collect::<Vec<_>>());
 
         let root_inode = root_tree.get(device, nx_super, Some(&omap), &BTreeKey::FsLayerKey(JAnyKey::InodeKey(JInodeKey::new(ObjectIdentifier::from(2)))));
-        dbg!(root_inode);
+        dbg!(&root_inode);
+
+        let root_children = root_tree.similar_pairs(device, nx_super, Some(&omap), &BTreeKey::FsLayerKey(JAnyKey::DrecHashedKey(JDrecHashedKey::partial(ObjectIdentifier::from(2)))), JAnyKey::partial_compare).unwrap().collect::<Vec<_>>();
+        dbg!(root_children);
 
         Self {
             omap,

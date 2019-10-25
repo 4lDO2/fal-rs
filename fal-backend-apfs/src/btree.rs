@@ -205,9 +205,21 @@ impl BTreeKey {
             _ => None,
         }
     }
+    pub fn into_fs_layer_key(self) -> Option<JAnyKey> {
+        match self {
+            Self::FsLayerKey(key) => Some(key),
+            _ => None,
+        }
+    }
+    pub fn as_fs_layer_key(&self) -> Option<&JAnyKey> {
+        match self {
+            Self::FsLayerKey(ref key) => Some(key),
+            _ => None,
+        }
+    }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum BTreeValue {
     OmapValue(OmapValue),
     Inode(JInodeVal),

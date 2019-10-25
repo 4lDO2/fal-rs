@@ -151,6 +151,8 @@ impl Omap {
         superblock: &NxSuperblock,
         key: OmapKey,
     ) -> Option<OmapValue> {
+        // Make sure that we aren't using a partial key accidentally.
+        debug_assert_ne!(key.xid, 0);
         self.tree
             .get(device, superblock, None, &BTreeKey::OmapKey(key))
             .map(|v| v.into_omap_value().unwrap())
