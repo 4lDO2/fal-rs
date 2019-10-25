@@ -1,13 +1,14 @@
 use crate::{
     btree::{BTreeKey, BTreeValue},
     crypto::ProtectionClass,
-    ObjectIdentifier, ObjectTypeFlags,
+    ObjectIdentifier,
 };
 
 use std::cmp::Ordering;
 
 use fal::parsing::{read_u16, read_u32, read_u64};
 
+use bitflags::bitflags;
 use enum_primitive::*;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -82,9 +83,9 @@ pub struct JInodeVal {
     pub change_time: u64,
     pub access_time: u64,
 
-    pub internal_flags: u64,
+    pub internal_flags: InodeInternalFlags,
 
-    pub children_or_hardlink_count: i32,
+    pub children_or_hardlink_count: ChildrenOrHardlinkCount,
 
     pub default_protection_class: ProtectionClass,
     pub write_generation_counter: u32,
@@ -92,7 +93,9 @@ pub struct JInodeVal {
 
     pub uid: u32,
     pub gid: u32,
-    pub mode: u16,
+
+    pub ty: InodeType,
+    pub permissions: u16,
 
     pub pad1: u16,
     pub pad2: u16,
@@ -100,31 +103,112 @@ pub struct JInodeVal {
     // TODO: Extended fields
 }
 
+enum_from_primitive! {
+    #[derive(Clone, Debug)]
+    pub enum InodeType {
+        Fifo = 0o10000,
+        CharDev = 0o20000,
+        Dir = 0o40000,
+        BlockDev = 0o60000,
+        File = 0o100000,
+        Symlink = 0o120000,
+        Socket = 0o140000,
+        Whiteout = 0o160000,
+    }
+}
+impl InodeType {
+    pub const BITMASK: u16 = 0o170000;
+}
+bitflags! {
+    pub struct InodeInternalFlags: u64 {
+        const IS_APFS_PRIVATE = 0x1;
+        const MAINTAINS_DIR_STATS = 0x2;
+        const EXPLICIT_MAINTAINS_DIR_STATS = 0x4;
+        const PROTOCOL_CLASS_EXPLICIT = 0x8;
+        const WAS_CLONED = 0x10;
+        const UNUSED = 0x20;
+        const HAS_ACL = 0x40;
+        const BEING_TRUNCATED = 0x80;
+        const HAS_FINDER_INFO = 0x100; // LOL
+        const IS_SPARSE = 0x200;
+        const WAS_EVER_CLONED = 0x400;
+        const ACTIVE_FILE_TRIMMED = 0x800;
+        const PINNED_TO_MAIN = 0x1000;
+        const PINNED_TO_TIER2 = 0x2000;
+        const HAS_RSRC_FORK = 0x4000;
+        const HAS_NO_RSRC_FORK = 0x8000;
+        const ALLOCATION_SPILLEDOVER = 0x10000;
+    }
+}
+#[derive(Clone, Copy, Debug)]
+pub enum ChildrenOrHardlinkCount {
+    ChildrenCount(i32),
+    HardlinkCount(i32),
+}
+
+impl InodeInternalFlags {
+    pub fn inherited() -> Self {
+        Self::MAINTAINS_DIR_STATS | Self::HAS_RSRC_FORK | Self::HAS_NO_RSRC_FORK | Self::HAS_FINDER_INFO
+    }
+    pub fn cloned() -> Self {
+        Self::HAS_RSRC_FORK | Self::HAS_NO_RSRC_FORK | Self::HAS_FINDER_INFO
+    }
+}
+
 impl JInodeVal {
     pub fn parse(bytes: &[u8]) -> Self {
         let mut offset = 0;
 
+        let parent_id = read_u64(bytes, &mut offset);
+        let private_id = read_u64(bytes, &mut offset);
+
+        let create_time = read_u64(bytes, &mut offset);
+        let modification_time = read_u64(bytes, &mut offset);
+        let change_time = read_u64(bytes, &mut offset);
+        let access_time = read_u64(bytes, &mut offset);
+
+        let internal_flags = InodeInternalFlags::from_bits(read_u64(bytes, &mut offset)).unwrap();
+        let children_or_hardlink_count = read_u32(bytes, &mut offset) as i32;
+        let default_protection_class = ProtectionClass::from_u32(read_u32(bytes, &mut offset)).unwrap();
+        let write_generation_counter = read_u32(bytes, &mut offset);
+        let bsd_flags = read_u32(bytes, &mut offset);
+
+        let uid = read_u32(bytes, &mut offset);
+        let gid = read_u32(bytes, &mut offset);
+        let mode = read_u16(bytes, &mut offset);
+
+        let pad1 = read_u16(bytes, &mut offset);
+        let pad2 = read_u16(bytes, &mut offset);
+
+        let ty = InodeType::from_u16(mode & InodeType::BITMASK).unwrap();
+        let permissions = mode & !InodeType::BITMASK;
+
         Self {
-            parent_id: read_u64(bytes, &mut offset),
-            private_id: read_u64(bytes, &mut offset),
+            parent_id,
+            private_id,
 
-            create_time: read_u64(bytes, &mut offset),
-            modification_time: read_u64(bytes, &mut offset),
-            change_time: read_u64(bytes, &mut offset),
-            access_time: read_u64(bytes, &mut offset),
+            create_time,
+            modification_time,
+            change_time,
+            access_time,
 
-            internal_flags: read_u64(bytes, &mut offset),
-            children_or_hardlink_count: read_u32(bytes, &mut offset) as i32,
-            default_protection_class: ProtectionClass::from_u32(read_u32(bytes, &mut offset)).unwrap(),
-            write_generation_counter: read_u32(bytes, &mut offset),
-            bsd_flags: read_u32(bytes, &mut offset),
+            internal_flags,
+            children_or_hardlink_count: match ty {
+                InodeType::Dir => ChildrenOrHardlinkCount::ChildrenCount(children_or_hardlink_count),
+                _ => ChildrenOrHardlinkCount::HardlinkCount(children_or_hardlink_count),
+            },
+            default_protection_class,
+            write_generation_counter,
+            bsd_flags,
 
-            uid: read_u32(bytes, &mut offset),
-            gid: read_u32(bytes, &mut offset),
-            mode: read_u16(bytes, &mut offset),
+            uid,
+            gid,
 
-            pad1: read_u16(bytes, &mut offset),
-            pad2: read_u16(bytes, &mut offset),
+            ty,
+            permissions,
+
+            pad1,
+            pad2,
         }
     }
 }
@@ -208,9 +292,46 @@ impl JDrecHashedKey {
 pub struct JDrecVal {
     pub file_id: u64,
     pub date_added: u64,
-    pub flags: u16,
+    pub flags: JDrecTypeAndFlags,
 
     // TODO: Extented fields
+}
+
+enum_from_primitive! {
+    #[derive(Clone, Debug)]
+    pub enum JDrecType {
+        Unknown = 0,
+        Fifo = 1,
+        CharDev = 2,
+        Dir = 4,
+        BlockDev = 6,
+        File = 8,
+        Symlink = 10,
+        Socket = 12,
+        Whiteout = 14,
+    }
+}
+
+bitflags! {
+    pub struct JDrecFlags: u16 {
+        const RESERVED = 0x10;
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct JDrecTypeAndFlags {
+    pub ty: JDrecType,
+    pub flags: JDrecFlags,
+}
+impl JDrecTypeAndFlags {
+    const TYPE_MASK: u16 = 0x000F;
+
+    pub fn from_raw(raw: u16) -> Self {
+        Self {
+            ty: JDrecType::from_u16(raw & Self::TYPE_MASK).unwrap(),
+            flags: JDrecFlags::from_bits(raw & !Self::TYPE_MASK).unwrap(),
+        }
+    }
 }
 
 impl JDrecVal {
@@ -220,7 +341,7 @@ impl JDrecVal {
         Self {
             file_id: read_u64(bytes, &mut offset),
             date_added: read_u64(bytes, &mut offset),
-            flags: read_u16(bytes, &mut offset),
+            flags: JDrecTypeAndFlags::from_raw(read_u16(bytes, &mut offset)),
         }
     }
 }
@@ -286,9 +407,18 @@ impl PartialOrd for JXattrKey {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct JXattrVal {
-    pub flags: u16,
+    pub flags: XattrFlags,
     pub len: u16,
     // TODO
+}
+
+bitflags! {
+    pub struct XattrFlags: u16 {
+        const DATA_STREAM = 0x1;
+        const DATA_EMBEDDED = 0x2;
+        const FILE_SYSTEM_OWNED = 0x4;
+        const RESERVED = 0x8;
+    }
 }
 
 impl JXattrVal {
@@ -296,7 +426,7 @@ impl JXattrVal {
         let mut offset = 0;
 
         Self {
-            flags: read_u16(bytes, &mut offset),
+            flags: XattrFlags::from_bits(read_u16(bytes, &mut offset)).unwrap(),
             len: read_u16(bytes, &mut offset),
         }
     }
@@ -349,19 +479,26 @@ impl PartialOrd for JFileExtentKey {
 
 #[derive(Clone, Debug)]
 pub struct JFileExtentVal {
-    pub length_and_flags: u64,
+    pub length: u64,
+    pub flags: (),
     pub physical_block_num: u64,
     pub crypto_id: u64,
 }
 
 impl JFileExtentVal {
+    const LEN_MASK: u64 = 0x00FF_FFFF_FFFF_FFFF;
     pub fn parse(bytes: &[u8]) -> Self {
         let mut offset = 0;
 
+        let length_and_flags = read_u64(bytes, &mut offset);
+        let physical_block_num = read_u64(bytes, &mut offset);
+        let crypto_id = read_u64(bytes, &mut offset);
+
         Self {
-            length_and_flags: read_u64(bytes, &mut offset),
-            physical_block_num: read_u64(bytes, &mut offset),
-            crypto_id: read_u64(bytes, &mut offset),
+            length: length_and_flags & Self::LEN_MASK,
+            flags: (), // Currently no defined flags.
+            physical_block_num,
+            crypto_id,
         }
     }
 }
