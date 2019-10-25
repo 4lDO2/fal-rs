@@ -5,14 +5,15 @@ use std::{
 };
 
 use crate::{
-    btree::BTree,
+    btree::{BTree, BTreeKey},
+    fsobjects::{JAnyKey, JInodeKey},
     checkpoint::{
         self, CheckpointMapping, CheckpointMappingPhys, GenericObject,
     },
     omap::{Omap, OmapKey, OmapValue},
     read_block, read_block_to,
     superblock::{ApfsSuperblock, NxSuperblock},
-    BlockAddr, ObjectIdentifier,
+    BlockAddr, ObjPhys, ObjectIdentifier, ObjectType,
 };
 
 pub struct Filesystem<D: fal::Device> {
@@ -45,11 +46,8 @@ impl<D: fal::Device> Filesystem<D> {
                 container_superblock.chkpnt_desc_base + i64::from(block_index),
             );
 
-            // Only when running fsck...
-            //
-            // let obj = crate::superblock::ObjPhys::parse(&descriptor_area[range]);
-            // assert!(obj.object_type.ty == crate::superblock::ObjectType::CheckpointMap || obj.object_type.ty == crate::superblock::ObjectType::NxSuperblock);
-            //
+            let obj = ObjPhys::parse(&descriptor_area[range]);
+            assert!(obj.object_type.ty == ObjectType::CheckpointMap || obj.object_type.ty == ObjectType::NxSuperblock);
         }
 
         let superblock = (0..container_superblock.chkpnt_desc_len)
@@ -164,7 +162,13 @@ impl Volume {
         let root_oid_phys = Self::root_oid_phys(device, nx_super, &omap, &superblock).paddr;
         let root_tree = BTree::load(device, nx_super, root_oid_phys);
 
-        dbg!(root_tree.pairs(device, nx_super, Some(&omap)).collect::<Vec<_>>());
+        //dbg!(root_tree.pairs(device, nx_super, Some(&omap)).collect::<Vec<_>>());
+
+        let root_inode = root_tree.pairs(device, nx_super, Some(&omap)).find(|(k, v)| k == &BTreeKey::FsLayerKey(JAnyKey::InodeKey(JInodeKey::new(ObjectIdentifier::from(2)))));
+        //dbg!(root_inode);
+
+        let root_inode = root_tree.get(device, nx_super, Some(&omap), &BTreeKey::FsLayerKey(JAnyKey::InodeKey(JInodeKey::new(ObjectIdentifier::from(2)))));
+        dbg!(root_inode);
 
         Self {
             omap,

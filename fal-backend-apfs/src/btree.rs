@@ -1,7 +1,7 @@
 use bitflags::bitflags;
 
 use crate::{
-    fsobjects::{JInodeKey, JDrecKey, JDrecHashedKey, JDirStatsKey, JKey, JXattrKey, JXattrVal, JDatastreamIdKey, JDatastreamIdVal, JDrecVal, JInodeVal, JFileExtentKey, JFileExtentVal},
+    fsobjects::{JAnyKey, JInodeKey, JDrecKey, JDrecHashedKey, JDirStatsKey, JKey, JXattrKey, JXattrVal, JDatastreamIdKey, JDatastreamIdVal, JDrecVal, JInodeVal, JFileExtentKey, JFileExtentVal},
     omap::{Omap, OmapKey, OmapValue},
     superblock::NxSuperblock,
     BlockAddr, ObjPhys, ObjectIdentifier, ObjectType, read_block, read_obj_phys,
@@ -35,7 +35,7 @@ pub fn read_nloc(bytes: &[u8], off: &mut usize) -> NodeLocation {
     }
 }
 
-fn always_equal(k1: &BTreeKey, k2: &BTreeKey) -> Ordering {
+fn always_equal(_: &BTreeKey, _: &BTreeKey) -> Ordering {
     Ordering::Equal
 }
 
@@ -186,17 +186,10 @@ pub struct BTreeNode {
     pub toc: BTreeToc,
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum BTreeKey {
     OmapKey(OmapKey),
-    AnyKey(JKey),
-    InodeKey(JInodeKey),
-    DrecKey(JDrecKey),
-    DrecHashedKey(JDrecHashedKey),
-    DirStatsKey(JDirStatsKey),
-    XattrKey(JXattrKey),
-    DatastreamIdKey(JDatastreamIdKey),
-    FileExtentKey(JFileExtentKey),
+    FsLayerKey(JAnyKey),
 }
 
 impl BTreeKey {
@@ -329,8 +322,8 @@ impl BTreeNode {
         path.push((Cow::Borrowed(self), 0));
 
         let leaf_index = loop {
-            if self.is_leaf() {
-                match self
+            if path.last().unwrap().0.is_leaf() {
+                match path.last().unwrap().0
                     .current_node_keys(key_size, val_size)
                     .position(|k| compare(&k, key) == Ordering::Equal)
                 {
@@ -338,17 +331,25 @@ impl BTreeNode {
                     None => return None,
                 };
             } else {
-                // TODO: Are the subtree oids virtual or physical?
                 let (index, _) =
-                    match self.current_node_closest_key(key, key_size, val_size, compare) {
+                    match path.last().unwrap().0.current_node_closest_key(key, key_size, val_size, compare) {
                         Some(t) => t,
                         None => return None,
                     };
 
+                let ptr = path.last().unwrap().0.internal_key_ptr(index, key_size, val_size).unwrap();
+                let baddr = if let Some(omap) = omap {
+                    let omap_val = omap.get_partial_latest(device, superblock, OmapKey::partial(ptr)).unwrap().1;
+                    assert_eq!(omap_val.size, superblock.block_size);
+                    omap_val.paddr
+                } else {
+                    ptr.0 as i64
+                };
+
                 let subtree = Self::load(
                     device,
                     superblock,
-                    self.internal_key_ptr(index, key_size, val_size).unwrap().0 as i64,
+                    baddr,
                 );
                 assert_eq!(subtree.level, path.last().unwrap().0.level - 1);
 
@@ -363,7 +364,7 @@ impl BTreeNode {
         Some((
             (
                 key.clone(), // TODO
-                self.leaf_value(leaf_index, key_size, val_size).unwrap(),
+                path.last().unwrap().0.leaf_value(leaf_index, key_size, val_size).unwrap(),
             ),
             path,
         ))

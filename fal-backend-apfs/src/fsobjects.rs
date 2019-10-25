@@ -36,6 +36,50 @@ enum_from_primitive! {
     }
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum JAnyKey {
+    InodeKey(JInodeKey),
+    DrecKey(JDrecKey),
+    DrecHashedKey(JDrecHashedKey),
+    DirStatsKey(JDirStatsKey),
+    XattrKey(JXattrKey),
+    DatastreamIdKey(JDatastreamIdKey),
+    FileExtentKey(JFileExtentKey),
+}
+
+impl JAnyKey {
+    fn header(&self) -> &JKey {
+        match self {
+            Self::InodeKey(key) => &key.header,
+            Self::DrecKey(key) => &key.header,
+            Self::DrecHashedKey(key) => &key.header,
+            Self::DirStatsKey(key) => &key.header,
+            Self::XattrKey(key) => &key.header,
+            Self::DatastreamIdKey(key) => &key.header,
+            Self::FileExtentKey(key) => &key.header,
+        }
+    }
+}
+
+impl Ord for JAnyKey {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.header().cmp(other.header())
+            // Types are equal
+            .then(match (self, other) {
+                (Self::DrecKey(k1), Self::DrecKey(k2)) => Ord::cmp(k1, k2),
+                (Self::DrecHashedKey(k1), Self::DrecHashedKey(k2)) => Ord::cmp(k1, k2),
+                (Self::XattrKey(k1), Self::XattrKey(k2)) => Ord::cmp(k1, k2),
+                (Self::FileExtentKey(k1), Self::FileExtentKey(k2)) => Ord::cmp(k1, k2),
+                _ => Ordering::Equal,
+            })
+    }
+}
+impl PartialOrd for JAnyKey {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 impl JKey {
     const OBJECT_ID_MASK: u64 = 0x0FFF_FFFF_FFFF_FFFF;
     const OBJECT_TYPE_MASK: u64 = 0xF000_0000_0000_0000;
@@ -71,6 +115,17 @@ impl PartialOrd for JKey {
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct JInodeKey {
     pub header: JKey,
+}
+
+impl JInodeKey {
+    pub fn new(oid: ObjectIdentifier) -> Self {
+        Self {
+            header: JKey {
+                oid,
+                ty: JObjType::Inode,
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -468,7 +523,7 @@ impl JFileExtentKey {
 
 impl Ord for JFileExtentKey {
     fn cmp(&self, with: &Self) -> Ordering {
-        Ord::cmp(&self.header, &with.header)
+        Ord::cmp(&self.header, &with.header).then(Ord::cmp(&self.logical_addr, &with.logical_addr))
     }
 }
 impl PartialOrd for JFileExtentKey {
@@ -513,15 +568,14 @@ impl BTreeKey {
     pub fn parse_jkey(bytes: &[u8]) -> Self {
         let base = JKey::parse(bytes);
 
-        match base.ty {
-            JObjType::Any => Self::AnyKey(base),
-            JObjType::Inode => Self::InodeKey(JInodeKey { header: base }),
-            JObjType::DirRecord => Self::DrecHashedKey(JDrecHashedKey::parse(bytes)),
-            JObjType::DataStreamId => Self::DatastreamIdKey(JDatastreamIdKey { header: base }),
-            JObjType::FileExtent => Self::FileExtentKey(JFileExtentKey::parse(bytes)),
-            JObjType::Xattr => Self::XattrKey(JXattrKey::parse(bytes)),
+        Self::FsLayerKey(match base.ty {
+            JObjType::Inode => JAnyKey::InodeKey(JInodeKey { header: base }),
+            JObjType::DirRecord => JAnyKey::DrecHashedKey(JDrecHashedKey::parse(bytes)),
+            JObjType::DataStreamId => JAnyKey::DatastreamIdKey(JDatastreamIdKey { header: base }),
+            JObjType::FileExtent => JAnyKey::FileExtentKey(JFileExtentKey::parse(bytes)),
+            JObjType::Xattr => JAnyKey::XattrKey(JXattrKey::parse(bytes)),
             other => unimplemented!("{:?}", other),
-        }
+        })
     }
 }
 impl BTreeValue {
