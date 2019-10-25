@@ -285,7 +285,7 @@ impl PartialOrd for JXattrKey {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct JXattrVal {
     pub flags: u16,
     pub len: u16,
@@ -299,6 +299,70 @@ impl JXattrVal {
         Self {
             flags: read_u16(bytes, &mut offset),
             len: read_u16(bytes, &mut offset),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct JDatastreamIdKey {
+    pub header: JKey,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct JDatastreamIdVal {
+    pub reference_count: u32,
+}
+impl JDatastreamIdVal {
+    pub fn parse(bytes: &[u8]) -> Self {
+        Self {
+            reference_count: read_u32(bytes, &mut 0),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct JFileExtentKey {
+    pub header: JKey,
+    pub logical_addr: u64,
+}
+
+impl JFileExtentKey {
+    pub fn parse(bytes: &[u8]) -> Self {
+        let mut offset = 0;
+
+        Self {
+            header: read_jkey(bytes, &mut offset),
+            logical_addr: read_u64(bytes, &mut offset),
+        }
+    }
+}
+
+impl Ord for JFileExtentKey {
+    fn cmp(&self, with: &Self) -> Ordering {
+        Ord::cmp(&self.header, &with.header)
+    }
+}
+impl PartialOrd for JFileExtentKey {
+    fn partial_cmp(&self, with: &Self) -> Option<Ordering> {
+        Some(self.cmp(with))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct JFileExtentVal {
+    pub length_and_flags: u64,
+    pub physical_block_num: u64,
+    pub crypto_id: u64,
+}
+
+impl JFileExtentVal {
+    pub fn parse(bytes: &[u8]) -> Self {
+        let mut offset = 0;
+
+        Self {
+            length_and_flags: read_u64(bytes, &mut offset),
+            physical_block_num: read_u64(bytes, &mut offset),
+            crypto_id: read_u64(bytes, &mut offset),
         }
     }
 }
@@ -317,6 +381,9 @@ impl BTreeKey {
             JObjType::Any => Self::AnyKey(base),
             JObjType::Inode => Self::InodeKey(JInodeKey { header: base }),
             JObjType::DirRecord => Self::DrecHashedKey(JDrecHashedKey::parse(bytes)),
+            JObjType::DataStreamId => Self::DatastreamIdKey(JDatastreamIdKey { header: base }),
+            JObjType::FileExtent => Self::FileExtentKey(JFileExtentKey::parse(bytes)),
+            JObjType::Xattr => Self::XattrKey(JXattrKey::parse(bytes)),
             other => unimplemented!("{:?}", other),
         }
     }
@@ -326,6 +393,9 @@ impl BTreeValue {
         match jkey.ty {
             JObjType::Inode => Self::Inode(JInodeVal::parse(bytes)),
             JObjType::DirRecord => Self::DirRecord(JDrecVal::parse(bytes)),
+            JObjType::DataStreamId => Self::DatastreamId(JDatastreamIdVal::parse(bytes)),
+            JObjType::FileExtent => Self::FileExtent(JFileExtentVal::parse(bytes)),
+            JObjType::Xattr => Self::Xattr(JXattrVal::parse(bytes)),
             other => unimplemented!("value for key {:?}", other),
         }
     }

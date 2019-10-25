@@ -1,7 +1,7 @@
 use bitflags::bitflags;
 
 use crate::{
-    fsobjects::{JInodeKey, JDrecKey, JDrecHashedKey, JDirStatsKey, JKey, JXattrKey, JDrecVal, JInodeVal},
+    fsobjects::{JInodeKey, JDrecKey, JDrecHashedKey, JDirStatsKey, JKey, JXattrKey, JXattrVal, JDatastreamIdKey, JDatastreamIdVal, JDrecVal, JInodeVal, JFileExtentKey, JFileExtentVal},
     omap::{Omap, OmapKey, OmapValue},
     superblock::NxSuperblock,
     BlockAddr, ObjPhys, ObjectIdentifier, ObjectType, read_block, read_obj_phys,
@@ -195,6 +195,8 @@ pub enum BTreeKey {
     DrecHashedKey(JDrecHashedKey),
     DirStatsKey(JDirStatsKey),
     XattrKey(JXattrKey),
+    DatastreamIdKey(JDatastreamIdKey),
+    FileExtentKey(JFileExtentKey),
 }
 
 impl BTreeKey {
@@ -217,6 +219,9 @@ pub enum BTreeValue {
     OmapValue(OmapValue),
     Inode(JInodeVal),
     DirRecord(JDrecVal),
+    DatastreamId(JDatastreamIdVal),
+    FileExtent(JFileExtentVal),
+    Xattr(JXattrVal),
 }
 
 impl BTreeValue {
