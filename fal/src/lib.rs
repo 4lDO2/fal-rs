@@ -6,6 +6,7 @@ use std::{
     ffi::{OsStr, OsString},
     io::{self, prelude::*},
     mem,
+    ops::{Add, Div, Mul, Rem},
 };
 use time::Timespec;
 use uuid::Uuid;
@@ -362,4 +363,15 @@ pub fn check_permissions<A: Into<u64>>(uid: u32, gid: u32, attrs: &Attributes<A>
         let others_mask = attrs.permissions & 0o007;
         mask_permissions(others_mask as u8)
     }
+}
+
+pub fn align<T>(number: T, alignment: T) -> T
+where
+    T: Add<Output = T> + Copy + Div<Output = T> + Rem<Output = T> + From<u8> + Mul<Output = T> + PartialEq,
+{
+    (if number % alignment != T::from(0u8) {
+        number / alignment + T::from(1u8)
+    } else {
+        number / alignment
+    }) * alignment
 }

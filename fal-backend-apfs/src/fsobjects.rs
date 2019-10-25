@@ -1,12 +1,12 @@
 use crate::{
     btree::{BTreeKey, BTreeValue},
     crypto::ProtectionClass,
-    ObjectIdentifier,
+    ObjectIdentifier, TransactionIdentifier,
 };
 
 use std::cmp::Ordering;
 
-use fal::parsing::{read_u16, read_u32, read_u64};
+use fal::parsing::{read_u8, read_u16, read_u32, read_u64};
 
 use bitflags::bitflags;
 use enum_primitive::*;
@@ -133,7 +133,7 @@ impl JInodeKey {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct JInodeVal {
     pub parent_id: u64,
     pub private_id: u64,
@@ -158,9 +158,9 @@ pub struct JInodeVal {
     pub permissions: u16,
 
     pub pad1: u16,
-    pub pad2: u16,
+    pub pad2: u64,
 
-    // TODO: Extended fields
+    pub extended_fields: Option<Xblob<InodeXfieldType>>,
 }
 
 enum_from_primitive! {
@@ -216,6 +216,8 @@ impl InodeInternalFlags {
 }
 
 impl JInodeVal {
+    const LEN: usize = 92;
+
     pub fn parse(bytes: &[u8]) -> Self {
         let mut offset = 0;
 
@@ -238,10 +240,18 @@ impl JInodeVal {
         let mode = read_u16(bytes, &mut offset);
 
         let pad1 = read_u16(bytes, &mut offset);
-        let pad2 = read_u16(bytes, &mut offset);
+        let pad2 = read_u64(bytes, &mut offset);
+
+        assert_eq!(offset, Self::LEN);
 
         let ty = InodeType::from_u16(mode & InodeType::BITMASK).unwrap();
         let permissions = mode & !InodeType::BITMASK;
+
+        let extended_fields = if bytes.len() > Self::LEN {
+            Some(Xblob::parse(&bytes[Self::LEN..]))
+        } else {
+            None
+        };
 
         Self {
             parent_id,
@@ -269,6 +279,8 @@ impl JInodeVal {
 
             pad1,
             pad2,
+
+            extended_fields,
         }
     }
 }
@@ -575,6 +587,147 @@ impl JFileExtentVal {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct JDatastream {
+    pub size: u64,
+    pub allocated_size: u64,
+    pub default_crypto_id: u64,
+    pub total_bytes_written: u64,
+    pub total_bytes_read: u64,
+}
+
+impl JDatastream {
+    pub fn parse(bytes: &[u8]) -> Self {
+        let mut offset = 0;
+
+        Self {
+            size: read_u64(bytes, &mut offset),
+            allocated_size: read_u64(bytes, &mut offset),
+            default_crypto_id: read_u64(bytes, &mut offset),
+            total_bytes_read: read_u64(bytes, &mut offset),
+            total_bytes_written: read_u64(bytes, &mut offset),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Xblob<T> {
+    pub ext_count: u16,
+    pub ext_bytes_used: u16,
+    pub fields: Vec<(Xfield<T>, XfieldValue)>,
+}
+
+impl<T: XfieldType> Xblob<T> {
+    fn parse(bytes: &[u8]) -> Self {
+        let mut offset = 0;
+        let xfield_len = Xfield::<()>::LEN;
+
+        let ext_count = read_u16(bytes, &mut offset);
+        let ext_bytes_used = read_u16(bytes, &mut offset);
+
+        let metadata_bytes = ext_count as usize * xfield_len;
+
+        let metadata_offset = offset;
+        let mut values_offset = offset + metadata_bytes;
+
+        let fields = (0..ext_count as usize).map(|i| Xfield::parse(&bytes, metadata_offset + i * xfield_len, &mut values_offset)).collect();
+
+        Self {
+            ext_count,
+            ext_bytes_used,
+            fields,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Xfield<T> {
+    pub ty: T,
+    pub flags: XfieldFlags,
+    pub size: u16,
+}
+
+bitflags! {
+    pub struct XfieldFlags: u8 {
+        const DATA_DEPENDENT = 0x01;
+        const DONT_COPY = 0x02;
+        const RESERVED4 = 0x04;
+        const CHILDREN_INHERIT = 0x08;
+        const USER_FIELD = 0x10;
+        const SYSTEM_FIELD = 0x20;
+        const RESERVED_40 = 0x40;
+        const RESERVED_80 = 0x80;
+    }
+}
+
+enum_from_primitive! {
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum DrecXfieldType {
+        SiblingId = 1,
+    }
+}
+enum_from_primitive! {
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum InodeXfieldType {
+        SnapshotXid = 1,
+        DeltaTreeOid = 2,
+        DocumentId = 3,
+        Name = 4,
+        PreviousFilesize = 5,
+        Reserved6 = 6,
+        FinderInfo = 7, // lol
+        Dstream = 8,
+        Reserved9 = 9,
+        DirStatsKey = 10,
+        FsUuid = 11,
+        Reserved12 = 12,
+        SparseBytes = 13,
+        Rdev = 14,
+    }
+}
+
+impl XfieldType for InodeXfieldType {
+    fn parse(bytes: &[u8], ty: Self) -> XfieldValue {
+        match ty {
+            InodeXfieldType::SnapshotXid => XfieldValue::SnapshotXid(fal::read_u64(bytes, 0)),
+            InodeXfieldType::DeltaTreeOid => XfieldValue::DeltaTreeOid(fal::read_u64(bytes, 0).into()),
+            InodeXfieldType::Name => XfieldValue::Name(String::from_utf8(bytes[..bytes.len() - 1].to_owned()).unwrap()),
+            InodeXfieldType::Dstream => XfieldValue::Dstream(JDatastream::parse(bytes)),
+            other => unimplemented!("Xattr type {:?}", other),
+        }
+    }
+}
+
+pub trait XfieldType: FromPrimitive + std::fmt::Debug + Copy {
+    fn parse(bytes: &[u8], ty: Self) -> XfieldValue;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum XfieldValue {
+    SnapshotXid(TransactionIdentifier),
+    Name(String),
+    DeltaTreeOid(ObjectIdentifier),
+    Dstream(JDatastream),
+}
+
+impl<T> Xfield<T> {
+    pub const LEN: usize = 4;
+}
+impl<T: XfieldType> Xfield<T> {
+    pub fn parse(bytes: &[u8], key_offset: usize, value_offset: &mut usize) -> (Self, XfieldValue) {
+        let mut offset = key_offset;
+
+        let key = Self {
+            ty: T::from_u8(read_u8(bytes, &mut offset)).unwrap(),
+            flags: XfieldFlags::from_bits(read_u8(bytes, &mut offset)).unwrap(),
+            size: read_u16(bytes, &mut offset),
+        };
+        let value = XfieldType::parse(&bytes[*value_offset..*value_offset + key.size as usize], key.ty);
+        *value_offset += fal::align(key.size as usize, 8);
+        (key, value)
+    }
+}
+
 pub fn read_jkey(bytes: &[u8], offset: &mut usize) -> JKey {
     let jkey = JKey::parse(&bytes[..JKey::LEN]);
     *offset += JKey::LEN;
@@ -587,7 +740,14 @@ impl BTreeKey {
 
         Self::FsLayerKey(match base.ty {
             JObjType::Inode => JAnyKey::InodeKey(JInodeKey { header: base }),
-            JObjType::DirRecord => JAnyKey::DrecHashedKey(JDrecHashedKey::parse(bytes)),
+            JObjType::DirRecord => {
+                let base_name_len = fal::read_u16(bytes, 8); // after the 8-byte header
+                if 10 + base_name_len as usize == bytes.len() {
+                    JAnyKey::DrecKey(JDrecKey::parse(bytes))
+                } else {
+                    JAnyKey::DrecHashedKey(JDrecHashedKey::parse(bytes))
+                }
+            }
             JObjType::DataStreamId => JAnyKey::DatastreamIdKey(JDatastreamIdKey { header: base }),
             JObjType::FileExtent => JAnyKey::FileExtentKey(JFileExtentKey::parse(bytes)),
             JObjType::Xattr => JAnyKey::XattrKey(JXattrKey::parse(bytes)),
