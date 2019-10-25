@@ -372,13 +372,13 @@ impl JDrecHashedKey {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct JDrecVal {
     pub file_id: u64,
     pub date_added: u64,
     pub flags: JDrecTypeAndFlags,
 
-    // TODO: Extented fields
+    extended_fields: Option<Xblob<DrecXfieldType>>,
 }
 
 enum_from_primitive! {
@@ -419,13 +419,22 @@ impl JDrecTypeAndFlags {
 }
 
 impl JDrecVal {
+    const LEN: usize = 18;
+
     pub fn parse(bytes: &[u8]) -> Self {
         let mut offset = 0;
+
+        let extended_fields = if bytes.len() > Self::LEN {
+            Some(Xblob::parse(&bytes[Self::LEN..]))
+        } else {
+            None
+        };
 
         Self {
             file_id: read_u64(bytes, &mut offset),
             date_added: read_u64(bytes, &mut offset),
             flags: JDrecTypeAndFlags::from_raw(read_u16(bytes, &mut offset)),
+            extended_fields,
         }
     }
 }
@@ -698,12 +707,21 @@ impl XfieldType for InodeXfieldType {
     }
 }
 
+impl XfieldType for DrecXfieldType {
+    fn parse(bytes: &[u8], ty: Self) -> XfieldValue {
+        match ty {
+            DrecXfieldType::SiblingId => XfieldValue::SiblingId(fal::read_u64(bytes, 0)),
+        }
+    }
+}
+
 pub trait XfieldType: FromPrimitive + std::fmt::Debug + Copy {
     fn parse(bytes: &[u8], ty: Self) -> XfieldValue;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum XfieldValue {
+    SiblingId(u64),
     SnapshotXid(TransactionIdentifier),
     Name(String),
     DeltaTreeOid(ObjectIdentifier),
