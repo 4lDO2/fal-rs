@@ -186,7 +186,7 @@ pub struct BTreeNode {
     pub toc: BTreeToc,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub enum BTreeKey {
     OmapKey(OmapKey),
     AnyKey(JKey),
@@ -362,7 +362,7 @@ impl BTreeNode {
         path.last_mut().unwrap().1 = leaf_index;
         Some((
             (
-                *key,
+                key.clone(), // TODO
                 self.leaf_value(leaf_index, key_size, val_size).unwrap(),
             ),
             path,
@@ -608,13 +608,13 @@ impl<'a, D: fal::Device> Iterator for Pairs<'a, D> {
             ) {
                 Some(key) => {
                     // If there is a pair available, just yield it and continue.
-                    if let Some(previous_key) = self.previous_key {
+                    if let Some(previous_key) = &self.previous_key {
                         let compare = &self.compare;
                         if compare(&previous_key, &key) != Ordering::Equal {
                             return None;
                         }
                     }
-                    self.previous_key = Some(key);
+                    self.previous_key = Some(key.clone()); // TODO: Either we clone the key and store the previous key directly, or we store the last tree when transitioning into a new tree.
                     let value = match current_tree.leaf_value(
                         *current_index,
                         info.key_size as u16,

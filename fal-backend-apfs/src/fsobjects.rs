@@ -8,7 +8,6 @@ use std::cmp::Ordering;
 
 use fal::parsing::{read_u16, read_u32, read_u64};
 
-type ArrayString = arrayvec::ArrayString<[u8; 128]>;
 use enum_primitive::*;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -130,10 +129,10 @@ impl JInodeVal {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct JDrecKey {
     pub header: JKey,
-    pub name: ArrayString,
+    pub name: String,
 }
 
 impl JDrecKey {
@@ -146,7 +145,7 @@ impl JDrecKey {
 
         Self {
             header,
-            name: ArrayString::from(&name).unwrap(), // FIXME
+            name,
         }
     }
 }
@@ -163,11 +162,11 @@ impl PartialOrd for JDrecKey {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct JDrecHashedKey {
     pub header: JKey,
     pub hash: u32,
-    pub name: ArrayString,
+    pub name: String,
 }
 
 impl Ord for JDrecHashedKey {
@@ -199,7 +198,7 @@ impl JDrecHashedKey {
 
         Self {
             header,
-            name: ArrayString::from(&name).unwrap(), // FIXME
+            name,
             hash,
         }
     }
@@ -226,7 +225,7 @@ impl JDrecVal {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct JDirStatsKey {
     pub header: JKey,
 }
@@ -252,10 +251,10 @@ impl JDirStatsVal {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct JXattrKey {
     pub header: JKey,
-    pub name: ArrayString,
+    pub name: String,
 }
 
 impl JXattrKey {
@@ -268,7 +267,7 @@ impl JXattrKey {
 
         Self {
             header,
-            name: ArrayString::from(&name).unwrap(), // FIXME
+            name,
         }
     }
 }
