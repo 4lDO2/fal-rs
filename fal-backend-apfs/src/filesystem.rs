@@ -28,7 +28,6 @@ pub struct Filesystem<D: fal::Device> {
     pub ephemeral_objects: HashMap<ObjectIdentifier, GenericObject>,
     pub mounted_volumes: Vec<Volume>,
 
-    // TODO: Use a fancy atomic hashmap (or btreemap).
     pub file_handles: Mutex<HashMap<u64, FileHandle>>,
     pub last_fh: AtomicU64,
 }
@@ -385,6 +384,12 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
     }
 
     fn filesystem_attrs(&self) -> fal::FsAttributes {
+        unimplemented!()
+    }
+}
+
+impl<D: fal::DeviceMut> fal::FilesystemMut<D> for Filesystem<D> {
+    fn store_inode(&mut self, inode: &Inode) -> Result<()> {
         unimplemented!()
     }
 }

@@ -296,6 +296,7 @@ impl JInodeVal {
         }
     }
     fn datastream(&self) -> Option<&JDatastream> {
+        dbg!(&self.extended_fields);
         if let Some(ext) = self.extended_fields.as_ref() {
             ext.fields.iter().find(|(k, _)| k.ty == InodeXfieldType::Dstream).map(|(_, v)| v.as_dstream().unwrap())
         } else {
@@ -306,10 +307,10 @@ impl JInodeVal {
         self.extended_fields.as_ref().map(|ext| ext.fields.iter().find(|(k, _)| k.ty == InodeXfieldType::Rdev).map(|(_, v)| v.as_rdev().unwrap()).unwrap_or(0)).unwrap_or(0)
     }
     pub fn size(&self) -> u64 {
-        self.datastream().unwrap().size
+        self.datastream().map(|dstream| dstream.size).unwrap_or(0)
     }
     pub fn block_count(&self, block_size: u32) -> u64 {
-        self.datastream().unwrap().allocated_size / u64::from(block_size)
+        self.datastream().map(|dstream| dstream.allocated_size / u64::from(block_size)).unwrap_or(0)
     }
 }
 

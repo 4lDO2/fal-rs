@@ -9,6 +9,8 @@ pub mod reaper;
 pub mod spacemanager;
 pub mod superblock;
 
+pub use filesystem::Filesystem;
+
 use fal::parsing::{read_u32, read_u64, write_u32, write_u64};
 use std::{io::SeekFrom, mem};
 
