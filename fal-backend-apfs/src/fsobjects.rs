@@ -296,7 +296,6 @@ impl JInodeVal {
         }
     }
     fn datastream(&self) -> Option<&JDatastream> {
-        dbg!(&self.extended_fields);
         if let Some(ext) = self.extended_fields.as_ref() {
             ext.fields.iter().find(|(k, _)| k.ty == InodeXfieldType::Dstream).map(|(_, v)| v.as_dstream().unwrap())
         } else {

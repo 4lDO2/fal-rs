@@ -184,14 +184,6 @@ impl Volume {
         let root_oid_phys = Self::root_oid_phys(device, nx_super, &omap, &superblock).paddr;
         let root_tree = BTree::load(device, nx_super, root_oid_phys);
 
-        dbg!(root_tree.pairs(device, nx_super, Some(&omap)).collect::<Vec<_>>());
-
-        let root_inode = root_tree.get(device, nx_super, Some(&omap), &BTreeKey::FsLayerKey(JAnyKey::InodeKey(JInodeKey::new(ObjectIdentifier::from(2)))));
-        dbg!(&root_inode);
-
-        let root_children = root_tree.similar_pairs(device, nx_super, Some(&omap), &BTreeKey::FsLayerKey(JAnyKey::DrecHashedKey(JDrecHashedKey::partial(ObjectIdentifier::from(2)))), JAnyKey::partial_compare).unwrap().collect::<Vec<_>>();
-        dbg!(root_children);
-
         Self {
             omap,
             superblock,
@@ -291,7 +283,7 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
                         value: inode_val,
                         key: inode_key,
                     },
-                    dir_extra: None,
+                    dir_extra,
                 });
         Ok(fh)
     }
@@ -314,6 +306,7 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
             Some(d) => d,
             None => return Ok(None),
         };
+        dbg!(offset);
         let mut iterator = Pairs::<'static, '_> {
             device: &mut *device,
             compare: JAnyKey::partial_compare,
@@ -325,7 +318,9 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         };
         if offset < 0 { unimplemented!("offsets below zero, no walking backwards is implemented for the Pairs iterator") }
 
-        let (idx, (key, value)) = match (&mut iterator).enumerate().skip(offset as usize).next() {
+        let to_skip = (offset as usize).checked_sub(1).unwrap_or(0);
+
+        let (idx, (key, value)) = match (&mut iterator).enumerate().skip(to_skip).next() {
             Some((idx, (key, value))) => (idx, (key.into_fs_layer_key().unwrap().into_drec_hashed_key().unwrap(), value.into_drec_value().unwrap())),
             None => return Ok(None),
         };
