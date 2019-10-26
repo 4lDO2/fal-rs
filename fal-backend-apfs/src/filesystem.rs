@@ -1,12 +1,14 @@
 use std::{
     collections::HashMap,
+    ffi::OsStr,
     io::SeekFrom,
     sync::Mutex,
 };
 
 use crate::{
     btree::{BTree, BTreeKey},
-    fsobjects::{JAnyKey, JDrecHashedKey, JInodeKey},
+    file_io::{FileHandle, Inode},
+    fsobjects::{JAnyKey, JDrecKey, JDrecHashedKey, JInodeKey},
     checkpoint::{
         self, CheckpointMapping, CheckpointMappingPhys, GenericObject,
     },
@@ -128,6 +130,12 @@ impl<D: fal::Device> Filesystem<D> {
             mounted_volumes,
         }
     }
+    pub fn volume(&self) -> &Volume {
+        &self.mounted_volumes[0]
+    }
+    pub fn device(&self) -> std::sync::MutexGuard<'_, D> {
+        self.device.lock().unwrap()
+    }
 }
 impl<D: fal::DeviceMut> Filesystem<D> {
     pub fn write_block(
@@ -189,5 +197,99 @@ impl Volume {
         )
         .unwrap()
         .1
+    }
+}
+
+type Result<T> = fal::Result<T>;
+impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
+    type InodeAddr = u64;
+    type InodeStruct = Inode;
+    type FileHandle = FileHandle;
+
+    fn root_inode(&self) -> Self::InodeAddr {
+        Inode::ROOT_DIR_INODE_ADDR
+    }
+    fn mount(device: D, _path: &OsStr) -> Self {
+        Filesystem::mount(device)
+    }
+    fn unmount(self) {}
+
+    fn load_inode(&mut self, address: Self::InodeAddr) -> Result<Self::InodeStruct> {
+        let key = JInodeKey::new(address.into());
+        let value = match self.volume().root_tree.get(&mut *self.device(), &self.container_superblock, Some(&self.volume().omap), &BTreeKey::FsLayerKey(JAnyKey::InodeKey(key.clone()))) {
+            Some(i) => i,
+            None => return Err(fal::Error::NoEntity)
+        };
+        let inode = Inode {
+            block_size: self.container_superblock.block_size,
+            key,
+            value: value.into_inode_value().unwrap(),
+        };
+        Ok(inode)
+    }
+
+    fn open_file(&mut self, inode: Self::InodeAddr) -> Result<u64> {
+        unimplemented!()
+    }
+
+    fn read(&mut self, fh: u64, offset: u64, buffer: &mut [u8]) -> Result<usize> {
+        unimplemented!()
+    }
+
+    fn close(&mut self, file: u64) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn open_directory(&mut self, address: Self::InodeAddr) -> Result<u64> {
+        unimplemented!()
+    }
+
+    fn read_directory(
+        &mut self,
+        directory: u64,
+        offset: i64,
+    ) -> Result<Option<fal::DirectoryEntry<Self::InodeAddr>>> {
+        unimplemented!()
+    }
+
+    fn lookup_direntry(
+        &mut self,
+        parent: Self::InodeAddr,
+        name: &OsStr,
+    ) -> Result<fal::DirectoryEntry<Self::InodeAddr>> {
+        let hashed_key = JDrecHashedKey::new(parent.into(), name.to_string_lossy().into_owned());
+        let value = match self.volume().root_tree.get(&mut *self.device(), &self.container_superblock, Some(&self.volume().omap), &BTreeKey::FsLayerKey(JAnyKey::DrecHashedKey(hashed_key.clone()))) {
+            Some(i) => i,
+            None => {
+                let regular_key = JDrecKey::new(parent.into(), name.to_string_lossy().into_owned());
+                match self.volume().root_tree.get(&mut *self.device(), &self.container_superblock, Some(&self.volume().omap), &BTreeKey::FsLayerKey(JAnyKey::DrecKey(regular_key.clone()))) {
+                    Some(i) => i,
+                    None => return Err(fal::Error::NoEntity),
+                }
+            }
+        }.into_drec_value().unwrap();
+
+        Ok(fal::DirectoryEntry {
+            offset: 0,
+            filetype: value.flags.ty.into(),
+            inode: value.file_id,
+            name: name.to_owned(),
+        })
+    }
+
+    fn readlink(&mut self, inode: Self::InodeAddr) -> Result<Box<[u8]>> {
+        unimplemented!()
+    }
+
+    fn fh(&self, fh: u64) -> &Self::FileHandle {
+        unimplemented!()
+    }
+
+    fn fh_mut(&mut self, fh: u64) -> &mut Self::FileHandle {
+        unimplemented!()
+    }
+
+    fn filesystem_attrs(&self) -> fal::FsAttributes {
+        unimplemented!()
     }
 }

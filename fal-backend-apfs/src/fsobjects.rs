@@ -283,6 +283,22 @@ impl JInodeVal {
             extended_fields,
         }
     }
+    fn datastream(&self) -> Option<&JDatastream> {
+        if let Some(ext) = self.extended_fields.as_ref() {
+            ext.fields.iter().find(|(k, _)| k.ty == InodeXfieldType::Dstream).map(|(_, v)| v.as_dstream().unwrap())
+        } else {
+            None
+        }
+    }
+    pub fn rdev(&self) -> u32 {
+        self.extended_fields.as_ref().map(|ext| ext.fields.iter().find(|(k, _)| k.ty == InodeXfieldType::Rdev).map(|(_, v)| v.as_rdev().unwrap()).unwrap_or(0)).unwrap_or(0)
+    }
+    pub fn size(&self) -> u64 {
+        self.datastream().unwrap().size
+    }
+    pub fn block_count(&self, block_size: u32) -> u64 {
+        self.datastream().unwrap().allocated_size / u64::from(block_size)
+    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -303,6 +319,18 @@ impl JDrecKey {
             header,
             name,
         }
+    }
+    pub fn new(oid: ObjectIdentifier, name: String) -> Self {
+        Self {
+            header: JKey {
+                oid,
+                ty: JObjType::DirRecord,
+            },
+            name,
+        }
+    }
+    pub fn partial(oid: ObjectIdentifier) -> Self {
+        Self::new(oid, String::new())
     }
 }
 
@@ -325,15 +353,18 @@ pub struct JDrecHashedKey {
     pub name: String,
 }
 impl JDrecHashedKey {
-    pub fn partial(oid: ObjectIdentifier) -> Self {
+    pub fn new(oid: ObjectIdentifier, name: String) -> Self {
         Self {
             header: JKey {
                 oid,
                 ty: JObjType::DirRecord,
             },
             hash: 0,
-            name: String::new(),
+            name,
         }
+    }
+    pub fn partial(oid: ObjectIdentifier) -> Self {
+        Self::new(oid, String::new())
     }
 }
 
@@ -702,6 +733,7 @@ impl XfieldType for InodeXfieldType {
             InodeXfieldType::DeltaTreeOid => XfieldValue::DeltaTreeOid(fal::read_u64(bytes, 0).into()),
             InodeXfieldType::Name => XfieldValue::Name(String::from_utf8(bytes[..bytes.len() - 1].to_owned()).unwrap()),
             InodeXfieldType::Dstream => XfieldValue::Dstream(JDatastream::parse(bytes)),
+            InodeXfieldType::Rdev => XfieldValue::Rdev(fal::read_u32(bytes, 0)),
             other => unimplemented!("Xattr type {:?}", other),
         }
     }
@@ -726,6 +758,22 @@ pub enum XfieldValue {
     Name(String),
     DeltaTreeOid(ObjectIdentifier),
     Dstream(JDatastream),
+    Rdev(u32),
+}
+
+impl XfieldValue {
+    pub fn as_dstream(&self) -> Option<&JDatastream> {
+        match self {
+            Self::Dstream(d) => Some(d),
+            _ => None,
+        }
+    }
+    pub fn as_rdev(&self) -> Option<u32> {
+        match self {
+            &Self::Rdev(d) => Some(d),
+            _ => None,
+        }
+    }
 }
 
 impl<T> Xfield<T> {

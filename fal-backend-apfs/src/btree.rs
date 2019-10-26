@@ -236,9 +236,33 @@ impl BTreeValue {
             _ => None,
         }
     }
+    pub fn into_inode_value(self) -> Option<JInodeVal> {
+        match self {
+            Self::Inode(val) => Some(val),
+            _ => None,
+        }
+    }
+    pub fn into_drec_value(self) -> Option<JDrecVal> {
+        match self {
+            Self::DirRecord(val) => Some(val),
+            _ => None,
+        }
+    }
     pub fn as_omap_value(&self) -> Option<&OmapValue> {
         match self {
             Self::OmapValue(ref val) => Some(val),
+            _ => None,
+        }
+    }
+    pub fn as_inode_value(&self) -> Option<&JInodeVal> {
+        match self {
+            Self::Inode(ref val) => Some(val),
+            _ => None,
+        }
+    }
+    pub fn as_drec_value(&self) -> Option<&JDrecVal> {
+        match self {
+            Self::DirRecord(ref val) => Some(val),
             _ => None,
         }
     }
