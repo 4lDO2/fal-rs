@@ -12,6 +12,7 @@ fal = { version = "0.1", path = "../fal" }
 
 arrayvec = "0.5"
 bitflags = "1.2"
+chashmap = "2.2"
 enum_primitive = "0.1"
 libc = "0.2"
 time = "0.1"

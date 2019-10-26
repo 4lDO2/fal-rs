@@ -9,6 +9,8 @@ use std::{
     },
 };
 
+use chashmap::CHashMap;
+
 use crate::{
     btree::{BTree, BTreeKey, Pairs},
     file_io::{DirExtra, FileHandle, Inode},
@@ -28,7 +30,7 @@ pub struct Filesystem<D: fal::Device> {
     pub ephemeral_objects: HashMap<ObjectIdentifier, GenericObject>,
     pub mounted_volumes: Vec<Volume>,
 
-    pub file_handles: Mutex<HashMap<u64, FileHandle>>,
+    pub file_handles: CHashMap<u64, FileHandle>,
     pub last_fh: AtomicU64,
 }
 
@@ -135,7 +137,7 @@ impl<D: fal::Device> Filesystem<D> {
             device: Mutex::new(device),
             ephemeral_objects,
             mounted_volumes,
-            file_handles: Mutex::new(HashMap::new()),
+            file_handles: CHashMap::new(),
             last_fh: AtomicU64::new(0),
         }
     }
@@ -216,7 +218,6 @@ type Result<T> = fal::Result<T>;
 impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
     type InodeAddr = u64;
     type InodeStruct = Inode;
-    type FileHandle = FileHandle;
 
     fn root_inode(&self) -> Self::InodeAddr {
         Inode::ROOT_DIR_INODE_ADDR
@@ -249,7 +250,7 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
     }
 
     fn close(&mut self, fh: u64) -> Result<()> {
-        match self.file_handles.lock().unwrap().remove(&fh) {
+        match self.file_handles.remove(&fh) {
             Some(_) => Ok(()),
             None => Err(fal::Error::BadFd),
         }
@@ -281,7 +282,7 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
                 None
             }
         };
-        self.file_handles.lock().unwrap().insert(fh,
+        self.file_handles.insert(fh,
                 FileHandle {
                     fh,
                     offset: 0,
@@ -300,10 +301,9 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         fh: u64,
         offset: i64,
     ) -> Result<Option<fal::DirectoryEntry<Self::InodeAddr>>> {
-        let mut guard = self.file_handles.lock().unwrap();
         let mut device = self.device.lock().unwrap();
 
-        let file_handle: &mut FileHandle = match guard.get_mut(&fh) {
+        let mut file_handle = match self.file_handles.get_mut(&fh) {
             Some(fh) => fh,
             None => return Err(fal::Error::BadFd),
         };
@@ -375,12 +375,16 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         unimplemented!()
     }
 
-    fn fh(&self, fh: u64) -> &Self::FileHandle {
-        unimplemented!()
+    fn fh_offset(&self, fh: u64) -> u64 {
+        self.file_handles.get(&fh).unwrap().offset
     }
 
-    fn fh_mut(&mut self, fh: u64) -> &mut Self::FileHandle {
-        unimplemented!()
+    fn fh_inode(&self, fh: u64) -> Inode {
+        self.file_handles.get(&fh).unwrap().inode.clone()
+    }
+
+    fn set_fh_offset(&mut self, fh: u64, offset: u64) {
+        self.file_handles.get_mut(&fh).unwrap().offset = offset;
     }
 
     fn filesystem_attrs(&self) -> fal::FsAttributes {

@@ -10,7 +10,7 @@ use fuse::{
 };
 use time::Timespec;
 
-use fal::{FileHandle, Inode};
+use fal::Inode;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AccessTime {
@@ -233,7 +233,7 @@ impl<Backend: fal::FilesystemMut<File>> fuse::Filesystem for FuseFilesystem<Back
 
         assert_eq!(
             inode.into(),
-            self.inner().fh(fh).inode().attrs().inode.into()
+            self.inner().fh_inode(fh).attrs().inode.into()
         );
 
         match self.inner().read_directory(fh, offset) {
@@ -366,7 +366,7 @@ impl<Backend: fal::FilesystemMut<File>> fuse::Filesystem for FuseFilesystem<Back
             }
         };
 
-        let inode_struct = self.inner().fh(fh).inode();
+        let inode_struct = self.inner().fh_inode(fh);
 
         assert_eq!(inode.into(), inode_struct.attrs().inode.into());
 

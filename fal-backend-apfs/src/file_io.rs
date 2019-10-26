@@ -110,20 +110,3 @@ pub struct DirExtra {
     pub(crate) path: Path<'static>,
     pub(crate) previous_key: Option<BTreeKey>,
 }
-
-impl fal::FileHandle for FileHandle {
-    type InodeStruct = Inode;
-
-    fn fh(&self) -> u64 {
-        self.fh
-    }
-    fn offset(&self) -> u64 {
-        self.offset
-    }
-    fn set_offset(&mut self, offset: u64) {
-        self.offset = offset
-    }
-    fn inode(&self) -> &Inode {
-        &self.inode
-    }
-}

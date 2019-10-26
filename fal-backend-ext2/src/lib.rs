@@ -214,34 +214,9 @@ pub struct FileHandle {
     inode: Inode,
 }
 
-impl fal::FileHandle for FileHandle {
-    type InodeStruct = Inode;
-
-    #[inline]
-    fn fh(&self) -> u64 {
-        self.fh
-    }
-
-    #[inline]
-    fn offset(&self) -> u64 {
-        self.offset
-    }
-
-    #[inline]
-    fn set_offset(&mut self, offset: u64) {
-        self.offset = offset;
-    }
-
-    #[inline]
-    fn inode(&self) -> &Inode {
-        &self.inode
-    }
-}
-
 impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
     type InodeAddr = u32;
     type InodeStruct = Inode;
-    type FileHandle = FileHandle;
 
     #[inline]
     fn root_inode(&self) -> u32 {
@@ -387,12 +362,15 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
         Ok(location.unwrap().into_boxed_slice())
     }
 
-    fn fh(&self, fh: u64) -> &FileHandle {
-        &self.fhs[&fh]
+    fn fh_offset(&self, fh: u64) -> u64 {
+        self.fhs[&fh].offset
+    }
+    fn fh_inode(&self, fh: u64) -> Inode {
+        self.fhs[&fh].inode
     }
 
-    fn fh_mut(&mut self, fh: u64) -> &mut FileHandle {
-        self.fhs.get_mut(&fh).unwrap()
+    fn set_fh_offset(&mut self, fh: u64, offset: u64) {
+        self.fhs.get_mut(&fh).unwrap().offset = offset;
     }
 
     fn filesystem_attrs(&self) -> fal::FsAttributes {

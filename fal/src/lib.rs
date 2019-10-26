@@ -193,17 +193,6 @@ pub struct DirectoryEntry<InodeAddr: Into<u64>> {
     pub offset: u64,
 }
 
-pub trait FileHandle {
-    type InodeStruct: Inode;
-
-    fn fh(&self) -> u64;
-
-    fn offset(&self) -> u64;
-    fn set_offset(&mut self, offset: u64);
-
-    fn inode(&self) -> &Self::InodeStruct;
-}
-
 #[derive(Debug)]
 pub enum Error {
     BadFd,
@@ -258,7 +247,6 @@ impl From<io::Error> for Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-// TODO: Add some kind of Result type.
 /// An abstract filesystem. Typically implemented by the backend.
 pub trait Filesystem<D: Device>
 where
@@ -268,9 +256,7 @@ where
     type InodeAddr: From<u32> + Into<u64> + Copy + TryFrom<u64> + Eq + std::fmt::Debug;
 
     /// An inode structure, capable of retrieving inode information.
-    type InodeStruct: Inode;
-
-    type FileHandle: FileHandle;
+    type InodeStruct: Inode + Clone;
 
     /// The root inode address (for example 2 on ext2/3/4).
     fn root_inode(&self) -> Self::InodeAddr;
@@ -306,21 +292,33 @@ where
         offset: i64,
     ) -> Result<Option<DirectoryEntry<Self::InodeAddr>>>;
 
-    /// Get a directory entry from a directory inode and a name.
+    /// Get a directory entry from a directory inode address and a name.
     fn lookup_direntry(
         &mut self,
         parent: Self::InodeAddr,
         name: &OsStr,
     ) -> Result<DirectoryEntry<Self::InodeAddr>>;
 
-    /// Read a symlink.
+    /// Read a symbolic link.
     fn readlink(&mut self, inode: Self::InodeAddr) -> Result<Box<[u8]>>;
 
-    /// Retrieve a reference to data about an open file handle.
-    fn fh(&self, fh: u64) -> &Self::FileHandle;
+    /// Get the offset of an open file handle.
+    fn fh_offset(&self, fh: u64) -> u64;
 
-    /// Retrieve a mutable reference to file handle data.
-    fn fh_mut(&mut self, fh: u64) -> &mut Self::FileHandle;
+    // XXX: Rust's type system doesn't support associated types with lifetimes. If a backend wants
+    // to use a concurrent hashmap for storing the file handles, then there won't be a direct
+    // reference, but an RAII guard. Basically all RAII guards store their owner, and to replace the
+    // return type with a guard, an associated type with a lifetime is required. On the other hand,
+    // inodes aren't typically that slow to clone. However with generic associated types, this
+    // will likely work.
+    //
+    // https://github.com/rust-lang/rfcs/pull/1598
+    //
+    /// Retrieve a reference to data about an open file handle.
+    fn fh_inode(&self, fh: u64) -> Self::InodeStruct;
+
+    /// Set the current offset of a file handle.
+    fn set_fh_offset(&mut self, fh: u64, offset: u64);
 
     /// Get the statvfs of the filesystem.
     fn filesystem_attrs(&self) -> FsAttributes;
