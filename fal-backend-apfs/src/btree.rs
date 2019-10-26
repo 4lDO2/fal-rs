@@ -545,7 +545,7 @@ impl BTree {
         device: &'a mut D,
         superblock: &'a NxSuperblock,
         omap: Option<&'a Omap>,
-    ) -> Pairs<'a, D> {
+    ) -> Pairs<'a, 'a, D> {
         if omap.is_none() && self.root.header.object_type.is_virtual() {
             panic!("Iterating over the pairs of a virtual object (tree) without an omap.");
         }
@@ -567,7 +567,7 @@ impl BTree {
         omap: Option<&'a Omap>,
         key: &BTreeKey,
         compare: Compare,
-    ) -> Option<Pairs<'a, D>> {
+    ) -> Option<Pairs<'a, 'a, D>> {
         let path = match self
             .get_generic(device, superblock, omap, key, compare)
             .map(|(_, path)| path)
@@ -609,18 +609,18 @@ impl BTree {
 }
 
 /// Stack-based tree traversal iterator
-pub struct Pairs<'a, D: fal::Device> {
-    device: &'a mut D,
-    superblock: &'a NxSuperblock,
-    path: Path<'a>,
-    omap: Option<&'a Omap>,
+pub struct Pairs<'a, 'b, D: fal::Device> {
+    pub(crate) device: &'b mut D,
+    pub(crate) superblock: &'b NxSuperblock,
+    pub(crate) path: Path<'a>,
+    pub(crate) omap: Option<&'b Omap>,
 
-    compare: Compare,
-    previous_key: Option<BTreeKey>,
+    pub(crate) compare: Compare,
+    pub(crate) previous_key: Option<BTreeKey>,
 }
 
 // Based on the btrfs Pairs code with some modifications.
-impl<'a, D: fal::Device> Iterator for Pairs<'a, D> {
+impl<'a, 'b, D: fal::Device> Iterator for Pairs<'a, 'b, D> {
     type Item = (BTreeKey, BTreeValue);
 
     fn next(&mut self) -> Option<Self::Item> {

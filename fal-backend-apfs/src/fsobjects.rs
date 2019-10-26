@@ -64,6 +64,18 @@ impl JAnyKey {
     pub fn partial_compare(k1: &BTreeKey, k2: &BTreeKey) -> Ordering {
         Ord::cmp(k1.as_fs_layer_key().unwrap().header(), k2.as_fs_layer_key().unwrap().header())
     }
+    pub fn into_drec_hashed_key(self) -> Option<JDrecHashedKey> {
+        match self {
+            Self::DrecHashedKey(k) => Some(k),
+            _ => None,
+        }
+    }
+    pub fn into_inode_key(self) -> Option<JInodeKey> {
+        match self {
+            Self::InodeKey(k) => Some(k),
+            _ => None,
+        }
+    }
 }
 
 impl Ord for JAnyKey {

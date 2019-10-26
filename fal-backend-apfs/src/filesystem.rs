@@ -1,14 +1,18 @@
 use std::{
+    borrow::Cow,
     collections::HashMap,
     ffi::OsStr,
     io::SeekFrom,
-    sync::Mutex,
+    sync::{
+        atomic::{self, AtomicU64},
+        Mutex
+    },
 };
 
 use crate::{
-    btree::{BTree, BTreeKey},
-    file_io::{FileHandle, Inode},
-    fsobjects::{JAnyKey, JDrecKey, JDrecHashedKey, JInodeKey},
+    btree::{BTree, BTreeKey, Pairs},
+    file_io::{DirExtra, FileHandle, Inode},
+    fsobjects::{InodeType, JAnyKey, JDrecKey, JDrecHashedKey, JInodeKey},
     checkpoint::{
         self, CheckpointMapping, CheckpointMappingPhys, GenericObject,
     },
@@ -23,6 +27,10 @@ pub struct Filesystem<D: fal::Device> {
     pub container_superblock: NxSuperblock,
     pub ephemeral_objects: HashMap<ObjectIdentifier, GenericObject>,
     pub mounted_volumes: Vec<Volume>,
+
+    // TODO: Use a fancy atomic hashmap (or btreemap).
+    pub file_handles: Mutex<HashMap<u64, FileHandle>>,
+    pub last_fh: AtomicU64,
 }
 
 impl<D: fal::Device> Filesystem<D> {
@@ -128,6 +136,8 @@ impl<D: fal::Device> Filesystem<D> {
             device: Mutex::new(device),
             ephemeral_objects,
             mounted_volumes,
+            file_handles: Mutex::new(HashMap::new()),
+            last_fh: AtomicU64::new(0),
         }
     }
     pub fn volume(&self) -> &Volume {
@@ -135,6 +145,9 @@ impl<D: fal::Device> Filesystem<D> {
     }
     pub fn device(&self) -> std::sync::MutexGuard<'_, D> {
         self.device.lock().unwrap()
+    }
+    pub fn fh(&self) -> u64 {
+        self.last_fh.fetch_add(1, atomic::Ordering::SeqCst)
     }
 }
 impl<D: fal::DeviceMut> Filesystem<D> {
@@ -236,20 +249,102 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         unimplemented!()
     }
 
-    fn close(&mut self, file: u64) -> Result<()> {
-        unimplemented!()
+    fn close(&mut self, fh: u64) -> Result<()> {
+        match self.file_handles.lock().unwrap().remove(&fh) {
+            Some(_) => Ok(()),
+            None => Err(fal::Error::BadFd),
+        }
     }
 
     fn open_directory(&mut self, address: Self::InodeAddr) -> Result<u64> {
-        unimplemented!()
+        let inode_key = JInodeKey::new(address.into());
+        let inode_val = match self.volume().root_tree.get(&mut *self.device(), &self.container_superblock, Some(&self.volume().omap), &BTreeKey::FsLayerKey(JAnyKey::InodeKey(inode_key.clone()))) {
+            Some(i) => i,
+            None => return Err(fal::Error::NoEntity),
+        }.into_inode_value().unwrap();
+
+        if inode_val.ty != InodeType::Dir {
+            return Err(fal::Error::NotDirectory);
+        }
+
+        // TODO: Support both JDrecHashedKey and JDrecKey.
+        let partial_key = BTreeKey::FsLayerKey(JAnyKey::DrecHashedKey(JDrecHashedKey::partial(address.into())));
+
+        let fh = self.fh();
+        let dir_extra = match self.volume().root_tree.get_generic(&mut *self.device(), &self.container_superblock, Some(&self.volume().omap), &partial_key, JAnyKey::partial_compare) {
+            Some((_, p)) => {
+                Some(DirExtra {
+                    path: p.into_iter().map(|(tree, idx)| (Cow::Owned(tree.into_owned()), idx)).collect(),
+                    previous_key: None,
+                })
+            }
+            None => {
+                None
+            }
+        };
+        self.file_handles.lock().unwrap().insert(fh,
+                FileHandle {
+                    fh,
+                    offset: 0,
+                    inode: Inode {
+                        block_size: self.container_superblock.block_size,
+                        value: inode_val,
+                        key: inode_key,
+                    },
+                    dir_extra: None,
+                });
+        Ok(fh)
     }
 
     fn read_directory(
         &mut self,
-        directory: u64,
+        fh: u64,
         offset: i64,
     ) -> Result<Option<fal::DirectoryEntry<Self::InodeAddr>>> {
-        unimplemented!()
+        let mut guard = self.file_handles.lock().unwrap();
+        let mut device = self.device.lock().unwrap();
+
+        let file_handle: &mut FileHandle = match guard.get_mut(&fh) {
+            Some(fh) => fh,
+            None => return Err(fal::Error::BadFd),
+        };
+        if file_handle.inode.value.ty != InodeType::Dir {
+            return Err(fal::Error::NotDirectory);
+        }
+        let dir_extra = match file_handle.dir_extra.take() {
+            Some(d) => d,
+            None => return Ok(None),
+        };
+        let mut iterator = Pairs::<'static, '_> {
+            device: &mut *device,
+            compare: JAnyKey::partial_compare,
+            omap: Some(&self.volume().omap),
+            superblock: &self.container_superblock,
+
+            path: dir_extra.path,
+            previous_key: dir_extra.previous_key,
+        };
+        if offset < 0 { unimplemented!("offsets below zero, no walking backwards is implemented for the Pairs iterator") }
+
+        let (idx, (key, value)) = match (&mut iterator).enumerate().skip(offset as usize).next() {
+            Some((idx, (key, value))) => (idx, (key.into_fs_layer_key().unwrap().into_drec_hashed_key().unwrap(), value.into_drec_value().unwrap())),
+            None => return Ok(None),
+        };
+        let dir_extra = DirExtra {
+            path: iterator.path,
+            previous_key: iterator.previous_key,
+        };
+        file_handle.offset += idx as u64;
+        file_handle.dir_extra = Some(dir_extra);
+
+        let dir_entry = fal::DirectoryEntry {
+            inode: key.header.oid.into(),
+            name: key.name.into(),
+            filetype: value.flags.ty.into(),
+            offset: file_handle.offset,
+        };
+
+        Ok(Some(dir_entry))
     }
 
     fn lookup_direntry(

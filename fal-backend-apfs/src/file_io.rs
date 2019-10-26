@@ -1,5 +1,8 @@
 use fal::time::Timespec;
-use crate::fsobjects::{ChildrenOrHardlinkCount, InodeType, JDrecType, JInodeKey, JInodeVal};
+use crate::{
+    btree::{BTreeKey, Path},
+    fsobjects::{ChildrenOrHardlinkCount, InodeType, JDrecType, JInodeKey, JInodeVal},
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Inode {
@@ -99,6 +102,13 @@ pub struct FileHandle {
     pub(crate) fh: u64,
     pub(crate) offset: u64,
     pub(crate) inode: Inode,
+    pub(crate) dir_extra: Option<DirExtra>,
+}
+
+#[derive(Debug)]
+pub struct DirExtra {
+    pub(crate) path: Path<'static>,
+    pub(crate) previous_key: Option<BTreeKey>,
 }
 
 impl fal::FileHandle for FileHandle {
