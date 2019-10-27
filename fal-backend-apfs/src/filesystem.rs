@@ -145,9 +145,6 @@ impl<D: fal::Device> Filesystem<D> {
     pub fn volume(&self) -> &Volume {
         &self.mounted_volumes[0]
     }
-    pub fn device(&self) -> std::sync::MutexGuard<'_, D> {
-        self.device.lock().unwrap()
-    }
     pub fn fh(&self) -> u64 {
         self.last_fh.fetch_add(1, atomic::Ordering::SeqCst)
     }
@@ -221,8 +218,10 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
     fn unmount(self) {}
 
     fn load_inode(&mut self, address: Self::InodeAddr) -> Result<Self::InodeStruct> {
+        let mut device = self.device.lock().unwrap();
+
         let key = JInodeKey::new(address.into());
-        let value = match self.volume().root_tree.get(&mut *self.device(), &self.container_superblock, Some(&self.volume().omap), &BTreeKey::FsLayerKey(JAnyKey::InodeKey(key.clone()))) {
+        let value = match self.volume().root_tree.get(&mut *device, &self.container_superblock, Some(&self.volume().omap), &BTreeKey::FsLayerKey(JAnyKey::InodeKey(key.clone()))) {
             Some(i) => i,
             None => return Err(fal::Error::NoEntity)
         };
@@ -235,9 +234,11 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
     }
 
     fn open_file(&mut self, inode: Self::InodeAddr) -> Result<u64> {
+        let mut device = self.device.lock().unwrap();
+
         let inode_key = JInodeKey::new(inode.into());
 
-        let inode_val = match self.volume().root_tree.get(&mut *self.device(), &self.container_superblock, Some(&self.volume().omap), &BTreeKey::FsLayerKey(JAnyKey::InodeKey(inode_key.clone()))) {
+        let inode_val = match self.volume().root_tree.get(&mut *device, &self.container_superblock, Some(&self.volume().omap), &BTreeKey::FsLayerKey(JAnyKey::InodeKey(inode_key.clone()))) {
             Some(i) => i,
             None => return Err(fal::Error::NoEntity),
         }.into_inode_value().unwrap();
@@ -249,7 +250,7 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         let partial_key = BTreeKey::FsLayerKey(JAnyKey::FileExtentKey(JFileExtentKey::partial(inode.into())));
 
         let fh = self.fh();
-        let extra = match self.volume().root_tree.get_generic(&mut *self.device(), &self.container_superblock, Some(&self.volume().omap), &partial_key, JAnyKey::partial_compare) {
+        let extra = match self.volume().root_tree.get_generic(&mut *device, &self.container_superblock, Some(&self.volume().omap), &partial_key, JAnyKey::partial_compare) {
             Some((_, p)) => {
                 Some(Extra {
                     path: p.into_iter().map(|(tree, idx)| (Cow::Owned(tree.into_owned()), idx)).collect(),
@@ -361,8 +362,10 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
     }
 
     fn open_directory(&mut self, address: Self::InodeAddr) -> Result<u64> {
+        let mut device = self.device.lock().unwrap();
+
         let inode_key = JInodeKey::new(address.into());
-        let inode_val = match self.volume().root_tree.get(&mut *self.device(), &self.container_superblock, Some(&self.volume().omap), &BTreeKey::FsLayerKey(JAnyKey::InodeKey(inode_key.clone()))) {
+        let inode_val = match self.volume().root_tree.get(&mut *device, &self.container_superblock, Some(&self.volume().omap), &BTreeKey::FsLayerKey(JAnyKey::InodeKey(inode_key.clone()))) {
             Some(i) => i,
             None => return Err(fal::Error::NoEntity),
         }.into_inode_value().unwrap();
@@ -377,7 +380,7 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         let partial_key = BTreeKey::FsLayerKey(JAnyKey::DrecHashedKey(JDrecHashedKey::partial(address.into())));
 
         let fh = self.fh();
-        let extra = match self.volume().root_tree.get_generic(&mut *self.device(), &self.container_superblock, Some(&self.volume().omap), &partial_key, JAnyKey::partial_compare) {
+        let extra = match self.volume().root_tree.get_generic(&mut *device, &self.container_superblock, Some(&self.volume().omap), &partial_key, JAnyKey::partial_compare) {
             Some((_, p)) => {
                 Some(Extra {
                     path: p.into_iter().map(|(tree, idx)| (Cow::Owned(tree.into_owned()), idx)).collect(),
@@ -461,12 +464,14 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         parent: Self::InodeAddr,
         name: &OsStr,
     ) -> Result<fal::DirectoryEntry<Self::InodeAddr>> {
+        let mut device = self.device.lock().unwrap();
+
         let hashed_key = JDrecHashedKey::new(parent.into(), name.to_string_lossy().into_owned());
-        let value = match self.volume().root_tree.get(&mut *self.device(), &self.container_superblock, Some(&self.volume().omap), &BTreeKey::FsLayerKey(JAnyKey::DrecHashedKey(hashed_key.clone()))) {
+        let value = match self.volume().root_tree.get(&mut *device, &self.container_superblock, Some(&self.volume().omap), &BTreeKey::FsLayerKey(JAnyKey::DrecHashedKey(hashed_key.clone()))) {
             Some(i) => i,
             None => {
                 let regular_key = JDrecKey::new(parent.into(), name.to_string_lossy().into_owned());
-                match self.volume().root_tree.get(&mut *self.device(), &self.container_superblock, Some(&self.volume().omap), &BTreeKey::FsLayerKey(JAnyKey::DrecKey(regular_key.clone()))) {
+                match self.volume().root_tree.get(&mut *device, &self.container_superblock, Some(&self.volume().omap), &BTreeKey::FsLayerKey(JAnyKey::DrecKey(regular_key.clone()))) {
                     Some(i) => i,
                     None => return Err(fal::Error::NoEntity),
                 }
