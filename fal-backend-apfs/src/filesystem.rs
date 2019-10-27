@@ -287,11 +287,11 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
             return Err(fal::Error::IsDirectory);
         }
 
-        assert!(offset < file_handle.inode.value.size());
-
         let mut buf = buffer;
 
         let mut bytes_read = 0;
+
+        // TODO: Wrap most of this function into something like read_datastream(oid, offset, buffer).
 
         loop {
             if buf.is_empty() {
@@ -328,8 +328,9 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
                     file_handle.current_extent.unwrap()
                 }
             };
-            assert_eq!(current_extent_val.length % u64::from(self.container_superblock.block_size), 0);
-            let extent_block_count = current_extent_val.length / u64::from(self.container_superblock.block_size);
+            let block_size = u64::from(self.container_superblock.block_size);
+            assert_eq!(current_extent_val.length % block_size, 0);
+            let extent_block_count = current_extent_val.length / block_size;
 
             let bytes_from_extent_start = offset - current_extent_key.logical_addr;
             let bytes_to_extent_end = current_extent_val.length - bytes_from_extent_start;
@@ -337,12 +338,15 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
 
             let mut extent_bytes_read = 0;
 
-            let blocks_to_read = fal::div_round_up(bytes_to_read, self.container_superblock.block_size as usize);
+            let blocks_before_offset = bytes_from_extent_start / block_size;
+            let blocks_to_read = fal::div_round_up(bytes_to_read, block_size as usize);
 
-            for baddr in (current_extent_val.physical_block_num..current_extent_val.physical_block_num + extent_block_count).take(blocks_to_read) {
+            for (index, baddr) in (current_extent_val.physical_block_num..current_extent_val.physical_block_num + extent_block_count).enumerate().skip(blocks_before_offset as usize).take(blocks_to_read) {
+                let bytes_before_offset = bytes_from_extent_start.saturating_sub(index as u64 * block_size) as usize;
+
                 let block_bytes_to_read = std::cmp::min(bytes_to_read, self.container_superblock.block_size as usize);
                 let block = read_block(&self.container_superblock, &mut *device, baddr as i64);
-                buf[extent_bytes_read..extent_bytes_read + block_bytes_to_read].copy_from_slice(&block[..block_bytes_to_read]);
+                buf[extent_bytes_read..extent_bytes_read + block_bytes_to_read].copy_from_slice(&block[bytes_before_offset..block_bytes_to_read]);
                 extent_bytes_read += block_bytes_to_read;
             }
 
@@ -350,6 +354,8 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
             offset += extent_bytes_read as u64;
             buf = &mut buf[extent_bytes_read..];
         }
+
+        file_handle.offset += bytes_read as u64;
 
         Ok(bytes_read)
     }
