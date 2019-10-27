@@ -63,19 +63,21 @@ impl<Backend: fal::FilesystemMut<File>> SchemeMut for RedoxFilesystem<Backend> {
         let inode_struct = syscall_result(self.inner.load_inode(file_inode))?;
         let permissions = fal::check_permissions(uid, gid, &inode_struct.attrs());
 
-        if ((flags & syscall::flag::O_RDONLY != 0) || flags & syscall::flag::O_RDWR != 0)
-            && !permissions.read
-        {
-            return syscall_result(Err(fal::Error::AccessDenied));
-        }
-        if flags & syscall::flag::O_RDWR != 0 && !permissions.write {
-            return syscall_result(Err(fal::Error::AccessDenied));
-        }
-        if flags & syscall::flag::O_EXCL != 0 && !permissions.execute {
-            return syscall_result(Err(fal::Error::AccessDenied));
-        }
-        if flags & syscall::flag::O_WRONLY != 0 && !permissions.write {
-            return syscall_result(Err(fal::Error::AccessDenied));
+        if uid != 0 {
+            if ((flags & syscall::flag::O_RDONLY != 0) || flags & syscall::flag::O_RDWR != 0)
+                && !permissions.read
+            {
+                return syscall_result(Err(fal::Error::AccessDenied));
+            }
+            if flags & syscall::flag::O_RDWR != 0 && !permissions.write {
+                return syscall_result(Err(fal::Error::AccessDenied));
+            }
+            if flags & syscall::flag::O_EXCL != 0 && !permissions.execute {
+                return syscall_result(Err(fal::Error::AccessDenied));
+            }
+            if flags & syscall::flag::O_WRONLY != 0 && !permissions.write {
+                return syscall_result(Err(fal::Error::AccessDenied));
+            }
         }
 
         if flags & syscall::flag::O_DIRECTORY == 0 {
