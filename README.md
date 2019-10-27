@@ -5,8 +5,9 @@ Allows backends (like ext2, apfs, btrfs, xfs etc.) to communicate with the front
 # Features implemented
 ## Backends
 - ext2: Read-only (+writing metadata)
-- apfs: WIP (parsing the fundamental container structures is currently being implemented)
-- btrfs: WIP (status similar to that of APFS)
+- apfs: Read-only
+everything isn't implemented to fully cover the limited spec provided by Apple, however reading files and listing directories is implemented
+- btrfs: WIP (reading B-trees is implemented, and probably error-free)
 - xfs: TODO
 - f2fs: TODO
 
