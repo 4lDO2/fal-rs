@@ -243,9 +243,9 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
             None => return Err(fal::Error::NoEntity),
         }.into_inode_value().unwrap();
 
-        if inode_val.ty == InodeType::Dir {
-            return Err(fal::Error::IsDirectory)
-        }
+        // Normally we would check that this really is a file and not a directory, however the
+        // Redox frontend opens the root dir as a file and then checks whether or not it's a
+        // directory. We check if it's a file at read() calls.
 
         let partial_key = BTreeKey::FsLayerKey(JAnyKey::FileExtentKey(JFileExtentKey::partial(inode.into())));
 
