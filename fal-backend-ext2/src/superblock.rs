@@ -1,5 +1,5 @@
 use crate::{
-    div_round_up, read_u16, read_u32, read_u8, read_uuid, write_u16, write_u32, write_u8,
+    read_u16, read_u32, read_u8, read_uuid, write_u16, write_u32, write_u8,
     write_uuid, Uuid,
 };
 
@@ -358,8 +358,8 @@ impl Superblock {
     }
 
     pub fn block_group_count(&self) -> u32 {
-        let from_block_count = div_round_up(self.block_count, self.blocks_per_group);
-        let from_inode_count = div_round_up(self.inode_count, self.inodes_per_group);
+        let from_block_count = fal::div_round_up(self.block_count, self.blocks_per_group);
+        let from_inode_count = fal::div_round_up(self.inode_count, self.inodes_per_group);
         assert_eq!(from_block_count, from_inode_count);
         from_block_count
     }

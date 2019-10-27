@@ -5,8 +5,8 @@ use std::{
 };
 
 use crate::{
-    block_group, div_round_up, os_str_to_bytes, os_string_from_bytes, read_block, read_block_to,
-    read_u16, read_u32, read_u8, round_up,
+    block_group, os_str_to_bytes, os_string_from_bytes, read_block, read_block_to,
+    read_u16, read_u32, read_u8,
     superblock::{OptionalFeatureFlags, OsId, RequiredFeatureFlags, RoFeatureFlags, Superblock},
     write_block, write_u16, write_u32, write_u8, Filesystem,
 };
@@ -326,7 +326,7 @@ impl Inode {
         }
     }
     pub fn size_in_blocks(&self) -> u64 {
-        div_round_up(self.size, self.block_size.into())
+        fal::div_round_up(self.size, self.block_size.into())
     }
     fn entry_count(block_size: u32) -> usize {
         block_size as usize / mem::size_of::<u32>()
@@ -463,7 +463,7 @@ impl Inode {
                 return self
                     .read(
                         filesystem,
-                        round_up(offset, u64::from(filesystem.superblock.block_size)),
+                        fal::round_up(offset, u64::from(filesystem.superblock.block_size)),
                         &mut buffer[end..],
                     )
                     .map(|b| b + bytes_read);
@@ -532,7 +532,7 @@ impl Inode {
             if u64::try_from(buffer.len()).unwrap() >= off_from_rel_block {
                 return self.write(
                     filesystem,
-                    round_up(offset, u64::from(filesystem.superblock.block_size)),
+                    fal::round_up(offset, u64::from(filesystem.superblock.block_size)),
                     &buffer[end..],
                 );
             } else {

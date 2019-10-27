@@ -524,7 +524,17 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
     }
 
     fn filesystem_attrs(&self) -> fal::FsAttributes {
-        unimplemented!()
+        fal::FsAttributes {
+            block_size: self.container_superblock.block_size,
+
+            // TODO: Read from the space manager.
+            available_blocks: 42,
+            free_blocks: 42,
+            free_inodes: 42,
+            inode_count: 42,
+            max_fname_len: 42,
+            total_blocks: 42,
+        }
     }
 }
 
