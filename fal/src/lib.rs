@@ -373,3 +373,26 @@ where
         number / alignment
     }) * alignment
 }
+
+pub fn div_round_up<T>(numer: T, denom: T) -> T
+where
+    T: Add<Output = T> + Copy + Div<Output = T> + Rem<Output = T> + From<u8> + PartialEq,
+{
+    if numer % denom != T::from(0u8) {
+        numer / denom + T::from(1u8)
+    } else {
+        numer / denom
+    }
+}
+pub fn round_up<T>(number: T, to: T) -> T
+where
+    T: Add<Output = T>
+        + Copy
+        + Div<Output = T>
+        + Mul<Output = T>
+        + Rem<Output = T>
+        + From<u8>
+        + PartialEq,
+{
+    div_round_up(number, to) * number
+}

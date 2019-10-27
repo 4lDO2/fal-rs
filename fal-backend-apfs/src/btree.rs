@@ -254,6 +254,12 @@ impl BTreeValue {
             _ => None,
         }
     }
+    pub fn as_file_extent_value(&self) -> Option<&JFileExtentVal> {
+        match self {
+            Self::FileExtent(ref val) => Some(val),
+            _ => None,
+        }
+    }
     pub fn as_inode_value(&self) -> Option<&JInodeVal> {
         match self {
             Self::Inode(ref val) => Some(val),
@@ -263,6 +269,12 @@ impl BTreeValue {
     pub fn as_drec_value(&self) -> Option<&JDrecVal> {
         match self {
             Self::DirRecord(ref val) => Some(val),
+            _ => None,
+        }
+    }
+    pub fn into_file_extent_value(self) -> Option<JFileExtentVal> {
+        match self {
+            Self::FileExtent(val) => Some(val),
             _ => None,
         }
     }

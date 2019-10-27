@@ -76,6 +76,12 @@ impl JAnyKey {
             _ => None,
         }
     }
+    pub fn into_file_extent_key(self) -> Option<JFileExtentKey> {
+        match self {
+            Self::FileExtentKey(k) => Some(k),
+            _ => None,
+        }
+    }
 }
 
 impl Ord for JAnyKey {
@@ -599,6 +605,18 @@ impl JFileExtentKey {
             header: read_jkey(bytes, &mut offset),
             logical_addr: read_u64(bytes, &mut offset),
         }
+    }
+    pub fn new(oid: ObjectIdentifier, logical_addr: u64) -> Self {
+        Self {
+            header: JKey {
+                oid,
+                ty: JObjType::FileExtent,
+            },
+            logical_addr,
+        }
+    }
+    pub fn partial(oid: ObjectIdentifier) -> Self {
+        Self::new(oid, 0)
     }
 }
 

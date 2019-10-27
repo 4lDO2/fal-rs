@@ -1,7 +1,7 @@
 use fal::time::Timespec;
 use crate::{
     btree::{BTreeKey, Path},
-    fsobjects::{ChildrenOrHardlinkCount, InodeType, JDrecType, JInodeKey, JInodeVal},
+    fsobjects::{ChildrenOrHardlinkCount, InodeType, JDrecType, JInodeKey, JInodeVal, JFileExtentKey, JFileExtentVal},
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -102,11 +102,12 @@ pub struct FileHandle {
     pub(crate) fh: u64,
     pub(crate) offset: u64,
     pub(crate) inode: Inode,
-    pub(crate) dir_extra: Option<DirExtra>,
+    pub(crate) extra: Option<Extra>,
+    pub(crate) current_extent: Option<(JFileExtentKey, JFileExtentVal)>,
 }
 
 #[derive(Debug)]
-pub struct DirExtra {
+pub struct Extra {
     pub(crate) path: Path<'static>,
     pub(crate) previous_key: Option<BTreeKey>,
 }
