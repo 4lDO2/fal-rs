@@ -248,6 +248,12 @@ impl BTreeValue {
             _ => None,
         }
     }
+    pub fn into_xattr_value(self) -> Option<JXattrVal> {
+        match self {
+            Self::Xattr(val) => Some(val),
+            _ => None,
+        }
+    }
     pub fn as_omap_value(&self) -> Option<&OmapValue> {
         match self {
             Self::OmapValue(ref val) => Some(val),
@@ -275,6 +281,12 @@ impl BTreeValue {
     pub fn into_file_extent_value(self) -> Option<JFileExtentVal> {
         match self {
             Self::FileExtent(val) => Some(val),
+            _ => None,
+        }
+    }
+    pub fn as_xattr_value(&self) -> Option<&JXattrVal> {
+        match self {
+            Self::Xattr(val) => Some(val),
             _ => None,
         }
     }

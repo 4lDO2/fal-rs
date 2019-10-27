@@ -521,6 +521,8 @@ pub struct JXattrKey {
 }
 
 impl JXattrKey {
+    pub const SYMLINK_XATTR_NAME: &'static str = "com.apple.fs.symlink";
+
     pub fn parse(bytes: &[u8]) -> Self {
         let mut offset = 0;
 
@@ -532,6 +534,18 @@ impl JXattrKey {
             header,
             name,
         }
+    }
+    pub fn new(oid: ObjectIdentifier, name: String) -> Self {
+        Self {
+            header: JKey {
+                oid,
+                ty: JObjType::Xattr,
+            },
+            name,
+        }
+    }
+    pub fn partial(oid: ObjectIdentifier) -> Self {
+        Self::new(oid, String::new())
     }
 }
 
@@ -547,11 +561,12 @@ impl PartialOrd for JXattrKey {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct JXattrVal {
     pub flags: XattrFlags,
     pub len: u16,
-    // TODO
+    pub embedded: Option<Vec<u8>>,
+    // TODO: streams
 }
 
 bitflags! {
@@ -567,9 +582,17 @@ impl JXattrVal {
     pub fn parse(bytes: &[u8]) -> Self {
         let mut offset = 0;
 
+        let flags = XattrFlags::from_bits(read_u16(bytes, &mut offset)).unwrap();
+        let len = read_u16(bytes, &mut offset);
+
+        let embedded = if flags.contains(XattrFlags::DATA_EMBEDDED) {
+            Some(bytes[offset .. offset + len as usize].to_owned())
+        } else { None };
+
         Self {
-            flags: XattrFlags::from_bits(read_u16(bytes, &mut offset)).unwrap(),
-            len: read_u16(bytes, &mut offset),
+            flags,
+            len,
+            embedded,
         }
     }
 }

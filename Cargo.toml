@@ -8,6 +8,5 @@ members = [
     "fal",
 
     # TODO: Temporary, for testing individual early WIP filesystems.
-    "apfs-test",
     "btrfs-test",
 ]

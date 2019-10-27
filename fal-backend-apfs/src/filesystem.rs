@@ -15,7 +15,7 @@ use chashmap::CHashMap;
 use crate::{
     btree::{BTree, BTreeKey, Pairs},
     file_io::{Extra, FileHandle, Inode},
-    fsobjects::{InodeType, JAnyKey, JDrecKey, JDrecHashedKey, JInodeKey, JFileExtentKey},
+    fsobjects::{InodeType, JAnyKey, JDrecKey, JDrecHashedKey, JInodeKey, JFileExtentKey, JXattrKey},
     checkpoint::{
         self, CheckpointMapping, CheckpointMappingPhys, GenericObject,
     },
@@ -487,7 +487,22 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
     }
 
     fn readlink(&mut self, inode: Self::InodeAddr) -> Result<Box<[u8]>> {
-        unimplemented!()
+        let mut device = self.device.lock().unwrap();
+
+        let inode_key = JInodeKey::new(inode.into());
+        let inode_val = match self.volume().root_tree.get(&mut *device, &self.container_superblock, Some(&self.volume().omap), &BTreeKey::FsLayerKey(JAnyKey::InodeKey(inode_key.clone()))) {
+            Some(i) => i,
+            None => return Err(fal::Error::NoEntity),
+        }.into_inode_value().unwrap();
+
+        let xattr_key = JXattrKey::new(inode.into(), JXattrKey::SYMLINK_XATTR_NAME.to_owned());
+        let xattr_val = match self.volume().root_tree.get(&mut *device, &self.container_superblock, Some(&self.volume().omap), &BTreeKey::FsLayerKey(JAnyKey::XattrKey(xattr_key.clone()))) {
+            Some(i) => i,
+            None => return Err(fal::Error::Other(-1)),
+        };
+
+        // TODO: streams
+        Ok(xattr_val.into_xattr_value().unwrap().embedded.unwrap().into_boxed_slice())
     }
 
     fn fh_offset(&self, fh: u64) -> u64 {
