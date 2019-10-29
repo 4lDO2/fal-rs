@@ -1,6 +1,5 @@
 use crate::{
-    read_u16, read_u32, read_u8, read_uuid, write_u16, write_u32, write_u8,
-    write_uuid, Uuid,
+    read_u16, read_u32, read_u8, read_uuid, write_u16, write_u32, write_u8, write_uuid, Uuid,
 };
 
 use std::{

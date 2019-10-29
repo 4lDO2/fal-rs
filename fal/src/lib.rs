@@ -365,7 +365,13 @@ pub fn check_permissions<A: Into<u64>>(uid: u32, gid: u32, attrs: &Attributes<A>
 
 pub fn align<T>(number: T, alignment: T) -> T
 where
-    T: Add<Output = T> + Copy + Div<Output = T> + Rem<Output = T> + From<u8> + Mul<Output = T> + PartialEq,
+    T: Add<Output = T>
+        + Copy
+        + Div<Output = T>
+        + Rem<Output = T>
+        + From<u8>
+        + Mul<Output = T>
+        + PartialEq,
 {
     (if number % alignment != T::from(0u8) {
         number / alignment + T::from(1u8)

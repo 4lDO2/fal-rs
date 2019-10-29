@@ -5,7 +5,7 @@ use std::{
     io::SeekFrom,
     sync::{
         atomic::{self, AtomicU64},
-        Mutex
+        Mutex,
     },
 };
 
@@ -13,12 +13,12 @@ use chashmap::CHashMap;
 
 use crate::{
     btree::{BTree, BTreeKey, Pairs},
+    checkpoint::{self, CheckpointMapping, CheckpointMappingPhys, GenericObject},
     file_io::{Extra, FileHandle, Inode},
-    fsobjects::{InodeType, JAnyKey, JDrecKey, JDrecHashedKey, JInodeKey, JFileExtentKey, JXattrKey},
-    checkpoint::{
-        self, CheckpointMapping, CheckpointMappingPhys, GenericObject,
+    fsobjects::{
+        InodeType, JAnyKey, JDrecHashedKey, JDrecKey, JFileExtentKey, JInodeKey, JXattrKey,
     },
-    omap::{Omap, OmapKey, OmapValue},
+    omap::{Omap, OmapKey, OmapValue, Resolver},
     read_block, read_block_to,
     spacemanager::SpacemanagerPhys,
     superblock::{ApfsSuperblock, NxSuperblock},
@@ -62,7 +62,10 @@ impl<D: fal::Device> Filesystem<D> {
             );
 
             let obj = ObjPhys::parse(&descriptor_area[range]);
-            assert!(obj.object_type.ty == ObjectType::CheckpointMap || obj.object_type.ty == ObjectType::NxSuperblock);
+            assert!(
+                obj.object_type.ty == ObjectType::CheckpointMap
+                    || obj.object_type.ty == ObjectType::NxSuperblock
+            );
         }
 
         let superblock = (0..container_superblock.chkpnt_desc_len)
@@ -110,10 +113,20 @@ impl<D: fal::Device> Filesystem<D> {
             })
             .collect::<HashMap<ObjectIdentifier, GenericObject>>();
 
-        let spacemanager_oid = ephemeral_objects.iter().find(|(_, v)| v.header().ty() == ObjectType::SpaceManager).expect("Volume missing space manager").1.header().oid();
-        let reaper_oid = ephemeral_objects.iter().find(|(_, v)| v.header().ty() == ObjectType::NxReaper).expect("Volume missing reaper").1.header().oid();
-
-        dbg!(&ephemeral_objects[&spacemanager_oid]);
+        let spacemanager_oid = ephemeral_objects
+            .iter()
+            .find(|(_, v)| v.header().ty() == ObjectType::SpaceManager)
+            .expect("Volume missing space manager")
+            .1
+            .header()
+            .oid();
+        let reaper_oid = ephemeral_objects
+            .iter()
+            .find(|(_, v)| v.header().ty() == ObjectType::NxReaper)
+            .expect("Volume missing reaper")
+            .1
+            .header()
+            .oid();
 
         let container_superblock: NxSuperblock = superblock;
 
@@ -231,9 +244,14 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         let mut device = self.device.lock().unwrap();
 
         let key = JInodeKey::new(address.into());
-        let value = match self.volume().root_tree.get(&mut *device, &self.container_superblock, Some(&self.volume().omap), &BTreeKey::FsLayerKey(JAnyKey::InodeKey(key.clone()))) {
+        let value = match self.volume().root_tree.get(
+            &mut *device,
+            &self.container_superblock,
+            Resolver::Virtual(&self.volume().omap),
+            &BTreeKey::FsLayerKey(JAnyKey::InodeKey(key.clone())),
+        ) {
             Some(i) => i,
-            None => return Err(fal::Error::NoEntity)
+            None => return Err(fal::Error::NoEntity),
         };
         let inode = Inode {
             block_size: self.container_superblock.block_size,
@@ -248,41 +266,57 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
 
         let inode_key = JInodeKey::new(inode.into());
 
-        let inode_val = match self.volume().root_tree.get(&mut *device, &self.container_superblock, Some(&self.volume().omap), &BTreeKey::FsLayerKey(JAnyKey::InodeKey(inode_key.clone()))) {
+        let inode_val = match self.volume().root_tree.get(
+            &mut *device,
+            &self.container_superblock,
+            Resolver::Virtual(&self.volume().omap),
+            &BTreeKey::FsLayerKey(JAnyKey::InodeKey(inode_key.clone())),
+        ) {
             Some(i) => i,
             None => return Err(fal::Error::NoEntity),
-        }.into_inode_value().unwrap();
+        }
+        .into_inode_value()
+        .unwrap();
 
         // Normally we would check that this really is a file and not a directory, however the
         // Redox frontend opens the root dir as a file and then checks whether or not it's a
         // directory. We check if it's a file at read() calls.
 
-        let partial_key = BTreeKey::FsLayerKey(JAnyKey::FileExtentKey(JFileExtentKey::partial(inode.into())));
+        let partial_key = BTreeKey::FsLayerKey(JAnyKey::FileExtentKey(JFileExtentKey::partial(
+            inode.into(),
+        )));
 
         let fh = self.fh();
-        let extra = match self.volume().root_tree.get_generic(&mut *device, &self.container_superblock, Some(&self.volume().omap), &partial_key, JAnyKey::partial_compare) {
-            Some((_, p)) => {
-                Some(Extra {
-                    path: p.into_iter().map(|(tree, idx)| (Cow::Owned(tree.into_owned()), idx)).collect(),
-                    previous_key: None,
-                })
-            }
-            None => {
-                None
-            }
+        let extra = match self.volume().root_tree.get_generic(
+            &mut *device,
+            &self.container_superblock,
+            Resolver::Virtual(&self.volume().omap),
+            &partial_key,
+            JAnyKey::partial_compare,
+        ) {
+            Some((_, p)) => Some(Extra {
+                path: p
+                    .into_iter()
+                    .map(|(tree, idx)| (Cow::Owned(tree.into_owned()), idx))
+                    .collect(),
+                previous_key: None,
+            }),
+            None => None,
         };
-        self.file_handles.insert(fh,
-                FileHandle {
-                    fh,
-                    offset: 0,
-                    inode: Inode {
-                        block_size: self.container_superblock.block_size,
-                        value: inode_val,
-                        key: inode_key,
-                    },
-                    extra,
-                    current_extent: None,
-                });
+        self.file_handles.insert(
+            fh,
+            FileHandle {
+                fh,
+                offset: 0,
+                inode: Inode {
+                    block_size: self.container_superblock.block_size,
+                    value: inode_val,
+                    key: inode_key,
+                },
+                extra,
+                current_extent: None,
+            },
+        );
         Ok(fh)
     }
 
@@ -305,10 +339,12 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
 
         loop {
             if buf.is_empty() {
-                break
+                break;
             }
             let (current_extent_key, current_extent_val) = match file_handle.current_extent {
-                Some((k, v)) if offset >= k.logical_addr && offset - k.logical_addr < v.length => (k, v),
+                Some((k, v)) if offset >= k.logical_addr && offset - k.logical_addr < v.length => {
+                    (k, v)
+                }
                 _ => {
                     // Get a new extent.
 
@@ -319,7 +355,7 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
                     let mut iterator = Pairs::<'static, '_> {
                         device: &mut *device,
                         compare: JAnyKey::partial_compare,
-                        omap: Some(&self.volume().omap),
+                        resolver: Resolver::Virtual(&self.volume().omap),
                         superblock: &self.container_superblock,
 
                         path: extra.path,
@@ -327,7 +363,13 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
                     };
 
                     let (k, v) = iterator.next().unwrap();
-                    file_handle.current_extent = Some((k.into_fs_layer_key().unwrap().into_file_extent_key().unwrap(), v.into_file_extent_value().unwrap()));
+                    file_handle.current_extent = Some((
+                        k.into_fs_layer_key()
+                            .unwrap()
+                            .into_file_extent_key()
+                            .unwrap(),
+                        v.into_file_extent_value().unwrap(),
+                    ));
 
                     let extra = Extra {
                         path: iterator.path,
@@ -351,12 +393,20 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
             let blocks_before_offset = bytes_from_extent_start / block_size;
             let blocks_to_read = fal::div_round_up(bytes_to_read, block_size as usize);
 
-            for (index, baddr) in (current_extent_val.physical_block_num..current_extent_val.physical_block_num + extent_block_count).enumerate().skip(blocks_before_offset as usize).take(blocks_to_read) {
-                let bytes_before_offset = bytes_from_extent_start.saturating_sub(index as u64 * block_size) as usize;
+            for (index, baddr) in (current_extent_val.physical_block_num
+                ..current_extent_val.physical_block_num + extent_block_count)
+                .enumerate()
+                .skip(blocks_before_offset as usize)
+                .take(blocks_to_read)
+            {
+                let bytes_before_offset =
+                    bytes_from_extent_start.saturating_sub(index as u64 * block_size) as usize;
 
-                let block_bytes_to_read = std::cmp::min(bytes_to_read, self.container_superblock.block_size as usize);
+                let block_bytes_to_read =
+                    std::cmp::min(bytes_to_read, self.container_superblock.block_size as usize);
                 let block = read_block(&self.container_superblock, &mut *device, baddr as i64);
-                buf[extent_bytes_read..extent_bytes_read + block_bytes_to_read].copy_from_slice(&block[bytes_before_offset..block_bytes_to_read]);
+                buf[extent_bytes_read..extent_bytes_read + block_bytes_to_read]
+                    .copy_from_slice(&block[bytes_before_offset..block_bytes_to_read]);
                 extent_bytes_read += block_bytes_to_read;
             }
 
@@ -381,10 +431,17 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         let mut device = self.device.lock().unwrap();
 
         let inode_key = JInodeKey::new(address.into());
-        let inode_val = match self.volume().root_tree.get(&mut *device, &self.container_superblock, Some(&self.volume().omap), &BTreeKey::FsLayerKey(JAnyKey::InodeKey(inode_key.clone()))) {
+        let inode_val = match self.volume().root_tree.get(
+            &mut *device,
+            &self.container_superblock,
+            Resolver::Virtual(&self.volume().omap),
+            &BTreeKey::FsLayerKey(JAnyKey::InodeKey(inode_key.clone())),
+        ) {
             Some(i) => i,
             None => return Err(fal::Error::NoEntity),
-        }.into_inode_value().unwrap();
+        }
+        .into_inode_value()
+        .unwrap();
 
         if inode_val.ty != InodeType::Dir {
             return Err(fal::Error::NotDirectory);
@@ -393,21 +450,29 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         // TODO: Support both JDrecHashedKey and JDrecKey.
 
         // Precompute the path to the first entry.
-        let partial_key = BTreeKey::FsLayerKey(JAnyKey::DrecHashedKey(JDrecHashedKey::partial(address.into())));
+        let partial_key = BTreeKey::FsLayerKey(JAnyKey::DrecHashedKey(JDrecHashedKey::partial(
+            address.into(),
+        )));
 
         let fh = self.fh();
-        let extra = match self.volume().root_tree.get_generic(&mut *device, &self.container_superblock, Some(&self.volume().omap), &partial_key, JAnyKey::partial_compare) {
-            Some((_, p)) => {
-                Some(Extra {
-                    path: p.into_iter().map(|(tree, idx)| (Cow::Owned(tree.into_owned()), idx)).collect(),
-                    previous_key: None,
-                })
-            }
-            None => {
-                None
-            }
+        let extra = match self.volume().root_tree.get_generic(
+            &mut *device,
+            &self.container_superblock,
+            Resolver::Virtual(&self.volume().omap),
+            &partial_key,
+            JAnyKey::partial_compare,
+        ) {
+            Some((_, p)) => Some(Extra {
+                path: p
+                    .into_iter()
+                    .map(|(tree, idx)| (Cow::Owned(tree.into_owned()), idx))
+                    .collect(),
+                previous_key: None,
+            }),
+            None => None,
         };
-        self.file_handles.insert(fh,
+        self.file_handles.insert(
+            fh,
             FileHandle {
                 fh,
                 offset: 0,
@@ -418,7 +483,7 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
                 },
                 extra,
                 current_extent: None,
-            }
+            },
         );
         Ok(fh)
     }
@@ -444,18 +509,31 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         let mut iterator = Pairs::<'static, '_> {
             device: &mut *device,
             compare: JAnyKey::partial_compare,
-            omap: Some(&self.volume().omap),
+            resolver: Resolver::Virtual(&self.volume().omap),
             superblock: &self.container_superblock,
 
             path: extra.path,
             previous_key: extra.previous_key,
         };
-        if offset < 0 { unimplemented!("offsets below zero, no walking backwards is implemented for the Pairs iterator") }
+        if offset < 0 {
+            unimplemented!(
+                "offsets below zero, no walking backwards is implemented for the Pairs iterator"
+            )
+        }
 
         let to_skip = (offset as usize).checked_sub(1).unwrap_or(0);
 
         let (idx, (key, value)) = match (&mut iterator).enumerate().skip(to_skip).next() {
-            Some((idx, (key, value))) => (idx, (key.into_fs_layer_key().unwrap().into_drec_hashed_key().unwrap(), value.into_drec_value().unwrap())),
+            Some((idx, (key, value))) => (
+                idx,
+                (
+                    key.into_fs_layer_key()
+                        .unwrap()
+                        .into_drec_hashed_key()
+                        .unwrap(),
+                    value.into_drec_value().unwrap(),
+                ),
+            ),
             None => return Ok(None),
         };
         let extra = Extra {
@@ -483,16 +561,28 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         let mut device = self.device.lock().unwrap();
 
         let hashed_key = JDrecHashedKey::new(parent.into(), name.to_string_lossy().into_owned());
-        let value = match self.volume().root_tree.get(&mut *device, &self.container_superblock, Some(&self.volume().omap), &BTreeKey::FsLayerKey(JAnyKey::DrecHashedKey(hashed_key.clone()))) {
+        let value = match self.volume().root_tree.get(
+            &mut *device,
+            &self.container_superblock,
+            Resolver::Virtual(&self.volume().omap),
+            &BTreeKey::FsLayerKey(JAnyKey::DrecHashedKey(hashed_key.clone())),
+        ) {
             Some(i) => i,
             None => {
                 let regular_key = JDrecKey::new(parent.into(), name.to_string_lossy().into_owned());
-                match self.volume().root_tree.get(&mut *device, &self.container_superblock, Some(&self.volume().omap), &BTreeKey::FsLayerKey(JAnyKey::DrecKey(regular_key.clone()))) {
+                match self.volume().root_tree.get(
+                    &mut *device,
+                    &self.container_superblock,
+                    Resolver::Virtual(&self.volume().omap),
+                    &BTreeKey::FsLayerKey(JAnyKey::DrecKey(regular_key.clone())),
+                ) {
                     Some(i) => i,
                     None => return Err(fal::Error::NoEntity),
                 }
             }
-        }.into_drec_value().unwrap();
+        }
+        .into_drec_value()
+        .unwrap();
 
         Ok(fal::DirectoryEntry {
             offset: 0,
@@ -506,19 +596,39 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         let mut device = self.device.lock().unwrap();
 
         let inode_key = JInodeKey::new(inode.into());
-        let inode_val = match self.volume().root_tree.get(&mut *device, &self.container_superblock, Some(&self.volume().omap), &BTreeKey::FsLayerKey(JAnyKey::InodeKey(inode_key.clone()))) {
-            Some(i) => i,
-            None => return Err(fal::Error::NoEntity),
-        }.into_inode_value().unwrap();
+
+        if self
+            .volume()
+            .root_tree
+            .get(
+                &mut *device,
+                &self.container_superblock,
+                Resolver::Virtual(&self.volume().omap),
+                &BTreeKey::FsLayerKey(JAnyKey::InodeKey(inode_key.clone())),
+            )
+            .is_none()
+        {
+            return Err(fal::Error::NoEntity);
+        }
 
         let xattr_key = JXattrKey::new(inode.into(), JXattrKey::SYMLINK_XATTR_NAME.to_owned());
-        let xattr_val = match self.volume().root_tree.get(&mut *device, &self.container_superblock, Some(&self.volume().omap), &BTreeKey::FsLayerKey(JAnyKey::XattrKey(xattr_key.clone()))) {
+        let xattr_val = match self.volume().root_tree.get(
+            &mut *device,
+            &self.container_superblock,
+            Resolver::Virtual(&self.volume().omap),
+            &BTreeKey::FsLayerKey(JAnyKey::XattrKey(xattr_key.clone())),
+        ) {
             Some(i) => i,
             None => return Err(fal::Error::Other(-1)),
         };
 
         // TODO: streams
-        Ok(xattr_val.into_xattr_value().unwrap().embedded.unwrap().into_boxed_slice())
+        Ok(xattr_val
+            .into_xattr_value()
+            .unwrap()
+            .embedded
+            .unwrap()
+            .into_boxed_slice())
     }
 
     fn fh_offset(&self, fh: u64) -> u64 {
@@ -534,7 +644,9 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
     }
 
     fn filesystem_attrs(&self) -> fal::FsAttributes {
-        let spacemanager: &SpacemanagerPhys = &self.ephemeral_objects[&self.spacemanager_oid].as_spacemanager().unwrap();
+        let spacemanager: &SpacemanagerPhys = &self.ephemeral_objects[&self.spacemanager_oid]
+            .as_spacemanager()
+            .unwrap();
 
         let device = spacemanager.main_device();
 

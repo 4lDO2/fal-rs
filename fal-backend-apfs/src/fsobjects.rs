@@ -6,7 +6,7 @@ use crate::{
 
 use std::cmp::Ordering;
 
-use fal::parsing::{read_u8, read_u16, read_u32, read_u64};
+use fal::parsing::{read_u16, read_u32, read_u64, read_u8};
 
 use bitflags::bitflags;
 use enum_primitive::*;
@@ -62,7 +62,10 @@ impl JAnyKey {
     /// A partial comparison functions for filesystem-layer objects. Only compares the object ID
     /// and the type, and ignores filenames or virtual addresses (for extents).
     pub fn partial_compare(k1: &BTreeKey, k2: &BTreeKey) -> Ordering {
-        Ord::cmp(k1.as_fs_layer_key().unwrap().header(), k2.as_fs_layer_key().unwrap().header())
+        Ord::cmp(
+            k1.as_fs_layer_key().unwrap().header(),
+            k2.as_fs_layer_key().unwrap().header(),
+        )
     }
     pub fn into_drec_hashed_key(self) -> Option<JDrecHashedKey> {
         match self {
@@ -86,7 +89,8 @@ impl JAnyKey {
 
 impl Ord for JAnyKey {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.header().cmp(other.header())
+        self.header()
+            .cmp(other.header())
             // Types are equal
             .then(match (self, other) {
                 (Self::DrecKey(k1), Self::DrecKey(k2)) => Ord::cmp(k1, k2),
@@ -114,19 +118,18 @@ impl JKey {
         let object_id_and_type = fal::read_u64(bytes, 0);
 
         let oid = ObjectIdentifier::from(object_id_and_type & Self::OBJECT_ID_MASK);
-        let ty = JObjType::from_u8(((object_id_and_type & Self::OBJECT_TYPE_MASK) >> Self::OBJECT_TYPE_SHIFT) as u8).unwrap();
+        let ty = JObjType::from_u8(
+            ((object_id_and_type & Self::OBJECT_TYPE_MASK) >> Self::OBJECT_TYPE_SHIFT) as u8,
+        )
+        .unwrap();
 
-        Self {
-            oid,
-            ty,
-        }
+        Self { oid, ty }
     }
 }
 
 impl Ord for JKey {
     fn cmp(&self, with: &Self) -> Ordering {
-        Ord::cmp(&self.oid, &with.oid)
-            .then(Ord::cmp(&self.ty, &with.ty))
+        Ord::cmp(&self.oid, &with.oid).then(Ord::cmp(&self.ty, &with.ty))
     }
 }
 impl PartialOrd for JKey {
@@ -146,7 +149,7 @@ impl JInodeKey {
             header: JKey {
                 oid,
                 ty: JObjType::Inode,
-            }
+            },
         }
     }
 }
@@ -226,7 +229,10 @@ pub enum ChildrenOrHardlinkCount {
 
 impl InodeInternalFlags {
     pub fn inherited() -> Self {
-        Self::MAINTAINS_DIR_STATS | Self::HAS_RSRC_FORK | Self::HAS_NO_RSRC_FORK | Self::HAS_FINDER_INFO
+        Self::MAINTAINS_DIR_STATS
+            | Self::HAS_RSRC_FORK
+            | Self::HAS_NO_RSRC_FORK
+            | Self::HAS_FINDER_INFO
     }
     pub fn cloned() -> Self {
         Self::HAS_RSRC_FORK | Self::HAS_NO_RSRC_FORK | Self::HAS_FINDER_INFO
@@ -249,7 +255,8 @@ impl JInodeVal {
 
         let internal_flags = InodeInternalFlags::from_bits(read_u64(bytes, &mut offset)).unwrap();
         let children_or_hardlink_count = read_u32(bytes, &mut offset) as i32;
-        let default_protection_class = ProtectionClass::from_u32(read_u32(bytes, &mut offset)).unwrap();
+        let default_protection_class =
+            ProtectionClass::from_u32(read_u32(bytes, &mut offset)).unwrap();
         let write_generation_counter = read_u32(bytes, &mut offset);
         let bsd_flags = read_u32(bytes, &mut offset);
 
@@ -282,7 +289,9 @@ impl JInodeVal {
 
             internal_flags,
             children_or_hardlink_count: match ty {
-                InodeType::Dir => ChildrenOrHardlinkCount::ChildrenCount(children_or_hardlink_count),
+                InodeType::Dir => {
+                    ChildrenOrHardlinkCount::ChildrenCount(children_or_hardlink_count)
+                }
                 _ => ChildrenOrHardlinkCount::HardlinkCount(children_or_hardlink_count),
             },
             default_protection_class,
@@ -303,19 +312,33 @@ impl JInodeVal {
     }
     fn datastream(&self) -> Option<&JDatastream> {
         if let Some(ext) = self.extended_fields.as_ref() {
-            ext.fields.iter().find(|(k, _)| k.ty == InodeXfieldType::Dstream).map(|(_, v)| v.as_dstream().unwrap())
+            ext.fields
+                .iter()
+                .find(|(k, _)| k.ty == InodeXfieldType::Dstream)
+                .map(|(_, v)| v.as_dstream().unwrap())
         } else {
             None
         }
     }
     pub fn rdev(&self) -> u32 {
-        self.extended_fields.as_ref().map(|ext| ext.fields.iter().find(|(k, _)| k.ty == InodeXfieldType::Rdev).map(|(_, v)| v.as_rdev().unwrap()).unwrap_or(0)).unwrap_or(0)
+        self.extended_fields
+            .as_ref()
+            .map(|ext| {
+                ext.fields
+                    .iter()
+                    .find(|(k, _)| k.ty == InodeXfieldType::Rdev)
+                    .map(|(_, v)| v.as_rdev().unwrap())
+                    .unwrap_or(0)
+            })
+            .unwrap_or(0)
     }
     pub fn size(&self) -> u64 {
         self.datastream().map(|dstream| dstream.size).unwrap_or(0)
     }
     pub fn block_count(&self, block_size: u32) -> u64 {
-        self.datastream().map(|dstream| dstream.allocated_size / u64::from(block_size)).unwrap_or(0)
+        self.datastream()
+            .map(|dstream| dstream.allocated_size / u64::from(block_size))
+            .unwrap_or(0)
     }
 }
 
@@ -333,10 +356,7 @@ impl JDrecKey {
 
         let name = String::from_utf8(bytes[offset..offset + (name_len - 1)].to_owned()).unwrap();
 
-        Self {
-            header,
-            name,
-        }
+        Self { header, name }
     }
     pub fn new(oid: ObjectIdentifier, name: String) -> Self {
         Self {
@@ -354,8 +374,7 @@ impl JDrecKey {
 
 impl Ord for JDrecKey {
     fn cmp(&self, with: &Self) -> Ordering {
-        Ord::cmp(&self.header, &with.header)
-            .then(Ord::cmp(&self.name, &with.name))
+        Ord::cmp(&self.header, &with.header).then(Ord::cmp(&self.name, &with.name))
     }
 }
 impl PartialOrd for JDrecKey {
@@ -388,8 +407,7 @@ impl JDrecHashedKey {
 
 impl Ord for JDrecHashedKey {
     fn cmp(&self, with: &Self) -> Ordering {
-        Ord::cmp(&self.header, &with.header)
-            .then(Ord::cmp(&self.name, &with.name))
+        Ord::cmp(&self.header, &with.header).then(Ord::cmp(&self.name, &with.name))
     }
 }
 impl PartialOrd for JDrecHashedKey {
@@ -413,11 +431,7 @@ impl JDrecHashedKey {
 
         let name = String::from_utf8(bytes[offset..offset + (name_len - 1)].to_owned()).unwrap();
 
-        Self {
-            header,
-            name,
-            hash,
-        }
+        Self { header, name, hash }
     }
 }
 
@@ -528,12 +542,9 @@ impl JXattrKey {
 
         let header = read_jkey(bytes, &mut offset);
         let name_length = read_u16(bytes, &mut offset) as usize;
-        let name = String::from_utf8(bytes[offset .. offset + (name_length - 1)].to_owned()).unwrap();
+        let name = String::from_utf8(bytes[offset..offset + (name_length - 1)].to_owned()).unwrap();
 
-        Self {
-            header,
-            name,
-        }
+        Self { header, name }
     }
     pub fn new(oid: ObjectIdentifier, name: String) -> Self {
         Self {
@@ -551,8 +562,7 @@ impl JXattrKey {
 
 impl Ord for JXattrKey {
     fn cmp(&self, with: &Self) -> Ordering {
-        Ord::cmp(&self.header, &with.header)
-            .then(Ord::cmp(&self.name, &with.name))
+        Ord::cmp(&self.header, &with.header).then(Ord::cmp(&self.name, &with.name))
     }
 }
 impl PartialOrd for JXattrKey {
@@ -586,8 +596,10 @@ impl JXattrVal {
         let len = read_u16(bytes, &mut offset);
 
         let embedded = if flags.contains(XattrFlags::DATA_EMBEDDED) {
-            Some(bytes[offset .. offset + len as usize].to_owned())
-        } else { None };
+            Some(bytes[offset..offset + len as usize].to_owned())
+        } else {
+            None
+        };
 
         Self {
             flags,
@@ -723,7 +735,9 @@ impl<T: XfieldType> Xblob<T> {
         let metadata_offset = offset;
         let mut values_offset = offset + metadata_bytes;
 
-        let fields = (0..ext_count as usize).map(|i| Xfield::parse(&bytes, metadata_offset + i * xfield_len, &mut values_offset)).collect();
+        let fields = (0..ext_count as usize)
+            .map(|i| Xfield::parse(&bytes, metadata_offset + i * xfield_len, &mut values_offset))
+            .collect();
 
         Self {
             ext_count,
@@ -783,8 +797,12 @@ impl XfieldType for InodeXfieldType {
     fn parse(bytes: &[u8], ty: Self) -> XfieldValue {
         match ty {
             InodeXfieldType::SnapshotXid => XfieldValue::SnapshotXid(fal::read_u64(bytes, 0)),
-            InodeXfieldType::DeltaTreeOid => XfieldValue::DeltaTreeOid(fal::read_u64(bytes, 0).into()),
-            InodeXfieldType::Name => XfieldValue::Name(String::from_utf8(bytes[..bytes.len() - 1].to_owned()).unwrap()),
+            InodeXfieldType::DeltaTreeOid => {
+                XfieldValue::DeltaTreeOid(fal::read_u64(bytes, 0).into())
+            }
+            InodeXfieldType::Name => {
+                XfieldValue::Name(String::from_utf8(bytes[..bytes.len() - 1].to_owned()).unwrap())
+            }
             InodeXfieldType::Dstream => XfieldValue::Dstream(JDatastream::parse(bytes)),
             InodeXfieldType::Rdev => XfieldValue::Rdev(fal::read_u32(bytes, 0)),
             other => unimplemented!("Xattr type {:?}", other),
@@ -841,7 +859,10 @@ impl<T: XfieldType> Xfield<T> {
             flags: XfieldFlags::from_bits(read_u8(bytes, &mut offset)).unwrap(),
             size: read_u16(bytes, &mut offset),
         };
-        let value = XfieldType::parse(&bytes[*value_offset..*value_offset + key.size as usize], key.ty);
+        let value = XfieldType::parse(
+            &bytes[*value_offset..*value_offset + key.size as usize],
+            key.ty,
+        );
         *value_offset += fal::align(key.size as usize, 8);
         (key, value)
     }

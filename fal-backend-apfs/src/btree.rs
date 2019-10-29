@@ -1,10 +1,15 @@
 use bitflags::bitflags;
 
 use crate::{
-    fsobjects::{JAnyKey, JInodeKey, JDrecKey, JDrecHashedKey, JDirStatsKey, JKey, JXattrKey, JXattrVal, JDatastreamIdKey, JDatastreamIdVal, JDrecVal, JInodeVal, JFileExtentKey, JFileExtentVal},
-    omap::{Omap, OmapKey, OmapValue},
+    fsobjects::{
+        JAnyKey, JDatastreamIdKey, JDatastreamIdVal, JDirStatsKey, JDrecHashedKey, JDrecKey,
+        JDrecVal, JFileExtentKey, JFileExtentVal, JInodeKey, JInodeVal, JKey, JXattrKey, JXattrVal,
+    },
+    omap::{Omap, OmapKey, OmapValue, Resolver},
+    read_block, read_obj_phys,
+    spacemanager::SpacemanagerFreeQueueKey,
     superblock::NxSuperblock,
-    BlockAddr, ObjPhys, ObjectIdentifier, ObjectType, read_block, read_obj_phys,
+    BlockAddr, ObjPhys, ObjectIdentifier, ObjectType,
 };
 
 use fal::parsing::{read_u16, read_u32, read_u64};
@@ -81,6 +86,15 @@ impl BTreeInfoFixed {
             key_size: read_u32(bytes, &mut offset),
             val_size: read_u32(bytes, &mut offset),
         }
+    }
+    pub fn is_virtual(&self) -> bool {
+        !self.is_physical() && !self.is_ephemeral()
+    }
+    pub fn is_physical(&self) -> bool {
+        self.flags.contains(BTreeFlags::PHYSICAL)
+    }
+    pub fn is_ephemeral(&self) -> bool {
+        self.flags.contains(BTreeFlags::EPHEMERAL)
     }
 }
 
@@ -192,6 +206,7 @@ pub struct BTreeNode {
 pub enum BTreeKey {
     OmapKey(OmapKey),
     FsLayerKey(JAnyKey),
+    SpacemanFreeQueueKey(SpacemanagerFreeQueueKey),
 }
 
 impl BTreeKey {
@@ -229,6 +244,7 @@ pub enum BTreeValue {
     DatastreamId(JDatastreamIdVal),
     FileExtent(JFileExtentVal),
     Xattr(JXattrVal),
+    SpacemanBlockCount(u64), // TODO: What does this number really represent?
     Ghost,
 }
 
@@ -371,11 +387,11 @@ impl BTreeNode {
             toc,
         }
     }
-    fn get_generic<D: fal::Device>(
-        &self,
+    fn get_generic<'a, D: fal::Device>(
+        &'a self,
         device: &mut D,
         superblock: &NxSuperblock,
-        omap: Option<&Omap>,
+        resolver: Resolver<'a, 'a>,
         key: &BTreeKey,
         info: &BTreeInfoFixed,
         compare: Compare,
@@ -385,7 +401,10 @@ impl BTreeNode {
 
         let leaf_index = loop {
             if path.last().unwrap().0.is_leaf() {
-                match path.last().unwrap().0
+                match path
+                    .last()
+                    .unwrap()
+                    .0
                     .current_node_keys(info)
                     .position(|k| compare(&k, key) == Ordering::Equal)
                 {
@@ -393,32 +412,40 @@ impl BTreeNode {
                     None => return None,
                 };
             } else {
-                let (index, _) =
-                    match path.last().unwrap().0.current_node_closest_key(key, info, compare) {
-                        Some(t) => t,
-                        None => return None,
-                    };
-
-                let ptr = path.last().unwrap().0.internal_key_ptr(index, info).unwrap();
-                let baddr = if let Some(omap) = omap {
-                    let omap_val = omap.get_partial_latest(device, superblock, OmapKey::partial(ptr)).unwrap().1;
-                    assert_eq!(omap_val.size, superblock.block_size);
-                    omap_val.paddr
-                } else {
-                    ptr.0 as i64
+                let (index, _) = match path
+                    .last()
+                    .unwrap()
+                    .0
+                    .current_node_closest_key(key, info, compare)
+                {
+                    Some(t) => t,
+                    None => return None,
                 };
 
-                let subtree = Self::load(
-                    device,
-                    superblock,
-                    baddr,
-                );
-                assert_eq!(subtree.level, path.last().unwrap().0.level - 1);
+                let ptr = path
+                    .last()
+                    .unwrap()
+                    .0
+                    .internal_key_ptr(index, info)
+                    .unwrap();
 
-                if omap.is_none() && subtree.header.object_type.is_virtual() {
-                    panic!("Loaded a virtual subtree without access to an omap");
-                }
-                path.push((Cow::Owned(subtree), index));
+                let subtree = match resolver {
+                    Resolver::Physical => Cow::Owned(Self::load(device, superblock, ptr.0 as i64)),
+                    Resolver::Virtual(omap) => {
+                        let omap_val = omap
+                            .get_partial_latest(device, superblock, OmapKey::partial(ptr))
+                            .unwrap()
+                            .1;
+                        assert_eq!(omap_val.size, superblock.block_size);
+                        Cow::Owned(Self::load(device, superblock, omap_val.paddr))
+                    }
+                    Resolver::Ephemeral(map) => Cow::Borrowed(map[&ptr].as_btree_node().unwrap()),
+                };
+
+                assert_eq!(subtree.level, path.last().unwrap().0.level - 1);
+                assert!(self.complies_with(subtree.as_ref(), resolver));
+
+                path.push((subtree, index));
                 continue;
             }
         };
@@ -438,7 +465,10 @@ impl BTreeNode {
         self.flags.contains(BTreeNodeFlags::LEAF)
     }
     fn current_node_key(&self, index: usize, info: &BTreeInfoFixed) -> Option<BTreeKey> {
-        let toc_entry = match self.toc.get(index, info.key_size as u16, info.val_size as u16) {
+        let toc_entry = match self
+            .toc
+            .get(index, info.key_size as u16, info.val_size as u16)
+        {
             Some(entry) => entry,
             None => return None,
         };
@@ -447,8 +477,9 @@ impl BTreeNode {
 
         Some(match self.header.object_subtype {
             ObjectType::ObjectMap => BTreeKey::OmapKey(OmapKey::parse(key_bytes)),
-            ObjectType::FsTree => {
-                BTreeKey::parse_jkey(key_bytes)
+            ObjectType::FsTree => BTreeKey::parse_jkey(key_bytes),
+            ObjectType::SpaceManagerFreeQueue => {
+                BTreeKey::SpacemanFreeQueueKey(SpacemanagerFreeQueueKey::parse(key_bytes))
             }
             ty => unimplemented!("B+ tree subtype {:?}", ty),
         })
@@ -467,7 +498,10 @@ impl BTreeNode {
     fn leaf_value(&self, index: usize, info: &BTreeInfoFixed) -> Option<BTreeValue> {
         assert!(self.is_leaf());
 
-        let toc_entry = match self.toc.get(index, info.key_size as u16, info.val_size as u16) {
+        let toc_entry = match self
+            .toc
+            .get(index, info.key_size as u16, info.val_size as u16)
+        {
             Some(entry) => entry,
             None => return None,
         };
@@ -482,26 +516,28 @@ impl BTreeNode {
 
         let value_bytes = &self.keyval_area[start..start + toc_entry.value.len as usize];
 
-        match self.header.object_subtype {
-            ObjectType::ObjectMap => Some(BTreeValue::OmapValue(OmapValue::parse(&value_bytes))),
+        Some(match self.header.object_subtype {
+            ObjectType::ObjectMap => BTreeValue::OmapValue(OmapValue::parse(&value_bytes)),
             ObjectType::FsTree => {
                 let key_bytes =
                     &self.keyval_area[toc_entry.key.start as usize..toc_entry.key.end() as usize];
                 let jkey = JKey::parse(key_bytes);
 
-                Some(BTreeValue::parse_from_jkey(&jkey, value_bytes))
+                BTreeValue::parse_from_jkey(&jkey, value_bytes)
+            }
+            ObjectType::SpaceManagerFreeQueue => {
+                BTreeValue::SpacemanBlockCount(read_u64(value_bytes, &mut 0))
             }
             other => unimplemented!("leaf_value from a tree with subtype: {:?}", other),
-        }
+        })
     }
-    fn internal_key_ptr(
-        &self,
-        index: usize,
-        info: &BTreeInfoFixed,
-    ) -> Option<ObjectIdentifier> {
+    fn internal_key_ptr(&self, index: usize, info: &BTreeInfoFixed) -> Option<ObjectIdentifier> {
         assert!(!self.is_leaf());
 
-        let toc_entry = match self.toc.get(index, info.key_size as u16, info.val_size as u16) {
+        let toc_entry = match self
+            .toc
+            .get(index, info.key_size as u16, info.val_size as u16)
+        {
             Some(entry) => entry,
             None => return None,
         };
@@ -516,8 +552,35 @@ impl BTreeNode {
         &'a self,
         info: &'a BTreeInfoFixed,
     ) -> impl Iterator<Item = BTreeKey> + 'a {
-        (0..self.key_count as usize)
-            .map(move |i| self.current_node_key(i, info).unwrap())
+        (0..self.key_count as usize).map(move |i| self.current_node_key(i, info).unwrap())
+    }
+    fn complies_with(&self, subtree: &Self, resolver: Resolver<'_, '_>) -> bool {
+        self.complies_with_subtree(subtree) && self.complies_with_resolver(resolver)
+    }
+    fn complies_with_subtree(&self, subtree: &Self) -> bool {
+        let info = self
+            .info
+            .expect("Calling complies_with from a non-root node")
+            .fixed;
+
+        // TODO: Introduct some enum that allows this to not happen.
+        ((info.is_ephemeral() == self.header.is_ephemeral())
+            && (info.is_ephemeral()) == subtree.header.is_ephemeral())
+            && ((info.is_virtual() == self.header.is_virtual())
+                && (info.is_virtual()) == subtree.header.is_virtual())
+            && ((info.is_physical() == self.header.is_physical())
+                && (info.is_physical()) == subtree.header.is_physical())
+    }
+    fn complies_with_resolver(&self, resolver: Resolver<'_, '_>) -> bool {
+        let info = self
+            .info
+            .expect("Calling complies_with from a non-root node")
+            .fixed;
+
+        /*(info.is_virtual() == resolver.is_virtual())
+        && (info.is_physical() == resolver.is_physical())
+        && (info.is_ephemeral() == resolver.is_ephemeral())*/
+        true
     }
 }
 
@@ -541,48 +604,40 @@ impl BTree {
     pub fn info(&self) -> &BTreeInfo {
         self.root.info.as_ref().unwrap()
     }
-    pub fn get_generic<D: fal::Device>(
-        &self,
+    pub fn get_generic<'a, D: fal::Device>(
+        &'a self,
         device: &mut D,
         superblock: &NxSuperblock,
-        omap: Option<&Omap>,
+        resolver: Resolver<'a, 'a>,
         key: &BTreeKey,
         compare: Compare,
     ) -> Option<((BTreeKey, BTreeValue), Path)> {
         let fixed = &self.root.info.unwrap().fixed;
-        self.root.get_generic(
-            device,
-            superblock,
-            omap,
-            key,
-            fixed,
-            compare,
-        )
+        self.root
+            .get_generic(device, superblock, resolver, key, fixed, compare)
     }
-    pub fn get<D: fal::Device>(
+    pub fn get<'a, D: fal::Device>(
         &self,
         device: &mut D,
         superblock: &NxSuperblock,
-        omap: Option<&Omap>,
+        resolver: Resolver<'a, 'a>,
         key: &BTreeKey,
     ) -> Option<BTreeValue> {
-        self.get_generic(device, superblock, omap, key, Ord::cmp)
+        self.get_generic(device, superblock, resolver, key, Ord::cmp)
             .map(|((_, value), _)| value)
     }
     pub fn pairs<'a, D: fal::Device>(
         &'a self,
         device: &'a mut D,
         superblock: &'a NxSuperblock,
-        omap: Option<&'a Omap>,
+        resolver: Resolver<'a, 'a>,
     ) -> Pairs<'a, 'a, D> {
-        if omap.is_none() && self.root.header.object_type.is_virtual() {
-            panic!("Iterating over the pairs of a virtual object (tree) without an omap.");
-        }
+        assert!(self.root.complies_with_resolver(resolver));
 
         Pairs {
             device,
             superblock,
-            omap,
+            resolver,
             path: vec![(Cow::Borrowed(&self.root), 0)],
 
             compare: always_equal,
@@ -593,26 +648,24 @@ impl BTree {
         &'a self,
         device: &'a mut D,
         superblock: &'a NxSuperblock,
-        omap: Option<&'a Omap>,
+        resolver: Resolver<'a, 'a>,
         key: &BTreeKey,
         compare: Compare,
     ) -> Option<Pairs<'a, 'a, D>> {
         let path = match self
-            .get_generic(device, superblock, omap, key, compare)
+            .get_generic(device, superblock, resolver, key, compare)
             .map(|(_, path)| path)
         {
             Some(p) => p,
             None => return None,
         };
 
-        if omap.is_none() && self.root.header.object_type.is_virtual() {
-            panic!("Iterating over the pairs of a virtual object (tree) without an omap.");
-        }
+        assert!(self.root.complies_with_resolver(resolver));
 
         Some(Pairs {
             device,
             superblock,
-            omap,
+            resolver,
             path,
 
             compare,
@@ -623,17 +676,17 @@ impl BTree {
         &'a self,
         device: &'a mut D,
         superblock: &'a NxSuperblock,
-        omap: Option<&'a Omap>,
+        resolver: Resolver<'a, 'a>,
     ) -> impl Iterator<Item = BTreeKey> + 'a {
-        self.pairs(device, superblock, omap).map(|(k, _)| k)
+        self.pairs(device, superblock, resolver).map(|(k, _)| k)
     }
     pub fn values<'a, D: fal::Device>(
         &'a self,
         device: &'a mut D,
         superblock: &'a NxSuperblock,
-        omap: Option<&'a Omap>,
+        resolver: Resolver<'a, 'a>,
     ) -> impl Iterator<Item = BTreeValue> + 'a {
-        self.pairs(device, superblock, omap).map(|(_, v)| v)
+        self.pairs(device, superblock, resolver).map(|(_, v)| v)
     }
 }
 
@@ -642,7 +695,7 @@ pub struct Pairs<'a, 'b, D: fal::Device> {
     pub(crate) device: &'b mut D,
     pub(crate) superblock: &'b NxSuperblock,
     pub(crate) path: Path<'a>,
-    pub(crate) omap: Option<&'b Omap>,
+    pub(crate) resolver: Resolver<'b, 'a>,
 
     pub(crate) compare: Compare,
     pub(crate) previous_key: Option<BTreeKey>,
@@ -667,10 +720,7 @@ impl<'a, 'b, D: fal::Device> Iterator for Pairs<'a, 'b, D> {
 
         let action = if current_tree.is_leaf() {
             // Leaf
-            match current_tree.current_node_key(
-                *current_index,
-                &info,
-            ) {
+            match current_tree.current_node_key(*current_index, &info) {
                 Some(key) => {
                     // If there is a pair available, just yield it and continue.
                     if let Some(previous_key) = &self.previous_key {
@@ -680,10 +730,7 @@ impl<'a, 'b, D: fal::Device> Iterator for Pairs<'a, 'b, D> {
                         }
                     }
                     self.previous_key = Some(key.clone()); // TODO: Either we clone the key and store the previous key directly, or we store the last tree when transitioning into a new tree.
-                    let value = match current_tree.leaf_value(
-                        *current_index,
-                        &info,
-                    ) {
+                    let value = match current_tree.leaf_value(*current_index, &info) {
                         Some(v) => v,
                         None => return None,
                     };
@@ -698,10 +745,7 @@ impl<'a, 'b, D: fal::Device> Iterator for Pairs<'a, 'b, D> {
             }
         } else {
             // Internal
-            match current_tree.internal_key_ptr(
-                *current_index,
-                &info,
-            ) {
+            match current_tree.internal_key_ptr(*current_index, &info) {
                 Some(ptr) => {
                     // If there is a new undiscovered leaf node, we climb up the tree (closer
                     // to the leaves), and search it.
@@ -717,33 +761,14 @@ impl<'a, 'b, D: fal::Device> Iterator for Pairs<'a, 'b, D> {
 
         match action {
             Action::ClimbUp(ptr) => self.path.push((
-                Cow::Owned({
-                    // If the subtree ptrs are virtual, then make sure nothing bad happens without
-                    // noticing.
-
-                    let baddr = match self.omap {
-                        Some(omap) => {
-                            omap.get_partial_latest(
-                                self.device,
-                                self.superblock,
-                                OmapKey::partial(ptr),
-                            )
-                            .unwrap()
-                            .1
-                            .paddr
-                        }
-                        None => ptr.0 as i64,
-                    };
-
-                    let subtree = BTreeNode::load(self.device, self.superblock, baddr);
-
-                    assert_eq!(subtree.level, self.path.last().unwrap().0.level - 1);
-
-                    if self.omap.is_none() && subtree.header.object_type.is_virtual() {
-                        panic!("Loaded a virtual subtree without access to an omap");
-                    }
-                    subtree
-                }),
+                load_subtree(
+                    self.device,
+                    self.superblock,
+                    &self.path[0].0,
+                    &self.path,
+                    self.resolver,
+                    ptr,
+                ),
                 0,
             )),
 
@@ -761,4 +786,30 @@ impl<'a, 'b, D: fal::Device> Iterator for Pairs<'a, 'b, D> {
         // Recurse until another pair is found or until the entire tree has been traversed.
         self.next()
     }
+}
+
+fn load_subtree<'a, 'b, D: fal::Device>(
+    device: &mut D,
+    superblock: &NxSuperblock,
+    root: &BTreeNode,
+    path: &Path<'a>,
+    resolver: Resolver<'b, 'a>,
+    ptr: ObjectIdentifier,
+) -> Cow<'a, BTreeNode> {
+    let subtree = match resolver {
+        Resolver::Physical => Cow::Owned(BTreeNode::load(device, superblock, ptr.0 as i64)),
+        Resolver::Virtual(omap) => {
+            let omap_val = omap
+                .get_partial_latest(device, superblock, OmapKey::partial(ptr))
+                .unwrap()
+                .1;
+            assert_eq!(omap_val.size, superblock.block_size);
+            Cow::Owned(BTreeNode::load(device, superblock, omap_val.paddr))
+        }
+        Resolver::Ephemeral(map) => Cow::Borrowed(map[&ptr].as_btree_node().unwrap()),
+    };
+
+    assert_eq!(subtree.level, path.last().unwrap().0.level - 1);
+    assert!(root.complies_with(subtree.as_ref(), resolver));
+    subtree
 }

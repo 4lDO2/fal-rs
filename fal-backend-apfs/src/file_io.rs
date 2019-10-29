@@ -1,8 +1,11 @@
-use fal::time::Timespec;
 use crate::{
     btree::{BTreeKey, Path},
-    fsobjects::{ChildrenOrHardlinkCount, InodeType, JDrecType, JInodeKey, JInodeVal, JFileExtentKey, JFileExtentVal},
+    fsobjects::{
+        ChildrenOrHardlinkCount, InodeType, JDrecType, JFileExtentKey, JFileExtentVal, JInodeKey,
+        JInodeVal,
+    },
 };
+use fal::time::Timespec;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Inode {

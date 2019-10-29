@@ -99,6 +99,18 @@ impl GenericObject {
             _ => None,
         }
     }
+    pub fn as_reaper(&self) -> Option<&ReaperPhys> {
+        match self {
+            Self::Reaper(r) => Some(r),
+            _ => None,
+        }
+    }
+    pub fn as_btree_node(&self) -> Option<&BTreeNode> {
+        match self {
+            Self::BTreeNode(n) => Some(n),
+            _ => None,
+        }
+    }
 }
 
 impl CheckpointDescAreaEntry {

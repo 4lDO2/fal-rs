@@ -50,6 +50,10 @@ pub struct SpacemanagerFreeQueue {
 }
 
 impl SpacemanagerFreeQueue {
+    pub const INTERNAL_POOL_IDX: usize = 0;
+    pub const MAIN_IDX: usize = 1;
+    pub const TIER2_IDX: usize = 2;
+
     pub const LEN: usize = 40;
 
     pub fn parse(bytes: &[u8]) -> Self {
@@ -202,5 +206,29 @@ impl SpacemanagerPhys {
     }
     pub fn tier2_device(&self) -> &SpacemanagerDevice {
         &self.devices[SpacemanagerDevice::TIER2_IDX]
+    }
+    pub fn internal_pool_fq(&self) -> &SpacemanagerFreeQueue {
+        &self.free_queues[SpacemanagerFreeQueue::INTERNAL_POOL_IDX]
+    }
+    pub fn main_fq(&self) -> &SpacemanagerFreeQueue {
+        &self.free_queues[SpacemanagerFreeQueue::MAIN_IDX]
+    }
+    pub fn tier2_fq(&self) -> &SpacemanagerFreeQueue {
+        &self.free_queues[SpacemanagerFreeQueue::TIER2_IDX]
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct SpacemanagerFreeQueueKey {
+    pub xid: TransactionIdentifier,
+    pub physaddr: BlockAddr,
+}
+
+impl SpacemanagerFreeQueueKey {
+    pub fn parse(bytes: &[u8]) -> Self {
+        Self {
+            xid: read_u64(bytes, 0),
+            physaddr: read_u64(bytes, 8) as i64,
+        }
     }
 }

@@ -1,11 +1,12 @@
 use crate::{
     btree::{BTree, BTreeKey},
-    read_block, read_obj_phys,
+    checkpoint, read_block, read_obj_phys,
     superblock::NxSuperblock,
     BlockAddr, ObjPhys, ObjectIdentifier, ObjectTypeAndFlags, TransactionIdentifier,
 };
 use fal::parsing::{read_u32, read_u64};
-use std::cmp::Ordering;
+
+use std::{cmp::Ordering, collections::HashMap};
 
 use bitflags::bitflags;
 
@@ -154,7 +155,12 @@ impl Omap {
         // Make sure that we aren't using a partial key accidentally.
         debug_assert_ne!(key.xid, 0);
         self.tree
-            .get(device, superblock, None, &BTreeKey::OmapKey(key))
+            .get(
+                device,
+                superblock,
+                Resolver::Physical,
+                &BTreeKey::OmapKey(key),
+            )
             .map(|v| v.into_omap_value().unwrap())
     }
     pub fn get_partial<'a, D: fal::Device>(
@@ -167,7 +173,7 @@ impl Omap {
             .similar_pairs(
                 device,
                 superblock,
-                None,
+                Resolver::Virtual(self),
                 &BTreeKey::OmapKey(key),
                 OmapKey::compare_partial,
             )
@@ -190,6 +196,39 @@ impl Omap {
         }) {
             Some(Some(t)) => Some(t),
             _ => None,
+        }
+    }
+}
+
+pub type EphemeralMap = HashMap<ObjectIdentifier, checkpoint::GenericObject>;
+
+#[derive(Clone, Copy, Debug)]
+pub enum Resolver<'a, 'b> {
+    Physical,
+    Virtual(&'a Omap),
+    Ephemeral(&'b EphemeralMap),
+}
+
+impl Resolver<'_, '_> {
+    pub fn is_physical(self) -> bool {
+        if let Self::Physical = self {
+            true
+        } else {
+            false
+        }
+    }
+    pub fn is_virtual(self) -> bool {
+        if let Self::Virtual(_) = self {
+            true
+        } else {
+            false
+        }
+    }
+    pub fn is_ephemeral(self) -> bool {
+        if let Self::Ephemeral(_) = self {
+            true
+        } else {
+            false
         }
     }
 }

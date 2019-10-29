@@ -231,10 +231,7 @@ impl<Backend: fal::FilesystemMut<File>> fuse::Filesystem for FuseFilesystem<Back
             }
         };
 
-        assert_eq!(
-            inode.into(),
-            self.inner().fh_inode(fh).attrs().inode.into()
-        );
+        assert_eq!(inode.into(), self.inner().fh_inode(fh).attrs().inode.into());
 
         match self.inner().read_directory(fh, offset) {
             Ok(Some(entry)) => {

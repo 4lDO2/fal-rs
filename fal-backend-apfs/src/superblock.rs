@@ -7,8 +7,8 @@ use uuid::Uuid;
 use fal::{read_u16, read_u32, read_u64, read_uuid, write_u32, write_u64, write_uuid};
 
 use crate::{
-    BlockAddr, BlockRange, ObjPhys, ObjectIdentifier, ObjectTypeAndFlags, TransactionIdentifier,
-    crypto::WrappedMetaCryptoState,
+    crypto::WrappedMetaCryptoState, BlockAddr, BlockRange, ObjPhys, ObjectIdentifier,
+    ObjectTypeAndFlags, TransactionIdentifier,
 };
 
 bitflags! {
@@ -392,7 +392,6 @@ impl ApfsModifiedBy {
         }
     }
 }
-
 
 impl ApfsSuperblock {
     pub const MAGIC: u32 = 0x42535041; // 'BSPA'

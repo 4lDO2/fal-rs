@@ -1,5 +1,5 @@
-use fal::parsing::{read_u16, read_u32};
 use enum_primitive::*;
+use fal::parsing::{read_u16, read_u32};
 
 #[derive(Clone, Debug)]
 pub struct CryptoFlags;

@@ -5,8 +5,8 @@ use std::{
 };
 
 use crate::{
-    block_group, os_str_to_bytes, os_string_from_bytes, read_block, read_block_to,
-    read_u16, read_u32, read_u8,
+    block_group, os_str_to_bytes, os_string_from_bytes, read_block, read_block_to, read_u16,
+    read_u32, read_u8,
     superblock::{OptionalFeatureFlags, OsId, RequiredFeatureFlags, RoFeatureFlags, Superblock},
     write_block, write_u16, write_u32, write_u8, Filesystem,
 };
