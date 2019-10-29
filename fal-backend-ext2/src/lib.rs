@@ -353,12 +353,12 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
 
     fn filesystem_attrs(&self) -> fal::FsAttributes {
         fal::FsAttributes {
-            block_size: self.superblock.block_size as u32,
-            free_blocks: self.superblock.unalloc_block_count,
-            available_blocks: self.superblock.unalloc_block_count, // TODO: What role does reserved_block_count have?
+            block_size: self.superblock.block_size,
+            free_blocks: self.superblock.unalloc_block_count.into(),
+            available_blocks: self.superblock.unalloc_block_count.into(), // TODO: What role does reserved_block_count have?
             free_inodes: self.superblock.unalloc_inode_count.into(),
             inode_count: self.superblock.inode_count.into(),
-            total_blocks: self.superblock.block_count,
+            total_blocks: self.superblock.block_count.into(),
             max_fname_len: 255,
         }
     }

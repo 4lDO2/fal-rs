@@ -4,21 +4,21 @@ use crate::{ObjPhys, ObjectIdentifier, TransactionIdentifier};
 
 #[derive(Debug)]
 pub struct ReaperPhys {
-    header: ObjPhys,
-    next_reaper_id: u64,
-    completed_id: u64,
-    head: ObjectIdentifier,
-    tail: ObjectIdentifier,
-    flags: u32,
-    rlcount: u32,
-    ty: u32,
-    size: u32,
-    fs_oid: ObjectIdentifier,
-    oid: ObjectIdentifier,
-    xid: TransactionIdentifier,
-    nrle_flags: u32,
-    state_buffer_size: u32,
-    state_buffer: Vec<u8>,
+    pub header: ObjPhys,
+    pub next_reaper_id: u64,
+    pub completed_id: u64,
+    pub head: ObjectIdentifier,
+    pub tail: ObjectIdentifier,
+    pub flags: u32,
+    pub rlcount: u32,
+    pub ty: u32,
+    pub size: u32,
+    pub fs_oid: ObjectIdentifier,
+    pub oid: ObjectIdentifier,
+    pub xid: TransactionIdentifier,
+    pub nrle_flags: u32,
+    pub state_buffer_size: u32,
+    pub state_buffer: Vec<u8>,
 }
 
 impl ReaperPhys {

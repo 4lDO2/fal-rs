@@ -84,6 +84,23 @@ pub enum GenericObject {
     Null,
 }
 
+impl GenericObject {
+    pub fn header(&self) -> &ObjPhys {
+        match self {
+            Self::SpaceManager(s) => &s.header,
+            Self::Reaper(r) => &r.header,
+            Self::BTreeNode(n) => &n.header,
+            Self::Null => panic!(),
+        }
+    }
+    pub fn as_spacemanager(&self) -> Option<&SpacemanagerPhys> {
+        match self {
+            Self::SpaceManager(s) => Some(s),
+            _ => None,
+        }
+    }
+}
+
 impl CheckpointDescAreaEntry {
     pub fn into_superblock(self) -> Option<NxSuperblock> {
         match self {

@@ -1,23 +1,28 @@
 use std::ops::Range;
 
+use arrayvec::ArrayVec;
+use bitflags::bitflags;
+
 use fal::{read_u16, read_u32, read_u64};
 
 use crate::{BlockAddr, ObjPhys, ObjectIdentifier, TransactionIdentifier};
 
 #[derive(Debug)]
 pub struct SpacemanagerDevice {
-    block_count: u64,
-    chunk_count: u64,
-    cib_count: u32,
-    cab_count: u32,
-    free_count: u64,
-    addr_offset: u32,
-    reserved: u32,
-    reserved2: u64,
+    pub block_count: u64,
+    pub chunk_count: u64,
+    pub cib_count: u32,
+    pub cab_count: u32,
+    pub free_count: u64,
+    pub addr_offset: u32,
+    pub reserved: u32,
+    pub reserved2: u64,
 }
 impl SpacemanagerDevice {
     pub const LEN: usize = 48;
-    pub const DEVICES_PER_SPACEMAN: usize = 2;
+
+    pub const MAIN_IDX: usize = 0;
+    pub const TIER2_IDX: usize = 1;
 
     pub fn parse(bytes: &[u8]) -> Self {
         Self {
@@ -35,13 +40,13 @@ impl SpacemanagerDevice {
 
 #[derive(Debug)]
 pub struct SpacemanagerFreeQueue {
-    count: u64,
-    tree_oid: ObjectIdentifier,
-    oldest_xid: TransactionIdentifier,
-    tree_node_limit: u16,
-    pad16: u16,
-    pad32: u32,
-    reserved: u64,
+    pub count: u64,
+    pub tree_oid: ObjectIdentifier,
+    pub oldest_xid: TransactionIdentifier,
+    pub tree_node_limit: u16,
+    pub pad16: u16,
+    pub pad32: u32,
+    pub reserved: u64,
 }
 
 impl SpacemanagerFreeQueue {
@@ -64,11 +69,11 @@ pub type SpacemanagerAllocZoneBoundaries = Range<u64>;
 
 #[derive(Debug)]
 pub struct SpacemanagerAllocZoneInfoPhys {
-    current_boundaries: SpacemanagerAllocZoneBoundaries,
-    previous_boundaries: Vec<SpacemanagerAllocZoneBoundaries>,
-    zone_id: u16,
-    previous_boundary_idx: u16,
-    reserved: u32,
+    pub current_boundaries: SpacemanagerAllocZoneBoundaries,
+    pub previous_boundaries: Vec<SpacemanagerAllocZoneBoundaries>,
+    pub zone_id: u16,
+    pub previous_boundary_idx: u16,
+    pub reserved: u32,
 }
 
 impl SpacemanagerAllocZoneInfoPhys {
@@ -113,6 +118,12 @@ impl SpacemanagerDatazoneInfoPhys {
     }
 }
 
+bitflags! {
+    pub struct SpacemanagerFlags: u32 {
+        const VERSIONED = 0x1;
+    }
+}
+
 #[derive(Debug)]
 pub struct SpacemanagerPhys {
     pub header: ObjPhys,
@@ -120,8 +131,8 @@ pub struct SpacemanagerPhys {
     pub blocks_per_chunk: u32,
     pub chunks_per_cib: u32,
     pub cibs_per_cab: u32,
-    pub devices: Vec<SpacemanagerDevice>,
-    pub flags: u32,
+    pub devices: ArrayVec<[SpacemanagerDevice; Self::DEVICE_COUNT]>,
+    pub flags: SpacemanagerFlags,
     pub ip_bm_tx_multiplier: u32,
     pub ip_block_count: u64,
     pub ip_bm_size_in_blocks: u32,
@@ -130,7 +141,7 @@ pub struct SpacemanagerPhys {
     pub ip_base: BlockAddr,
     pub fs_reserve_block_count: u64,
     pub fs_reserve_alloc_count: u64,
-    pub free_queues: Vec<SpacemanagerFreeQueue>,
+    pub free_queues: ArrayVec<[SpacemanagerFreeQueue; Self::FREE_QUEUE_COUNT]>,
     pub ip_bm_free_head: u16,
     pub ip_bm_free_tail: u16,
     pub ip_bm_xid_offset: u32,
@@ -143,6 +154,8 @@ pub struct SpacemanagerPhys {
 
 impl SpacemanagerPhys {
     pub const DEVICE_COUNT: usize = 2;
+    pub const FREE_QUEUE_COUNT: usize = 3;
+
     pub fn parse(bytes: &[u8]) -> Self {
         let header = ObjPhys::parse(bytes);
 
@@ -153,7 +166,7 @@ impl SpacemanagerPhys {
 
         // The free queues field starts at 200, and since SFQ_COUNT = 3 and LEN = 40, it stops at
         // 320.
-        let free_queues = (0..3)
+        let free_queues = (0..Self::FREE_QUEUE_COUNT)
             .map(|i| SpacemanagerFreeQueue::parse(&bytes[200 + i * 40..200 + (i + 1) * 40]))
             .collect();
 
@@ -164,7 +177,7 @@ impl SpacemanagerPhys {
             chunks_per_cib: read_u32(bytes, 40),
             cibs_per_cab: read_u32(bytes, 44),
             devices,
-            flags: read_u32(bytes, 144),
+            flags: SpacemanagerFlags::from_bits(read_u32(bytes, 144)).unwrap(),
             ip_bm_tx_multiplier: read_u32(bytes, 148),
             ip_block_count: read_u64(bytes, 152),
             ip_bm_size_in_blocks: read_u32(bytes, 160),
@@ -183,5 +196,11 @@ impl SpacemanagerPhys {
             struct_size: read_u32(bytes, 340),
             datazone: SpacemanagerDatazoneInfoPhys::parse(&bytes[344..]),
         }
+    }
+    pub fn main_device(&self) -> &SpacemanagerDevice {
+        &self.devices[SpacemanagerDevice::MAIN_IDX]
+    }
+    pub fn tier2_device(&self) -> &SpacemanagerDevice {
+        &self.devices[SpacemanagerDevice::TIER2_IDX]
     }
 }

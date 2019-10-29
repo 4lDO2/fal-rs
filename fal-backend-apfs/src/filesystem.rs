@@ -1,6 +1,5 @@
 use std::{
     borrow::Cow,
-    convert::TryFrom,
     collections::HashMap,
     ffi::OsStr,
     io::SeekFrom,
@@ -21,6 +20,7 @@ use crate::{
     },
     omap::{Omap, OmapKey, OmapValue},
     read_block, read_block_to,
+    spacemanager::SpacemanagerPhys,
     superblock::{ApfsSuperblock, NxSuperblock},
     BlockAddr, ObjPhys, ObjectIdentifier, ObjectType,
 };
@@ -33,6 +33,9 @@ pub struct Filesystem<D: fal::Device> {
 
     pub file_handles: CHashMap<u64, FileHandle>,
     pub last_fh: AtomicU64,
+
+    pub spacemanager_oid: ObjectIdentifier,
+    pub reaper_oid: ObjectIdentifier,
 }
 
 impl<D: fal::Device> Filesystem<D> {
@@ -107,6 +110,11 @@ impl<D: fal::Device> Filesystem<D> {
             })
             .collect::<HashMap<ObjectIdentifier, GenericObject>>();
 
+        let spacemanager_oid = ephemeral_objects.iter().find(|(_, v)| v.header().ty() == ObjectType::SpaceManager).expect("Volume missing space manager").1.header().oid();
+        let reaper_oid = ephemeral_objects.iter().find(|(_, v)| v.header().ty() == ObjectType::NxReaper).expect("Volume missing reaper").1.header().oid();
+
+        dbg!(&ephemeral_objects[&spacemanager_oid]);
+
         let container_superblock: NxSuperblock = superblock;
 
         let omap = Omap::load(
@@ -140,6 +148,8 @@ impl<D: fal::Device> Filesystem<D> {
             mounted_volumes,
             file_handles: CHashMap::new(),
             last_fh: AtomicU64::new(0),
+            spacemanager_oid,
+            reaper_oid,
         }
     }
     pub fn volume(&self) -> &Volume {
@@ -524,16 +534,20 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
     }
 
     fn filesystem_attrs(&self) -> fal::FsAttributes {
-        fal::FsAttributes {
-            block_size: self.container_superblock.block_size,
+        let spacemanager: &SpacemanagerPhys = &self.ephemeral_objects[&self.spacemanager_oid].as_spacemanager().unwrap();
 
-            // TODO: Read from the space manager.
-            available_blocks: 42,
-            free_blocks: 42,
-            free_inodes: 42,
+        let device = spacemanager.main_device();
+
+        fal::FsAttributes {
+            block_size: spacemanager.block_size,
+
+            available_blocks: device.free_count, // FIXME
+            free_blocks: device.free_count,
+
+            free_inodes: 42, // since APFS doesn't have an inode bitmap and array like ext2, any amount of inodes may be allocated (as long as there are blocks left).
             inode_count: 42,
-            max_fname_len: 42,
-            total_blocks: 42,
+            max_fname_len: 255, // TODO: I could't find the value of this constant in the documentation, however calling statvfs on a macOS machine gave me 255.
+            total_blocks: device.block_count,
         }
     }
 }

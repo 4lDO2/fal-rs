@@ -20,6 +20,8 @@ pub struct NodeLocation {
     pub len: u16,
 }
 impl NodeLocation {
+    pub const INVALID_OFFSET: u16 = 0xFFFF;
+
     pub fn start(&self) -> u16 {
         self.start
     }
@@ -227,6 +229,7 @@ pub enum BTreeValue {
     DatastreamId(JDatastreamIdVal),
     FileExtent(JFileExtentVal),
     Xattr(JXattrVal),
+    Ghost,
 }
 
 impl BTreeValue {
@@ -374,8 +377,7 @@ impl BTreeNode {
         superblock: &NxSuperblock,
         omap: Option<&Omap>,
         key: &BTreeKey,
-        key_size: u16,
-        val_size: u16,
+        info: &BTreeInfoFixed,
         compare: Compare,
     ) -> Option<((BTreeKey, BTreeValue), Path)> {
         let mut path = Vec::with_capacity(self.level as usize);
@@ -384,7 +386,7 @@ impl BTreeNode {
         let leaf_index = loop {
             if path.last().unwrap().0.is_leaf() {
                 match path.last().unwrap().0
-                    .current_node_keys(key_size, val_size)
+                    .current_node_keys(info)
                     .position(|k| compare(&k, key) == Ordering::Equal)
                 {
                     Some(idx) => break idx,
@@ -392,12 +394,12 @@ impl BTreeNode {
                 };
             } else {
                 let (index, _) =
-                    match path.last().unwrap().0.current_node_closest_key(key, key_size, val_size, compare) {
+                    match path.last().unwrap().0.current_node_closest_key(key, info, compare) {
                         Some(t) => t,
                         None => return None,
                     };
 
-                let ptr = path.last().unwrap().0.internal_key_ptr(index, key_size, val_size).unwrap();
+                let ptr = path.last().unwrap().0.internal_key_ptr(index, info).unwrap();
                 let baddr = if let Some(omap) = omap {
                     let omap_val = omap.get_partial_latest(device, superblock, OmapKey::partial(ptr)).unwrap().1;
                     assert_eq!(omap_val.size, superblock.block_size);
@@ -424,7 +426,7 @@ impl BTreeNode {
         Some((
             (
                 key.clone(), // TODO
-                path.last().unwrap().0.leaf_value(leaf_index, key_size, val_size).unwrap(),
+                path.last().unwrap().0.leaf_value(leaf_index, info).unwrap(),
             ),
             path,
         ))
@@ -435,13 +437,14 @@ impl BTreeNode {
     pub fn is_leaf(&self) -> bool {
         self.flags.contains(BTreeNodeFlags::LEAF)
     }
-    fn current_node_key(&self, index: usize, key_size: u16, val_size: u16) -> Option<BTreeKey> {
-        let toc_entry = match self.toc.get(index, key_size, val_size) {
+    fn current_node_key(&self, index: usize, info: &BTreeInfoFixed) -> Option<BTreeKey> {
+        let toc_entry = match self.toc.get(index, info.key_size as u16, info.val_size as u16) {
             Some(entry) => entry,
             None => return None,
         };
         let key_bytes =
             &self.keyval_area[toc_entry.key.start as usize..toc_entry.key.end() as usize];
+
         Some(match self.header.object_subtype {
             ObjectType::ObjectMap => BTreeKey::OmapKey(OmapKey::parse(key_bytes)),
             ObjectType::FsTree => {
@@ -453,22 +456,27 @@ impl BTreeNode {
     fn current_node_closest_key(
         &self,
         key: &BTreeKey,
-        key_size: u16,
-        val_size: u16,
+        info: &BTreeInfoFixed,
         compare: Compare,
     ) -> Option<(usize, BTreeKey)> {
-        self.current_node_keys(key_size, val_size)
+        self.current_node_keys(info)
             .enumerate()
             .filter(|(_, current_key)| compare(&current_key, key) != Ordering::Greater)
             .max_by(|(_, k1), (_, k2)| Ord::cmp(&k1, &k2))
     }
-    fn leaf_value(&self, index: usize, key_size: u16, val_size: u16) -> Option<BTreeValue> {
+    fn leaf_value(&self, index: usize, info: &BTreeInfoFixed) -> Option<BTreeValue> {
         assert!(self.is_leaf());
 
-        let toc_entry = match self.toc.get(index, key_size, val_size) {
+        let toc_entry = match self.toc.get(index, info.key_size as u16, info.val_size as u16) {
             Some(entry) => entry,
             None => return None,
         };
+
+        if toc_entry.value.start == NodeLocation::INVALID_OFFSET {
+            if info.flags.contains(BTreeFlags::ALLOW_GHOSTS) {
+                return Some(BTreeValue::Ghost);
+            }
+        }
 
         let start = self.keyval_area.len() - toc_entry.value.start as usize;
 
@@ -489,12 +497,11 @@ impl BTreeNode {
     fn internal_key_ptr(
         &self,
         index: usize,
-        key_size: u16,
-        val_size: u16,
+        info: &BTreeInfoFixed,
     ) -> Option<ObjectIdentifier> {
         assert!(!self.is_leaf());
 
-        let toc_entry = match self.toc.get(index, key_size, val_size) {
+        let toc_entry = match self.toc.get(index, info.key_size as u16, info.val_size as u16) {
             Some(entry) => entry,
             None => return None,
         };
@@ -507,11 +514,10 @@ impl BTreeNode {
     }
     fn current_node_keys<'a>(
         &'a self,
-        key_size: u16,
-        val_size: u16,
+        info: &'a BTreeInfoFixed,
     ) -> impl Iterator<Item = BTreeKey> + 'a {
         (0..self.key_count as usize)
-            .map(move |i| self.current_node_key(i, key_size, val_size).unwrap())
+            .map(move |i| self.current_node_key(i, info).unwrap())
     }
 }
 
@@ -549,8 +555,7 @@ impl BTree {
             superblock,
             omap,
             key,
-            fixed.key_size as u16,
-            fixed.val_size as u16,
+            fixed,
             compare,
         )
     }
@@ -664,8 +669,7 @@ impl<'a, 'b, D: fal::Device> Iterator for Pairs<'a, 'b, D> {
             // Leaf
             match current_tree.current_node_key(
                 *current_index,
-                info.key_size as u16,
-                info.val_size as u16,
+                &info,
             ) {
                 Some(key) => {
                     // If there is a pair available, just yield it and continue.
@@ -678,8 +682,7 @@ impl<'a, 'b, D: fal::Device> Iterator for Pairs<'a, 'b, D> {
                     self.previous_key = Some(key.clone()); // TODO: Either we clone the key and store the previous key directly, or we store the last tree when transitioning into a new tree.
                     let value = match current_tree.leaf_value(
                         *current_index,
-                        info.key_size as u16,
-                        info.val_size as u16,
+                        &info,
                     ) {
                         Some(v) => v,
                         None => return None,
@@ -697,8 +700,7 @@ impl<'a, 'b, D: fal::Device> Iterator for Pairs<'a, 'b, D> {
             // Internal
             match current_tree.internal_key_ptr(
                 *current_index,
-                info.key_size as u16,
-                info.val_size as u16,
+                &info,
             ) {
                 Some(ptr) => {
                     // If there is a new undiscovered leaf node, we climb up the tree (closer

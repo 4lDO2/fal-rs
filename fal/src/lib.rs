@@ -176,9 +176,9 @@ pub struct Attributes<InodeAddr: Into<u64>> {
 pub struct FsAttributes {
     pub block_size: u32, // TODO: Fundamental FS block size (struct statvfs.f_frsize)?
 
-    pub total_blocks: u32,
-    pub free_blocks: u32,
-    pub available_blocks: u32,
+    pub total_blocks: u64,
+    pub free_blocks: u64,
+    pub available_blocks: u64,
 
     pub inode_count: u64,
     pub free_inodes: u64,

@@ -192,6 +192,18 @@ impl ObjPhys {
     pub fn is_virtual(&self) -> bool {
         self.object_type.is_virtual()
     }
+    pub fn ty(&self) -> ObjectType {
+        self.object_type.ty
+    }
+    pub fn flags(&self) -> ObjectTypeFlags {
+        self.object_type.flags
+    }
+    pub fn oid(&self) -> ObjectIdentifier {
+        self.object_id
+    }
+    pub fn xid(&self) -> TransactionIdentifier {
+        self.transaction_id
+    }
 }
 
 pub fn read_obj_phys(bytes: &[u8], offset: &mut usize) -> ObjPhys {
