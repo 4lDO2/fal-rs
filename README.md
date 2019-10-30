@@ -1,12 +1,12 @@
 # fal-rs, a filesystem abstraction layer
+![build status](https://gitlab.com/4lDO2/fal-rs/badges/master/pipeline.svg)
 
 Allows backends (like ext2, apfs, btrfs, xfs etc.) to communicate with the frontends (currently including only FUSE and Redox), by implementing the `Filesystem` and `FilesystemMut` traits.
 
 # Features implemented
 ## Backends
 - ext2: Read-only (+writing metadata)
-- apfs: Read-only
-everything isn't implemented to fully cover the limited spec provided by Apple, however reading files and listing directories is implemented
+- apfs: Read-only (everything isn't implemented to fully cover the limited spec provided by Apple, however reading files and listing directories is implemented)
 - btrfs: WIP (reading B-trees is implemented, and probably error-free)
 - xfs: TODO
 - f2fs: TODO
