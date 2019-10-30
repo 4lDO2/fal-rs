@@ -1,11 +1,15 @@
 stages:
   - build
+  - test
+
+before-script:
+  - rustup update
+  - apt update && apt upgrade -y && apt install fuse
 
 rust-latest:
   stage: build
   image: rust:latest
   script:
-    - rustup update
     - cargo build --verbose
     - cargo test --verbose
 
@@ -13,7 +17,13 @@ rust-nightly:
   stage: build
   image: rustlang/rust:nightly
   script:
-    - rustup update
     - cargo build --verbose
     - cargo test --verbose
   allow_failure: true
+
+test-suite:
+  stage: test
+  image: rust:latest
+  script:
+    - cargo build --verbose
+    - sh test-suite/all.sh
