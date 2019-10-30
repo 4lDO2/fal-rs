@@ -2,7 +2,7 @@ stages:
   - build
   - test
 
-before-script:
+before_script:
   - rustup update
   - apt update && apt upgrade -y && apt install fuse
 
