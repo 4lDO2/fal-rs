@@ -4,7 +4,7 @@ stages:
 
 before_script:
   - rustup update
-  - apt update && apt upgrade -y && apt install -y fuse
+  - apt-get update && apt-get upgrade -y && apt-get install -y fuse libfuse-dev
 
 rust-latest:
   stage: build

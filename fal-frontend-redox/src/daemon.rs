@@ -5,10 +5,12 @@ use std::{
     mem,
 };
 
+#[cfg(target_os = "redox")]
 use syscall::{data::Packet, SchemeMut};
 
 use fal_frontend_redox::RedoxFilesystem;
 
+#[cfg(target_os = "redox")]
 pub fn daemon<Backend: fal::FilesystemMut<File>>(scheme: &OsStr) {
     let mut socket = File::create(scheme).expect("Failed to create scheme");
 
@@ -30,4 +32,9 @@ pub fn daemon<Backend: fal::FilesystemMut<File>>(scheme: &OsStr) {
         }
     }
     // TODO: Unmounting on Redox?
+}
+
+#[cfg(not(target_os = "redox"))]
+pub fn daemon<Backend>(scheme: &OsStr) {
+    panic!("Running the Redox frontend on a non-Redox os");
 }

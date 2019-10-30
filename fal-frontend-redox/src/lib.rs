@@ -8,6 +8,8 @@ use std::{
 };
 
 use fal::{Filesystem, Inode};
+
+#[cfg(target_os = "redox")]
 use syscall::SchemeMut;
 
 #[derive(Debug)]
@@ -47,14 +49,16 @@ impl<Backend: fal::FilesystemMut<File>> RedoxFilesystem<Backend> {
         self.lookup_dir_raw(path.components(), root)
     }
 }
-
+#[cfg(target_os = "redox")]
 fn syscall_error(fal_error: fal::Error) -> syscall::error::Error {
     syscall::error::Error::new(fal_error.errno())
 }
+#[cfg(target_os = "redox")]
 fn syscall_result<T>(fal_result: fal::Result<T>) -> syscall::Result<T> {
     fal_result.map_err(|err| syscall_error(err))
 }
 
+#[cfg(target_os = "redox")]
 impl<Backend: fal::FilesystemMut<File>> SchemeMut for RedoxFilesystem<Backend> {
     fn open(&mut self, path: &[u8], flags: usize, uid: u32, gid: u32) -> syscall::Result<usize> {
         let path = Path::new(OsStr::from_bytes(path));
