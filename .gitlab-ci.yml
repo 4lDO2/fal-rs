@@ -1,0 +1,19 @@
+stages:
+  - build
+
+rust-latest:
+  stage: build
+  image: rust:latest
+  script:
+    - rustup update
+    - cargo build --verbose
+    - cargo test --verbose
+
+rust-nightly:
+  stage: build
+  image: rustlang/rust:nightly
+  script:
+    - rustup update
+    - cargo build --verbose
+    - cargo test --verbose
+  allow_failure: true
