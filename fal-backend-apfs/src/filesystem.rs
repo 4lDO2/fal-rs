@@ -665,7 +665,10 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
 }
 
 impl<D: fal::DeviceMut> fal::FilesystemMut<D> for Filesystem<D> {
-    fn store_inode(&mut self, inode: &Inode) -> Result<()> {
+    fn store_inode(&mut self, _inode: &Inode) -> Result<()> {
+        unimplemented!()
+    }
+    fn unlink(&mut self, _parent: u64, _entry: &OsStr) -> Result<()> {
         unimplemented!()
     }
 }

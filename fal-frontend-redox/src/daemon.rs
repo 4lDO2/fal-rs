@@ -1,14 +1,14 @@
-use std::{
-    ffi::OsStr,
-    fs::{File, OpenOptions},
-    io::prelude::*,
-    mem,
-};
-
 #[cfg(target_os = "redox")]
-use syscall::{data::Packet, SchemeMut};
-
-use fal_frontend_redox::RedoxFilesystem;
+use {
+    std::{
+        ffi::OsStr,
+        fs::{File, OpenOptions},
+        io::prelude::*,
+        mem,
+    },
+    syscall::{data::Packet, SchemeMut},
+    fal_frontend_redox::RedoxFilesystem,
+};
 
 #[cfg(target_os = "redox")]
 pub fn daemon<Backend: fal::FilesystemMut<File>>(scheme: &OsStr) {
@@ -35,6 +35,6 @@ pub fn daemon<Backend: fal::FilesystemMut<File>>(scheme: &OsStr) {
 }
 
 #[cfg(not(target_os = "redox"))]
-pub fn daemon<Backend>(scheme: &OsStr) {
+pub fn daemon<Backend>(_scheme: &std::ffi::OsStr) {
     panic!("Running the Redox frontend on a non-Redox os");
 }

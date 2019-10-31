@@ -1,7 +1,6 @@
 use std::{ffi::CString, io::SeekFrom};
 
 use bitflags::bitflags;
-use enum_primitive::*;
 use uuid::Uuid;
 
 use fal::{read_u16, read_u32, read_u64, read_uuid, write_u32, write_u64, write_uuid};
@@ -132,7 +131,7 @@ impl NxSuperblock {
         assert_eq!(read_u32(block_bytes, 176), 0);
 
         let max_volume_count = read_u32(block_bytes, 180);
-        assert!(max_volume_count <= 100);
+        assert!(max_volume_count <= Self::MAX_VOLUME_COUNT);
 
         let mut volumes_oids = vec![];
 

@@ -1,22 +1,24 @@
-use std::{
-    convert::{TryFrom, TryInto},
-    ffi::{OsStr, OsString},
-    fs::File,
-    os::unix::ffi::OsStrExt,
-    path::{Component, Components, Path},
-    sync::{Mutex, MutexGuard},
+#[cfg(target_os = "redox")]
+use {
+    std::{
+        convert::{TryFrom, TryInto},
+        ffi::{OsStr, OsString},
+        fs::File,
+        os::unix::ffi::OsStrExt,
+        path::{Component, Components, Path},
+        sync::{Mutex, MutexGuard},
+    },
+    fal::{Filesystem, Inode},
+    syscall::SchemeMut,
 };
 
-use fal::{Filesystem, Inode};
-
-#[cfg(target_os = "redox")]
-use syscall::SchemeMut;
 
 #[derive(Debug)]
 pub struct RedoxFilesystem<Backend> {
     pub inner: Backend,
 }
 
+#[cfg(target_os = "redox")]
 impl<Backend: fal::FilesystemMut<File>> RedoxFilesystem<Backend> {
     pub fn init(device: File, path: &OsStr) -> Self {
         Self {
@@ -47,6 +49,11 @@ impl<Backend: fal::FilesystemMut<File>> RedoxFilesystem<Backend> {
     pub fn lookup_dir(&mut self, path: &Path) -> Backend::InodeAddr {
         let root = self.inner().root_inode();
         self.lookup_dir_raw(path.components(), root)
+    }
+    pub fn change_inode<F: FnMut(&mut Backend::InodeStruct)>(&mut self, fh: u64, mut handler: F) -> fal::Result<()> {
+        let mut inode = self.inner.fh_inode(fh);
+        handler(&mut inode);
+        self.inner.store_inode(&inode)
     }
 }
 #[cfg(target_os = "redox")]
@@ -152,8 +159,10 @@ impl<Backend: fal::FilesystemMut<File>> SchemeMut for RedoxFilesystem<Backend> {
         dbg!(Ok(0))
     }
     fn unlink(&mut self, path: &[u8], uid: u32, gid: u32) -> syscall::Result<usize> {
-        dbg!(OsStr::from_bytes(path), uid, gid);
-        dbg!(Ok(0))
+        // TODO: Validate the uid and gid, and the permissions of the parent dir.
+        let path = Path::new(OsStr::from_bytes(path));
+        let inode = self.lookup_dir(path);
+        self.inner.unlink(inode, path.components.last().unwrap());
     }
     fn dup(&mut self, old_id: usize, buf: &[u8]) -> syscall::Result<usize> {
         dbg!(old_id, buf.len());
@@ -178,12 +187,13 @@ impl<Backend: fal::FilesystemMut<File>> SchemeMut for RedoxFilesystem<Backend> {
     }
 
     fn fchmod(&mut self, id: usize, mode: u16) -> syscall::Result<usize> {
-        dbg!(id, mode);
-        dbg!(Ok(0))
+        self.change_inode(id, |inode| inode.set_perm(mode));
     }
     fn fchown(&mut self, id: usize, uid: u32, gid: u32) -> syscall::Result<usize> {
-        dbg!(id, uid, gid);
-        dbg!(Ok(0))
+        self.change_inode(id, |inode| {
+            inode.set_uid(uid);
+            inode.set_gid(gid);
+        });
     }
     fn fcntl(&mut self, id: usize, cmd: usize, arg: usize) -> syscall::Result<usize> {
         dbg!(id, cmd, arg);

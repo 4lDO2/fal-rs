@@ -2,10 +2,10 @@ use bitflags::bitflags;
 
 use crate::{
     fsobjects::{
-        JAnyKey, JDatastreamIdKey, JDatastreamIdVal, JDirStatsKey, JDrecHashedKey, JDrecKey,
-        JDrecVal, JFileExtentKey, JFileExtentVal, JInodeKey, JInodeVal, JKey, JXattrKey, JXattrVal,
+        JAnyKey, JDatastreamIdVal,
+        JDrecVal, JFileExtentVal, JInodeVal, JKey, JXattrVal,
     },
-    omap::{Omap, OmapKey, OmapValue, Resolver},
+    omap::{OmapKey, OmapValue, Resolver},
     read_block, read_obj_phys,
     spacemanager::SpacemanagerFreeQueueKey,
     superblock::NxSuperblock,

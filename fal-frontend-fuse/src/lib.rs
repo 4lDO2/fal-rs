@@ -429,23 +429,9 @@ impl<Backend: fal::FilesystemMut<File>> fuse::Filesystem for FuseFilesystem<Back
                 return;
             }
         };
-        let parent_struct = match self.inner().load_inode(parent) {
-            Ok(parent_struct) => parent_struct,
-            Err(error) => {
-                eprintln!("Error when unlinking: loading parent struct: {}.", error);
-                reply.error(libc::EIO);
-                return;
-            }
-        };
-        /*match parent_struct.remove_entry(&mut self.inner, name) {
-            Ok(()) => (),
-            Err(error) => {
-                eprintln!("Error when unlinking: removing entry: {}.", error);
-                reply.error(libc::EIO);
-                return;
-            }
-        };*/
-        unimplemented!();
-        reply.ok();
+        match self.inner().unlink(parent, name) {
+            Ok(()) => reply.ok(),
+            Err(err) => reply.error(err.errno()),
+        }
     }
 }

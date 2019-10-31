@@ -3,7 +3,6 @@ use std::{
     convert::TryInto,
     ffi::{OsStr, OsString},
     io::{self, SeekFrom},
-    ops::{Add, Div, Mul, Rem},
     os::unix::ffi::OsStrExt,
     sync::Mutex,
     time::SystemTime,
@@ -373,5 +372,8 @@ impl<D: fal::DeviceMut> fal::FilesystemMut<D> for Filesystem<D> {
     }
     fn store_inode(&mut self, inode: &Inode) -> fal::Result<()> {
         Inode::store(inode, self)
+    }
+    fn unlink(&mut self, _parent: u32, _name: &OsStr) -> fal::Result<()> {
+        unimplemented!()
     }
 }

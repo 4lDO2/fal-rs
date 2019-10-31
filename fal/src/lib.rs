@@ -116,7 +116,7 @@ pub mod parsing {
     }
 }
 
-/// An readonly device, such as the file /dev/sda. Typically implemented by the frontend.
+/// A readonly device, such as the file /dev/sda. Typically implemented by the frontend.
 pub trait Device: Read + Seek {
     // TODO: Add support for querying bad sectors etc.
     // TODO: Remove the std::io traits, TODO: right?.
@@ -173,6 +173,7 @@ pub struct Attributes<InodeAddr: Into<u64>> {
     pub flags: u32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FsAttributes {
     pub block_size: u32, // TODO: Fundamental FS block size (struct statvfs.f_frsize)?
 
@@ -332,6 +333,11 @@ where
 
     /// Write the inode metadata to disk.
     fn store_inode(&mut self, inode: &Self::InodeStruct) -> Result<()>;
+
+    /// Remove an entry from a directory. If the hard link count of the inode pointed to by that
+    /// entry reaches zero, the inode is deleted and its space is freed. However, if that inode is
+    /// still open, it won't be removed until that.
+    fn unlink(&mut self, parent: Self::InodeAddr, name: &OsStr) -> Result<()>;
 }
 
 #[derive(Debug)]
