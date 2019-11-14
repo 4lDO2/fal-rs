@@ -1,5 +1,8 @@
 use clap::{crate_authors, crate_version, App, Arg, SubCommand};
-use std::{ffi::OsString, fs::{File, OpenOptions}};
+use std::{
+    ffi::OsString,
+    fs::{self, File, OpenOptions},
+};
 
 use fal_frontend_fuse::FuseFilesystem;
 
@@ -40,7 +43,7 @@ fn main() {
         let device = matches.value_of("DEVICE").unwrap();
         let mount_point = matches.value_of("MOUNTPOINT").unwrap();
 
-        let fuse_options = matches
+        let mut fuse_options = matches
             .value_of("OPTIONS")
             .map(|string| fal_frontend_fuse::parse_fs_options(string).unwrap())
             .unwrap_or_default();
@@ -57,6 +60,13 @@ fn main() {
             .iter()
             .map(|option| option.as_os_str())
             .collect::<Vec<_>>();
+
+        let device_readonly = fs::metadata(device)
+            .expect("Failed to retrieve device metadata")
+            .permissions()
+            .readonly();
+
+        fuse_options.immutable |= device_readonly;
 
         let file = OpenOptions::new()
             .read(true)
