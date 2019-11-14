@@ -36,10 +36,11 @@ pub struct Filesystem<D: fal::Device> {
 
     pub spacemanager_oid: ObjectIdentifier,
     pub reaper_oid: ObjectIdentifier,
+    pub general_options: fal::Options,
 }
 
 impl<D: fal::Device> Filesystem<D> {
-    pub fn mount(mut device: D) -> Self {
+    pub fn mount(mut device: D, general_options: fal::Options) -> Self {
         let container_superblock = NxSuperblock::load(&mut device);
 
         if container_superblock.chkpnt_desc_blkcnt & (1 << 31) != 0 {
@@ -163,6 +164,7 @@ impl<D: fal::Device> Filesystem<D> {
             last_fh: AtomicU64::new(0),
             spacemanager_oid,
             reaper_oid,
+            general_options,
         }
     }
     pub fn volume(&self) -> &Volume {
@@ -231,12 +233,13 @@ type Result<T> = fal::Result<T>;
 impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
     type InodeAddr = u64;
     type InodeStruct = Inode;
+    type Options = ();
 
     fn root_inode(&self) -> Self::InodeAddr {
         Inode::ROOT_DIR_INODE_ADDR
     }
-    fn mount(device: D, _path: &OsStr) -> Self {
-        Filesystem::mount(device)
+    fn mount(device: D, general_options: fal::Options, _apfs_specific_options: (), _path: &OsStr) -> Self {
+        Filesystem::mount(device, general_options)
     }
     fn unmount(self) {}
 

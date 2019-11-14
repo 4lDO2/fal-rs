@@ -1,7 +1,7 @@
 use clap::{crate_authors, crate_version, App, Arg, SubCommand};
-use std::{ffi::OsString, fs::OpenOptions};
+use std::{ffi::OsString, fs::{File, OpenOptions}};
 
-use fal_frontend_fuse::{FuseFilesystem, Options};
+use fal_frontend_fuse::FuseFilesystem;
 
 fn main() {
     env_logger::init();
@@ -42,14 +42,8 @@ fn main() {
 
         let fuse_options = matches
             .value_of("OPTIONS")
-            .map(|string| Options::parse(string).unwrap())
-            .unwrap_or(Options::default());
-
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(device)
-            .expect("Failed to open filesystem device");
+            .map(|string| fal_frontend_fuse::parse_fs_options(string).unwrap())
+            .unwrap_or_default();
 
         let options_owned = if let Some(options_str) = matches.value_of("OPTIONS") {
             options_str
@@ -63,6 +57,12 @@ fn main() {
             .iter()
             .map(|option| option.as_os_str())
             .collect::<Vec<_>>();
+
+        let file = OpenOptions::new()
+            .read(true)
+            .write(!fuse_options.immutable)
+            .open(device)
+            .unwrap_or_else(|_| File::open(device).expect("Failed to open device"));
 
         match filesystem_type {
             #[cfg(feature = "ext2")]

@@ -100,6 +100,7 @@ pub struct Filesystem<D> {
     pub device: Mutex<D>,
     pub fhs: HashMap<u64, FileHandle>,
     last_fh: u64,
+    general_options: fal::Options,
 }
 
 #[derive(Debug, PartialEq)]
@@ -194,13 +195,14 @@ pub struct FileHandle {
 impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
     type InodeAddr = u32;
     type InodeStruct = Inode;
+    type Options = ();
 
     #[inline]
     fn root_inode(&self) -> u32 {
         2
     }
 
-    fn mount(mut device: D, path: &OsStr) -> Self {
+    fn mount(mut device: D, general_options: fal::Options, _ext_specific_options: (), path: &OsStr) -> Self {
         let mut superblock = Superblock::load(&mut device).unwrap();
 
         superblock.last_mount_time = SystemTime::now()
@@ -214,13 +216,14 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
             extended.last_mount_path = Some(std::ffi::CString::new(path.as_bytes()).unwrap());
         }
 
-        superblock.store(&mut device).unwrap();
+        if !general_options.immutable { superblock.store(&mut device).unwrap() }
 
         Self {
             superblock,
             device: Mutex::new(device),
             fhs: HashMap::new(),
             last_fh: 0,
+            general_options,
         }
     }
 
@@ -371,6 +374,9 @@ impl<D: fal::DeviceMut> fal::FilesystemMut<D> for Filesystem<D> {
             .unwrap()
     }
     fn store_inode(&mut self, inode: &Inode) -> fal::Result<()> {
+        if self.general_options.immutable {
+            return Err(fal::Error::ReadonlyFs);
+        }
         Inode::store(inode, self)
     }
     fn unlink(&mut self, _parent: u32, _name: &OsStr) -> fal::Result<()> {
