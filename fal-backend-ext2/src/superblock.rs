@@ -72,6 +72,9 @@ bitflags! {
         const INODE_EXTENDED_ATTRS = 0x0008;
         const GROWABLE_BIT = 0x0010;
         const DIR_HASH_INDEX = 0x0020;
+
+        // ext4
+        const SPARSE_SUPER2 = 0x0200;
     }
 }
 
@@ -81,6 +84,20 @@ bitflags! {
         const DIR_TYPE = 0x0002;
         const REPLAY_JOURNAL_MANDATORY = 0x0004;
         const JOURNAL_DEVICE = 0x0008;
+
+        // ext4
+        const META_BG = 0x0010;
+        const EXTENTS = 0x0040;
+        const _64_BIT = 0x0080;
+        const MMP = 0x0100;
+        const FLEX_BG = 0x0200;
+        const EA_INODE = 0x0400;
+        const DIRDATA = 0x1000;
+        const CSUM_SEED = 0x2000;
+        const LARGEDIR = 0x4000;
+        const INLINE_DATA = 0x8000;
+        const ENCRYPT = 0x10000;
+        const CASEFOLD = 0x20000;
     }
 }
 
@@ -89,6 +106,17 @@ bitflags! {
         const SPARSE_SUPER = 0x0001;
         const EXTENDED_FILE_SIZE = 0x0002;
         const BST_DIR_CONTENTS = 0x0004;
+
+        // ext4
+        const HUGE_FILE = 0x0008;
+        const GDT_CSUM = 0x0010;
+        const DIR_HARDLINK_COUNT = 0x0020;
+        const EXTRA_ISIZE = 0x0040;
+        const QUOTA = 0x0100;
+        const BIGALLOC = 0x0200;
+        const METADATA_CSUM = 0x0400; // Mutually exclusive with GDT_CSUM.
+        const READONLY = 0x1000;
+        const PROJECT = 0x2000;
     }
 }
 
