@@ -8,6 +8,7 @@ use std::{
 
 use arrayvec::ArrayVec;
 use bitflags::bitflags;
+use crc::{crc32, Hasher32};
 
 pub const SUPERBLOCK_OFFSET: u64 = 1024;
 pub const SUPERBLOCK_LEN: u64 = 1024;
@@ -309,7 +310,7 @@ impl Superblock {
             let checksum_type = read_u8(&block_bytes, &mut offset);
             let reserved_pad = read_u16(&block_bytes, &mut offset);
 
-            Some(SuperblockExtension {
+            let extended = SuperblockExtension {
                 first_nonreserved_inode,
                 inode_struct_size,
                 superblock_block_group,
@@ -401,7 +402,14 @@ impl Superblock {
 
                 reserved_bytes: take_vec(block_bytes, &mut offset, 380),
                 superblock_checksum: read_u32(block_bytes, &mut offset),
-            })
+            };
+            let _calculated_checksum = {
+                let mut hasher = crc32::Digest::new_with_initial(crc32::CASTAGNOLI, !0);
+                hasher.write(&block_bytes[..1020]);
+                hasher.sum32()
+            };
+            //assert_eq!(calculated_checksum, extended.superblock_checksum);
+            Some(extended)
         } else {
             None
         };
@@ -543,6 +551,67 @@ impl Superblock {
         write_u8(buffer, &mut offset, extended.log_groups_per_flex);
         write_u8(buffer, &mut offset, extended.checksum_type);
         write_u16(buffer, &mut offset, extended.reserved_pad);
+
+        write_u64(buffer, &mut offset, extended.kbs_written);
+        write_u32(buffer, &mut offset, extended.snapshot_ino);
+        write_u32(buffer, &mut offset, extended.snapshot_id);
+        write_u64(buffer, &mut offset, extended.snapshot_rsv_blocks_count);
+        write_u32(buffer, &mut offset, extended.snapshot_list);
+        write_u32(buffer, &mut offset, extended.error_count);
+
+        write_u32(buffer, &mut offset, extended.first_error_time);
+        write_u32(buffer, &mut offset, extended.first_error_ino);
+        write_u64(buffer, &mut offset, extended.first_error_block);
+        buffer[offset..offset + 32].copy_from_slice(&extended.first_error_func);
+        offset += 32;
+        write_u32(buffer, &mut offset, extended.first_error_line);
+
+        write_u32(buffer, &mut offset, extended.last_error_time);
+        write_u32(buffer, &mut offset, extended.last_error_ino);
+        write_u64(buffer, &mut offset, extended.last_error_block);
+        buffer[offset..offset + 32].copy_from_slice(&extended.last_error_func);
+        offset += 32;
+        write_u32(buffer, &mut offset, extended.last_error_line);
+
+        buffer[offset..offset + 64].copy_from_slice(&extended.mounts_opts);
+        offset += 64;
+
+        write_u32(buffer, &mut offset, extended.user_quota_ino);
+        write_u32(buffer, &mut offset, extended.group_quota_ino);
+        write_u32(buffer, &mut offset, extended.overhead_blocks);
+
+        for n in extended.backup_bgs.iter().copied() {
+            write_u32(buffer, &mut offset, n);
+        }
+
+        buffer[offset..offset + 4].copy_from_slice(&extended.encrypt_algos);
+        offset += 4;
+
+        buffer[offset..offset + 16].copy_from_slice(&extended.encrypt_pw_salt);
+        offset += 16;
+
+        write_u32(buffer, &mut offset, extended.lost_found_ino);
+        write_u32(buffer, &mut offset, extended.prj_quota_ino);
+        write_u32(buffer, &mut offset, extended.checksum_seed);
+
+        write_u8(buffer, &mut offset, extended.wtime_hi);
+        write_u8(buffer, &mut offset, extended.mtime_hi);
+        write_u8(buffer, &mut offset, extended.mkfs_time_hi);
+        write_u8(buffer, &mut offset, extended.lastcheck_hi);
+        write_u8(buffer, &mut offset, extended.first_error_time_hi);
+        write_u8(buffer, &mut offset, extended.last_error_time_hi);
+
+        // 2 bytes of zero padding
+        offset += 2;
+
+        write_u16(buffer, &mut offset, extended.encoding);
+        write_u16(buffer, &mut offset, extended.encoding_flags);
+
+        buffer[offset..offset + 380].copy_from_slice(&extended.reserved_bytes);
+        offset += 380;
+
+        // FIXME: Write the updated checksum.
+        write_u32(buffer, &mut offset, extended.superblock_checksum);
     }
 
     fn serialize(&self, buffer: &mut [u8]) {
