@@ -2,7 +2,6 @@ use fal::parsing::{read_u8, read_u16, read_u32, read_u64, read_uuid, write_u8, w
 use uuid::Uuid;
 
 use std::{
-    ffi::CString,
     io::{self, SeekFrom},
     ops::{AddAssign, ShrAssign},
 };
@@ -14,6 +13,22 @@ pub const SUPERBLOCK_OFFSET: u64 = 1024;
 pub const SUPERBLOCK_LEN: u64 = 1024;
 
 pub const SIGNATURE: u16 = 0xEF53;
+
+fn take<T>(bytes: &[u8], offset: &mut usize, amount: usize) -> ArrayVec<T>
+where
+    T: arrayvec::Array<Item = u8>
+{
+        let mut array = ::arrayvec::ArrayVec::new();
+        array.try_extend_from_slice(&bytes[*offset..*offset + amount]).unwrap();
+        *offset += amount;
+        array
+}
+
+fn take_vec(bytes: &[u8], offset: &mut usize, amount: usize) -> Vec<u8> {
+    let vector = bytes[*offset .. *offset + amount].to_owned();
+    *offset += amount;
+    vector
+}
 
 #[derive(Debug)]
 pub struct Superblock {
@@ -53,8 +68,8 @@ pub struct SuperblockExtension {
     pub req_features_present: RequiredFeatureFlags,
     pub req_features_for_rw: RoFeatureFlags,
     pub fs_id: Uuid,
-    pub vol_name: Vec<u8>,
-    pub last_mount_path: Vec<u8>,
+    pub vol_name: [u8; 16],
+    pub last_mount_path: ArrayVec<[u8; 64]>,
     pub compression_algorithms: u32,
     pub file_prealloc_block_count: u8,
     pub dir_prealloc_block_count: u8,
@@ -70,7 +85,7 @@ pub struct SuperblockExtension {
     pub default_mounts_ops: u32,
     pub first_meta_bg: u32,
     pub mkfs_time: u32,
-    pub jnl_blocks: ArrayVec<[u32; 17]>,
+    pub jnl_blocks: [u32; 17],
     pub block_count_hi: u32,
     pub reserved_block_count_hi: u32,
     pub free_block_count_hi: u32,
@@ -84,6 +99,50 @@ pub struct SuperblockExtension {
     pub log_groups_per_flex: u8,
     pub checksum_type: u8,
     pub reserved_pad: u16,
+    pub kbs_written: u64,
+    pub snapshot_ino: u32,
+    pub snapshot_id: u32,
+    pub snapshot_rsv_blocks_count: u64,
+    pub snapshot_list: u32,
+    pub error_count: u32,
+
+    pub first_error_time: u32,
+    pub first_error_ino: u32,
+    pub first_error_block: u64,
+    pub first_error_func: [u8; 32],
+    pub first_error_line: u32,
+
+    pub last_error_time: u32,
+    pub last_error_ino: u32,
+    pub last_error_block: u64,
+    pub last_error_func: [u8; 32],
+    pub last_error_line: u32,
+
+    pub mounts_opts: ArrayVec<[u8; 64]>,
+    pub user_quota_ino: u32,
+    pub group_quota_ino: u32,
+    pub overhead_blocks: u32,
+    pub backup_bgs: [u32; 2],
+    pub encrypt_algos: [u8; 4],
+    pub encrypt_pw_salt: [u8; 16],
+    pub lost_found_ino: u32,
+    pub prj_quota_ino: u32,
+    pub checksum_seed: u32,
+
+    pub wtime_hi: u8,
+    pub mtime_hi: u8,
+    pub mkfs_time_hi: u8,
+    pub lastcheck_hi: u8,
+    pub first_error_time_hi: u8,
+    pub last_error_time_hi: u8,
+
+    // 2 bytes of zero padding
+
+    pub encoding: u16,
+    pub encoding_flags: u16,
+
+    pub reserved_bytes: Vec<u8>,
+    pub superblock_checksum: u32,
 }
 
 bitflags! {
@@ -209,10 +268,8 @@ impl Superblock {
                 RoFeatureFlags::from_bits(read_u32(&block_bytes, &mut offset)).unwrap();
             let fs_id = read_uuid(&block_bytes, &mut offset);
 
-            let vol_name = block_bytes[offset..offset + 16].to_owned();
-            offset += 16;
-            let last_mount_path = block_bytes[offset..offset + 64].to_owned();
-            offset += 64;
+            let vol_name = take(block_bytes, &mut offset, 16).into_inner().unwrap();
+            let last_mount_path = take(block_bytes, &mut offset, 64);
 
             let compression_algorithms = read_u32(&block_bytes, &mut offset);
             let file_prealloc_block_count = read_u8(&block_bytes, &mut offset);
@@ -233,7 +290,7 @@ impl Superblock {
             let default_mounts_ops = read_u32(&block_bytes, &mut offset);
             let first_meta_bg = read_u32(&block_bytes, &mut offset);
             let mkfs_time = read_u32(&block_bytes, &mut offset);
-            let jnl_blocks = (0..17).map(|_| read_u32(&block_bytes, &mut offset)).collect();
+            let jnl_blocks = (0..17).map(|_| read_u32(&block_bytes, &mut offset)).collect::<ArrayVec<_>>().into_inner().unwrap();
 
             let block_count_hi = read_u32(&block_bytes, &mut offset);
             let reserved_block_count_hi = read_u32(&block_bytes, &mut offset);
@@ -296,10 +353,64 @@ impl Superblock {
                 log_groups_per_flex,
                 checksum_type,
                 reserved_pad,
+
+                kbs_written: read_u64(block_bytes, &mut offset),
+                snapshot_ino: read_u32(block_bytes, &mut offset),
+                snapshot_id: read_u32(block_bytes, &mut offset),
+                snapshot_rsv_blocks_count: read_u64(block_bytes, &mut offset),
+                snapshot_list: read_u32(block_bytes, &mut offset),
+                error_count: read_u32(block_bytes, &mut offset),
+
+                first_error_time: read_u32(block_bytes, &mut offset),
+                first_error_ino: read_u32(block_bytes, &mut offset),
+                first_error_block: read_u64(block_bytes, &mut offset),
+                first_error_func: take(block_bytes, &mut offset, 32).into_inner().unwrap(),
+                first_error_line: read_u32(block_bytes, &mut offset),
+
+                last_error_time: read_u32(block_bytes, &mut offset),
+                last_error_ino: read_u32(block_bytes, &mut offset),
+                last_error_block: read_u64(block_bytes, &mut offset),
+                last_error_func: take(block_bytes, &mut offset, 32).into_inner().unwrap(),
+                last_error_line: read_u32(block_bytes, &mut offset),
+
+                mounts_opts: take(block_bytes, &mut offset, 64),
+
+                user_quota_ino: read_u32(block_bytes, &mut offset),
+                group_quota_ino: read_u32(block_bytes, &mut offset),
+                overhead_blocks: read_u32(block_bytes, &mut offset),
+                backup_bgs: [read_u32(block_bytes, &mut offset), read_u32(block_bytes, &mut offset)],
+                encrypt_algos: take(block_bytes, &mut offset, 4).into_inner().unwrap(),
+                encrypt_pw_salt: take(block_bytes, &mut offset, 16).into_inner().unwrap(),
+                lost_found_ino: read_u32(block_bytes, &mut offset),
+                prj_quota_ino: read_u32(block_bytes, &mut offset),
+                checksum_seed: read_u32(block_bytes, &mut offset),
+
+                wtime_hi: read_u8(block_bytes, &mut offset),
+                mtime_hi: read_u8(block_bytes, &mut offset),
+                mkfs_time_hi: read_u8(block_bytes, &mut offset),
+                lastcheck_hi: read_u8(block_bytes, &mut offset),
+                first_error_time_hi: read_u8(block_bytes, &mut offset),
+                last_error_time_hi: read_u8(block_bytes, &mut offset),
+
+                // 2 bytes of zero padding
+                encoding: {
+                    offset += 2;
+                    read_u16(block_bytes, &mut offset)
+                },
+                encoding_flags: read_u16(block_bytes, &mut offset),
+
+                reserved_bytes: take_vec(block_bytes, &mut offset, 380),
+                superblock_checksum: read_u32(block_bytes, &mut offset),
             })
         } else {
             None
         };
+
+        if extended.is_some() {
+            assert_eq!(offset, 1024);
+        } else {
+            assert_eq!(offset, 84);
+        }
 
         Superblock {
             inode_count,

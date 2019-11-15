@@ -213,7 +213,13 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
         superblock.mounts_left_before_fsck -= 1;
 
         if let Some(extended) = superblock.extended.as_mut() {
-            extended.last_mount_path = path.as_bytes().to_owned();
+            let path_bytes = path.as_bytes();
+            extended.last_mount_path[..path_bytes.len()].copy_from_slice(path_bytes);
+
+            // NUL
+            if path_bytes.len() < 64 {
+                extended.last_mount_path[63] = 0;
+            }
         }
 
         if !general_options.immutable { superblock.store(&mut device).unwrap() }
