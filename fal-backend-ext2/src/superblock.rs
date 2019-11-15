@@ -1,6 +1,5 @@
-use crate::{
-    read_u16, read_u32, read_u8, read_uuid, write_u16, write_u32, write_u8, write_uuid, Uuid,
-};
+use fal::parsing::{read_u8, read_u16, read_u32, read_u64, read_uuid, write_u8, write_u16, write_u32, write_u64, write_uuid};
+use uuid::Uuid;
 
 use std::{
     ffi::CString,
@@ -8,6 +7,7 @@ use std::{
     ops::{AddAssign, ShrAssign},
 };
 
+use arrayvec::ArrayVec;
 use bitflags::bitflags;
 
 pub const SUPERBLOCK_OFFSET: u64 = 1024;
@@ -53,15 +53,37 @@ pub struct SuperblockExtension {
     pub req_features_present: RequiredFeatureFlags,
     pub req_features_for_rw: RoFeatureFlags,
     pub fs_id: Uuid,
-    pub vol_name: Option<CString>,
-    pub last_mount_path: Option<CString>,
+    pub vol_name: Vec<u8>,
+    pub last_mount_path: Vec<u8>,
     pub compression_algorithms: u32,
     pub file_prealloc_block_count: u8,
     pub dir_prealloc_block_count: u8,
+    pub reserved_gdt_blocks: u16,
     pub journal_id: Uuid,
     pub journal_inode: u32,
     pub journal_device: u32,
     pub orphan_inode_head_list: u32,
+    pub hash_seed: [u32; 4],
+    pub default_hash_version: u8,
+    pub jnl_backup_type: u8,
+    pub bgdesc_size: u16,
+    pub default_mounts_ops: u32,
+    pub first_meta_bg: u32,
+    pub mkfs_time: u32,
+    pub jnl_blocks: ArrayVec<[u32; 17]>,
+    pub block_count_hi: u32,
+    pub reserved_block_count_hi: u32,
+    pub free_block_count_hi: u32,
+    pub min_extra_isize: u16,
+    pub want_extra_isize: u16,
+    pub flags: u32,
+    pub raid_stride: u16,
+    pub mmp_interval: u16,
+    pub mmp_block: u64,
+    pub raid_stripe_width: u32,
+    pub log_groups_per_flex: u8,
+    pub checksum_type: u8,
+    pub reserved_pad: u16,
 }
 
 bitflags! {
@@ -138,94 +160,97 @@ fn log2_round_up<T: From<u8> + AddAssign + ShrAssign + Eq>(mut t: T) -> T {
 impl Superblock {
     /// Load and parse the super block.
     pub fn load<R: fal::Device>(device: &mut R) -> io::Result<Self> {
-        device.seek(SeekFrom::Start(SUPERBLOCK_OFFSET)).unwrap();
+        device.seek(SeekFrom::Start(SUPERBLOCK_OFFSET))?;
 
         let mut block_bytes = [0u8; 1024];
         device.read_exact(&mut block_bytes)?;
 
-        Ok(Self::parse(&block_bytes))
+        Ok(dbg!(Self::parse(&block_bytes)))
     }
     pub fn parse(block_bytes: &[u8]) -> Self {
-        let inode_count = read_u32(&block_bytes, 0);
-        let block_count = read_u32(&block_bytes, 4);
-        let reserved_block_count = read_u32(&block_bytes, 8);
-        let unalloc_block_count = read_u32(&block_bytes, 12);
-        let unalloc_inode_count = read_u32(&block_bytes, 16);
-        let superblock_block_num = read_u32(&block_bytes, 20);
-        let block_size = 1024 << read_u32(&block_bytes, 24);
-        let fragment_size = 1024 << read_u32(&block_bytes, 28);
-        let blocks_per_group = read_u32(&block_bytes, 32);
-        let fragments_per_group = read_u32(&block_bytes, 36);
-        let inodes_per_group = read_u32(&block_bytes, 40);
-        let last_mount_time = read_u32(&block_bytes, 44);
-        let last_write_time = read_u32(&block_bytes, 48);
-        let mounts_since_fsck = read_u16(&block_bytes, 52);
-        let mounts_left_before_fsck = read_u16(&block_bytes, 54);
-        let signature = read_u16(&block_bytes, 56);
+        let mut offset = 0;
+        let inode_count = read_u32(&block_bytes, &mut offset);
+        let block_count = read_u32(&block_bytes, &mut offset);
+        let reserved_block_count = read_u32(&block_bytes, &mut offset);
+        let unalloc_block_count = read_u32(&block_bytes, &mut offset);
+        let unalloc_inode_count = read_u32(&block_bytes, &mut offset);
+        let superblock_block_num = read_u32(&block_bytes, &mut offset);
+        let block_size = 1024 << read_u32(&block_bytes, &mut offset);
+        let fragment_size = 1024 << read_u32(&block_bytes, &mut offset);
+        let blocks_per_group = read_u32(&block_bytes, &mut offset);
+        let fragments_per_group = read_u32(&block_bytes, &mut offset);
+        let inodes_per_group = read_u32(&block_bytes, &mut offset);
+        let last_mount_time = read_u32(&block_bytes, &mut offset);
+        let last_write_time = read_u32(&block_bytes, &mut offset);
+        let mounts_since_fsck = read_u16(&block_bytes, &mut offset);
+        let mounts_left_before_fsck = read_u16(&block_bytes, &mut offset);
+        let signature = read_u16(&block_bytes, &mut offset);
         assert_eq!(signature, SIGNATURE);
-        let fs_state = FilesystemState::try_parse(read_u16(&block_bytes, 58)).unwrap();
-        let error_handling = ErrorHandlingMethod::try_parse(read_u16(&block_bytes, 60)).unwrap();
-        let minor_version = read_u16(&block_bytes, 62);
-        let last_fsck_time = read_u32(&block_bytes, 64);
-        let interval_between_forced_fscks = read_u32(&block_bytes, 68);
-        let os_id = OsId::try_parse(read_u32(&block_bytes, 72)).unwrap();
-        let major_version = read_u32(&block_bytes, 76);
-        let reserver_uid = read_u16(&block_bytes, 80);
-        let reserver_gid = read_u16(&block_bytes, 82);
+        let fs_state = FilesystemState::try_parse(read_u16(&block_bytes, &mut offset)).unwrap();
+        let error_handling = ErrorHandlingMethod::try_parse(read_u16(&block_bytes, &mut offset)).unwrap();
+        let minor_version = read_u16(&block_bytes, &mut offset);
+        let last_fsck_time = read_u32(&block_bytes, &mut offset);
+        let interval_between_forced_fscks = read_u32(&block_bytes, &mut offset);
+        let os_id = OsId::try_parse(read_u32(&block_bytes, &mut offset)).unwrap();
+        let major_version = read_u32(&block_bytes, &mut offset);
+        let reserver_uid = read_u16(&block_bytes, &mut offset);
+        let reserver_gid = read_u16(&block_bytes, &mut offset);
 
         let extended = if major_version >= 1 {
-            let first_nonreserved_inode = read_u32(&block_bytes, 84);
-            let inode_struct_size = read_u16(&block_bytes, 88);
-            let superblock_block_group = read_u16(&block_bytes, 90);
+            let first_nonreserved_inode = read_u32(&block_bytes, &mut offset);
+            let inode_struct_size = read_u16(&block_bytes, &mut offset);
+            let superblock_block_group = read_u16(&block_bytes, &mut offset);
             let opt_features_present =
-                OptionalFeatureFlags::from_bits(read_u32(&block_bytes, 92)).unwrap();
+                OptionalFeatureFlags::from_bits(read_u32(&block_bytes, &mut offset)).unwrap();
             let req_features_present =
-                RequiredFeatureFlags::from_bits(read_u32(&block_bytes, 96)).unwrap();
+                RequiredFeatureFlags::from_bits(read_u32(&block_bytes, &mut offset)).unwrap();
 
             let req_features_for_rw =
-                RoFeatureFlags::from_bits(read_u32(&block_bytes, 100)).unwrap();
-            let fs_id = read_uuid(&block_bytes, 104);
+                RoFeatureFlags::from_bits(read_u32(&block_bytes, &mut offset)).unwrap();
+            let fs_id = read_uuid(&block_bytes, &mut offset);
 
-            let vol_name = {
-                let mut vol_name_raw = [0u8; 16];
-                vol_name_raw.copy_from_slice(&block_bytes[120..136]);
+            let vol_name = block_bytes[offset..offset + 16].to_owned();
+            offset += 16;
+            let last_mount_path = block_bytes[offset..offset + 64].to_owned();
+            offset += 64;
 
-                let nul_position = vol_name_raw
-                    .iter()
-                    .copied()
-                    .position(|byte| byte == 0)
-                    .unwrap_or(vol_name_raw.len());
-                if nul_position != 0 {
-                    CString::new(&vol_name_raw[..nul_position]).ok()
-                } else {
-                    None
-                }
-            };
+            let compression_algorithms = read_u32(&block_bytes, &mut offset);
+            let file_prealloc_block_count = read_u8(&block_bytes, &mut offset);
+            let dir_prealloc_block_count = read_u8(&block_bytes, &mut offset);
 
-            let last_mount_path = {
-                let mut last_mount_path_raw = [0u8; 64];
-                last_mount_path_raw.copy_from_slice(&block_bytes[136..200]);
+            let reserved_gdt_blocks = read_u16(&block_bytes, &mut offset);
 
-                let nul_position = last_mount_path_raw
-                    .iter()
-                    .copied()
-                    .position(|byte| byte == 0)
-                    .unwrap_or(last_mount_path_raw.len());
-                if nul_position != 0 {
-                    CString::new(&last_mount_path_raw[..nul_position]).ok()
-                } else {
-                    None
-                }
-            };
+            let journal_id = read_uuid(&block_bytes, &mut offset);
+            let journal_inode = read_u32(&block_bytes, &mut offset);
+            let journal_device = read_u32(&block_bytes, &mut offset);
+            let orphan_inode_head_list = read_u32(&block_bytes, &mut offset);
 
-            let compression_algorithms = read_u32(&block_bytes, 200);
-            let file_prealloc_block_count = read_u8(&block_bytes, 204);
-            let dir_prealloc_block_count = read_u8(&block_bytes, 205);
+            let hash_seed = [read_u32(&block_bytes, &mut offset), read_u32(&block_bytes, &mut offset), read_u32(&block_bytes, &mut offset), read_u32(&block_bytes, &mut offset)];
+            let default_hash_version = read_u8(&block_bytes, &mut offset);
+            let jnl_backup_type = read_u8(&block_bytes, &mut offset);
 
-            let journal_id = read_uuid(&block_bytes, 208);
-            let journal_inode = read_u32(&block_bytes, 224);
-            let journal_device = read_u32(&block_bytes, 228);
-            let orphan_inode_head_list = read_u32(&block_bytes, 232);
+            let bgdesc_size = read_u16(&block_bytes, &mut offset);
+            let default_mounts_ops = read_u32(&block_bytes, &mut offset);
+            let first_meta_bg = read_u32(&block_bytes, &mut offset);
+            let mkfs_time = read_u32(&block_bytes, &mut offset);
+            let jnl_blocks = (0..17).map(|_| read_u32(&block_bytes, &mut offset)).collect();
+
+            let block_count_hi = read_u32(&block_bytes, &mut offset);
+            let reserved_block_count_hi = read_u32(&block_bytes, &mut offset);
+            let free_block_count_hi = read_u32(&block_bytes, &mut offset);
+
+            let min_extra_isize =read_u16(&block_bytes, &mut offset);
+            let want_extra_isize =read_u16(&block_bytes, &mut offset);
+            let flags =read_u32(&block_bytes, &mut offset);
+
+            let raid_stride = read_u16(&block_bytes, &mut offset);
+            let mmp_interval = read_u16(&block_bytes, &mut offset);
+            let mmp_block = read_u64(&block_bytes, &mut offset);
+            let raid_stripe_width = read_u32(&block_bytes, &mut offset);
+
+            let log_groups_per_flex = read_u8(&block_bytes, &mut offset);
+            let checksum_type = read_u8(&block_bytes, &mut offset);
+            let reserved_pad = read_u16(&block_bytes, &mut offset);
 
             Some(SuperblockExtension {
                 first_nonreserved_inode,
@@ -240,10 +265,37 @@ impl Superblock {
                 compression_algorithms,
                 file_prealloc_block_count,
                 dir_prealloc_block_count,
+                reserved_gdt_blocks,
                 journal_id,
                 journal_inode,
                 journal_device,
                 orphan_inode_head_list,
+
+                hash_seed,
+                default_hash_version,
+                jnl_backup_type,
+                bgdesc_size,
+                default_mounts_ops,
+                first_meta_bg,
+                mkfs_time,
+                jnl_blocks,
+
+                block_count_hi,
+                reserved_block_count_hi,
+                free_block_count_hi,
+
+                min_extra_isize,
+                want_extra_isize,
+                flags,
+
+                raid_stride,
+                mmp_interval,
+                mmp_block,
+                raid_stripe_width,
+
+                log_groups_per_flex,
+                checksum_type,
+                reserved_pad,
             })
         } else {
             None
@@ -279,91 +331,107 @@ impl Superblock {
     }
     /// Serialize the basic part of the superblock. The buffer must fit exactly one block.
     pub fn serialize_basic(&self, buffer: &mut [u8]) {
-        write_u32(buffer, 0, self.inode_count);
-        write_u32(buffer, 4, self.block_count);
-        write_u32(buffer, 8, self.reserved_block_count);
-        write_u32(buffer, 12, self.unalloc_block_count);
-        write_u32(buffer, 16, self.unalloc_inode_count);
-        write_u32(buffer, 20, self.superblock_block_num);
+        let mut offset = 0;
+        write_u32(buffer, &mut offset, self.inode_count);
+        write_u32(buffer, &mut offset, self.block_count);
+        write_u32(buffer, &mut offset, self.reserved_block_count);
+        write_u32(buffer, &mut offset, self.unalloc_block_count);
+        write_u32(buffer, &mut offset, self.unalloc_inode_count);
+        write_u32(buffer, &mut offset, self.superblock_block_num);
         write_u32(
             buffer,
-            24,
+            &mut offset,
             log2_round_up(self.block_size as u32) - log2_round_up(1024),
         );
         write_u32(
             buffer,
-            28,
+            &mut offset,
             log2_round_up(self.fragment_size as u32) - log2_round_up(1024),
         );
-        write_u32(buffer, 32, self.blocks_per_group);
-        write_u32(buffer, 36, self.fragments_per_group);
-        write_u32(buffer, 40, self.inodes_per_group);
-        write_u32(buffer, 44, self.last_mount_time);
-        write_u32(buffer, 48, self.last_write_time);
-        write_u16(buffer, 52, self.mounts_since_fsck);
-        write_u16(buffer, 54, self.mounts_left_before_fsck);
-        write_u16(buffer, 56, SIGNATURE);
-        write_u16(buffer, 58, FilesystemState::serialize(self.fs_state));
+        write_u32(buffer, &mut offset, self.blocks_per_group);
+        write_u32(buffer, &mut offset, self.fragments_per_group);
+        write_u32(buffer, &mut offset, self.inodes_per_group);
+        write_u32(buffer, &mut offset, self.last_mount_time);
+        write_u32(buffer, &mut offset, self.last_write_time);
+        write_u16(buffer, &mut offset, self.mounts_since_fsck);
+        write_u16(buffer, &mut offset, self.mounts_left_before_fsck);
+        write_u16(buffer, &mut offset, SIGNATURE);
+        write_u16(buffer, &mut offset, FilesystemState::serialize(self.fs_state));
         write_u16(
             buffer,
-            60,
+            &mut offset,
             ErrorHandlingMethod::serialize(self.error_handling),
         );
-        write_u16(buffer, 62, self.minor_version);
-        write_u32(buffer, 64, self.last_fsck_time);
-        write_u32(buffer, 68, self.interval_between_forced_fscks);
-        write_u32(buffer, 72, OsId::serialize(self.os_id));
-        write_u32(buffer, 76, self.major_version);
-        write_u16(buffer, 80, self.reserver_uid);
-        write_u16(buffer, 82, self.reserver_gid);
+        write_u16(buffer, &mut offset, self.minor_version);
+        write_u32(buffer, &mut offset, self.last_fsck_time);
+        write_u32(buffer, &mut offset, self.interval_between_forced_fscks);
+        write_u32(buffer, &mut offset, OsId::serialize(self.os_id));
+        write_u32(buffer, &mut offset, self.major_version);
+        write_u16(buffer, &mut offset, self.reserver_uid);
+        write_u16(buffer, &mut offset, self.reserver_gid);
     }
 
     /// Serialize the extended part of the superblock. The same buffer used for serialize_basic
     /// should be used here, as this functions writes to buffer[84..].
     pub fn serialize_extended(&self, buffer: &mut [u8]) {
+        let mut offset = 84;
+
         let extended: &SuperblockExtension = self.extended.as_ref().unwrap();
 
-        write_u32(buffer, 84, extended.first_nonreserved_inode);
-        write_u16(buffer, 88, extended.inode_struct_size);
-        write_u16(buffer, 90, extended.superblock_block_group);
-        write_u32(buffer, 92, extended.opt_features_present.bits());
-        write_u32(buffer, 96, extended.req_features_present.bits());
+        write_u32(buffer, &mut offset, extended.first_nonreserved_inode);
+        write_u16(buffer, &mut offset, extended.inode_struct_size);
+        write_u16(buffer, &mut offset, extended.superblock_block_group);
+        write_u32(buffer, &mut offset, extended.opt_features_present.bits());
+        write_u32(buffer, &mut offset, extended.req_features_present.bits());
 
-        write_u32(buffer, 100, extended.req_features_for_rw.bits());
-        write_uuid(buffer, 104, &extended.fs_id);
+        write_u32(buffer, &mut offset, extended.req_features_for_rw.bits());
+        write_uuid(buffer, &mut offset, &extended.fs_id);
 
-        {
-            if let Some(vol_name) = extended.vol_name.as_ref() {
-                let vol_name = CString::new(vol_name.as_bytes()).unwrap();
-                let vol_name_bytes = vol_name.to_bytes_with_nul();
-                let len = std::cmp::min(16, vol_name_bytes.len());
-                assert_eq!(0, vol_name_bytes[len - 1]);
-                buffer[120..120 + len].copy_from_slice(&vol_name_bytes);
-            } else {
-                buffer[120] = 0;
-            }
+        buffer[offset..offset + 16].copy_from_slice(&extended.vol_name);
+        offset += 16;
+
+        buffer[offset..offset + 64].copy_from_slice(&extended.last_mount_path);
+        offset += 64;
+
+        write_u32(buffer, &mut offset, extended.compression_algorithms);
+        write_u8(buffer, &mut offset, extended.file_prealloc_block_count);
+        write_u8(buffer, &mut offset, extended.dir_prealloc_block_count);
+        write_u16(buffer, &mut offset, extended.reserved_gdt_blocks);
+
+        write_uuid(buffer, &mut offset, &extended.journal_id);
+        write_u32(buffer, &mut offset, extended.journal_inode);
+        write_u32(buffer, &mut offset, extended.journal_device);
+        write_u32(buffer, &mut offset, extended.orphan_inode_head_list);
+
+        for n in extended.hash_seed.iter().copied() {
+            write_u32(buffer, &mut offset, n);
+        }
+        write_u8(buffer, &mut offset, extended.default_hash_version);
+        write_u8(buffer, &mut offset, extended.jnl_backup_type);
+        write_u16(buffer, &mut offset, extended.bgdesc_size);
+
+        write_u32(buffer, &mut offset, extended.default_mounts_ops);
+        write_u32(buffer, &mut offset, extended.default_mounts_ops);
+        write_u32(buffer, &mut offset, extended.first_meta_bg);
+
+        for n in extended.jnl_blocks.iter().copied() {
+            write_u32(buffer, &mut offset, n);
         }
 
-        {
-            if let Some(last_mount_path) = extended.last_mount_path.as_ref() {
-                let path = CString::new(last_mount_path.as_bytes()).unwrap();
-                let path_bytes = path.to_bytes_with_nul();
-                let len = std::cmp::min(64, path_bytes.len());
-                assert_eq!(0, path_bytes[len - 1]);
-                buffer[136..136 + len].copy_from_slice(&path_bytes);
-            } else {
-                buffer[136] = 0;
-            }
-        }
+        write_u32(buffer, &mut offset, extended.block_count_hi);
+        write_u32(buffer, &mut offset, extended.reserved_block_count_hi);
+        write_u32(buffer, &mut offset, extended.free_block_count_hi);
 
-        write_u32(buffer, 200, extended.compression_algorithms);
-        write_u8(buffer, 204, extended.file_prealloc_block_count);
-        write_u8(buffer, 205, extended.dir_prealloc_block_count);
+        write_u16(buffer, &mut offset, extended.min_extra_isize);
+        write_u16(buffer, &mut offset, extended.want_extra_isize);
+        write_u32(buffer, &mut offset, extended.flags);
 
-        write_uuid(buffer, 208, &extended.journal_id);
-        write_u32(buffer, 224, extended.journal_inode);
-        write_u32(buffer, 228, extended.journal_device);
-        write_u32(buffer, 232, extended.orphan_inode_head_list);
+        write_u16(buffer, &mut offset, extended.raid_stride);
+        write_u64(buffer, &mut offset, extended.mmp_block);
+        write_u32(buffer, &mut offset, extended.raid_stripe_width);
+        write_u8(buffer, &mut offset, extended.log_groups_per_flex);
+        write_u8(buffer, &mut offset, extended.checksum_type);
+        write_u16(buffer, &mut offset, extended.reserved_pad);
     }
 
     fn serialize(&self, buffer: &mut [u8]) {
