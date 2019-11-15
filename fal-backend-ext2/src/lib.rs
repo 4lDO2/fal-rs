@@ -26,7 +26,7 @@ pub use fal::{
 
 fn read_block_to<D: fal::Device>(
     filesystem: &Filesystem<D>,
-    block_address: u32,
+    block_address: u64,
     buffer: &mut [u8],
 ) -> io::Result<()> {
     debug_assert!(block_group::block_exists(block_address, filesystem)?);
@@ -34,19 +34,19 @@ fn read_block_to<D: fal::Device>(
 }
 fn read_block_to_raw<D: fal::Device>(
     filesystem: &Filesystem<D>,
-    block_address: u32,
+    block_address: u64,
     buffer: &mut [u8],
 ) -> io::Result<()> {
     let mut guard = filesystem.device.lock().unwrap();
     guard.seek(SeekFrom::Start(
-        block_address as u64 * u64::from(filesystem.superblock.block_size),
+        block_address * u64::from(filesystem.superblock.block_size),
     ))?;
     guard.read_exact(buffer)?;
     Ok(())
 }
 fn read_block<D: fal::Device>(
     filesystem: &Filesystem<D>,
-    block_address: u32,
+    block_address: u64,
 ) -> io::Result<Box<[u8]>> {
     let mut vector = vec![0; filesystem.superblock.block_size.try_into().unwrap()];
     read_block_to(filesystem, block_address, &mut vector)?;
@@ -54,7 +54,7 @@ fn read_block<D: fal::Device>(
 }
 fn write_block_raw<D: fal::DeviceMut>(
     filesystem: &Filesystem<D>,
-    block_address: u32,
+    block_address: u64,
     buffer: &[u8],
 ) -> io::Result<()> {
     let mut guard = filesystem.device.lock().unwrap();
@@ -66,7 +66,7 @@ fn write_block_raw<D: fal::DeviceMut>(
 }
 fn write_block<D: fal::DeviceMut>(
     filesystem: &Filesystem<D>,
-    block_address: u32,
+    block_address: u64,
     buffer: &[u8],
 ) -> io::Result<()> {
     debug_assert!(block_group::block_exists(block_address, filesystem)?);

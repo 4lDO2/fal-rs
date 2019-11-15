@@ -144,13 +144,13 @@ impl Inode {
         let block_group_index =
             block_group::inode_block_group_index(&filesystem.superblock, inode_address);
         let block_group_descriptor =
-            block_group::load_block_group_descriptor(filesystem, block_group_index)?;
+            block_group::load_block_group_descriptor(filesystem, block_group_index.into())?;
         let inode_index_in_group =
             block_group::inode_index_inside_group(&filesystem.superblock, inode_address);
         let inode_size = filesystem.superblock.inode_size();
 
-        let containing_block_index = block_group_descriptor.inode_table_start_baddr
-            + inode_index_in_group * u32::from(inode_size) / filesystem.superblock.block_size;
+        let containing_block_index = block_group_descriptor.inode_table_start_baddr()
+            + u64::from(inode_index_in_group * u32::from(inode_size) / filesystem.superblock.block_size);
 
         let max_inodes_in_block = filesystem.superblock.block_size / u32::from(inode_size);
 
@@ -184,13 +184,13 @@ impl Inode {
         let block_group_index =
             block_group::inode_block_group_index(&filesystem.superblock, inode_address);
         let block_group_descriptor =
-            block_group::load_block_group_descriptor(filesystem, block_group_index)?;
+            block_group::load_block_group_descriptor(filesystem, block_group_index.into())?;
         let inode_index_in_group =
             block_group::inode_index_inside_group(&filesystem.superblock, inode_address);
         let inode_size = filesystem.superblock.inode_size();
 
-        let containing_block_index = block_group_descriptor.inode_table_start_baddr
-            + inode_index_in_group * u32::from(inode_size) / filesystem.superblock.block_size;
+        let containing_block_index = block_group_descriptor.inode_table_start_baddr()
+            + u64::from(inode_index_in_group * u32::from(inode_size) / filesystem.superblock.block_size);
 
         let max_inodes_in_block = filesystem.superblock.block_size / u32::from(inode_size);
 
@@ -336,7 +336,7 @@ impl Inode {
         singly_baddr: u32,
         rel_baddr: u32,
     ) -> io::Result<u32> {
-        let singly_indirect_block_bytes = read_block(filesystem, singly_baddr)?;
+        let singly_indirect_block_bytes = read_block(filesystem, singly_baddr.try_into().unwrap())?;
         let index = rel_baddr as usize - Self::DIRECT_PTR_COUNT;
 
         Ok(read_u32(
@@ -351,7 +351,7 @@ impl Inode {
     ) -> io::Result<u32> {
         let entry_count = Self::entry_count(filesystem.superblock.block_size);
 
-        let doubly_indirect_block_bytes = read_block(filesystem, doubly_baddr)?;
+        let doubly_indirect_block_bytes = read_block(filesystem, doubly_baddr.try_into().unwrap())?;
         let index = (rel_baddr as usize - Self::DIRECT_PTR_COUNT - entry_count) / entry_count;
 
         let singly = read_u32(&doubly_indirect_block_bytes, index * mem::size_of::<u32>());
@@ -366,7 +366,7 @@ impl Inode {
     ) -> io::Result<u32> {
         let entry_count = Self::entry_count(filesystem.superblock.block_size);
 
-        let triply_indirect_block_bytes = read_block(filesystem, triply_baddr)?;
+        let triply_indirect_block_bytes = read_block(filesystem, triply_baddr.try_into().unwrap())?;
         let index =
             (rel_baddr as usize - Self::DIRECT_PTR_COUNT - entry_count - entry_count * entry_count)
                 / (entry_count * entry_count);
@@ -411,7 +411,7 @@ impl Inode {
             return Err(fal::Error::Overflow);
         }
         let abs_baddr = self.absolute_baddr(filesystem, rel_baddr)?;
-        Ok(read_block_to(filesystem, abs_baddr, buffer)?)
+        Ok(read_block_to(filesystem, abs_baddr.try_into().unwrap(), buffer)?)
     }
     pub fn write_content_block<D: fal::DeviceMut>(
         &self,
@@ -423,7 +423,7 @@ impl Inode {
             return Err(fal::Error::Overflow);
         }
         let abs_baddr = self.absolute_baddr(filesystem, rel_baddr)?;
-        Ok(write_block(filesystem, abs_baddr, buffer)?)
+        Ok(write_block(filesystem, abs_baddr.try_into().unwrap(), buffer)?)
     }
     pub fn read<D: fal::Device>(
         &self,

@@ -644,6 +644,9 @@ impl Superblock {
             .map(|extended| extended.inode_struct_size)
             .unwrap_or(128)
     }
+    pub fn is_64bit(&self) -> bool {
+        self.extended.as_ref().map(|ext| ext.req_features_present.contains(RequiredFeatureFlags::_64_BIT)).unwrap_or(false)
+    }
 }
 #[derive(Clone, Copy, Debug)]
 pub enum FilesystemState {
