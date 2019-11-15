@@ -11,38 +11,116 @@ use crate::{
     write_block, write_u16, write_u32, write_u8, Filesystem,
 };
 
+use scroll::{Pread, Pwrite};
+
 pub const ROOT: u32 = 2;
 
 pub const BASE_INODE_SIZE: u64 = 128;
+pub const EXTENDED_INODE_SIZE: u64 = 160;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Inode {
-    pub addr: u32,
-    pub ty: InodeType,
-    pub permissions: u16,
-    pub uid: u32,
-    pub last_access_time: u32,
-    pub creation_time: u32,
-    pub last_modification_time: u32,
-    pub deletion_time: u32,
-    pub gid: u32,
-    pub hard_link_count: u16,
-    pub disk_sector_count: u32,
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Pread, Pwrite)]
+pub struct InodeRawBase {
+    pub mode: u16,
+    pub uid: u16,
+    pub size_lo: u32,
+    
+    pub a_time: u32,
+    pub c_time: u32,
+    pub m_time: u32,
+    pub d_time: u32,
+
+    pub gid: u16,
+    pub hardlink_count: u16,
+
+    pub block_count_lo: u32,
     pub flags: u32,
-    pub os_specific_1: u32,
-    pub direct_ptrs: [u32; Self::DIRECT_PTR_COUNT],
+    pub os_specific_1: [u8; 4],
+    pub direct_ptrs: [u32; 12],
     pub singly_indirect_ptr: u32,
     pub doubly_indirect_ptr: u32,
     pub triply_indirect_ptr: u32,
-    pub generation_number: u32,
-    pub size: u64,
+    pub generation_lo: u32,
 
-    pub extended_atribute_block: u32,
-    pub size_high_or_acl: u32,
-    pub fragment_baddr: u32,
+    pub file_acl_lo: u32,
+    pub size_hi_or_dir_acl: u32,
+
+    pub obsolete_faddr: u32,
     pub os_specific_2: [u8; 12],
+}
 
-    block_size: u32,
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Pread, Pwrite)]
+pub struct InodeRawExt {
+    pub extra_isize: u16,
+    pub checksum_hi: u16,
+    pub c_time_extra: u32,
+    pub m_time_extra: u32,
+    pub a_time_extra: u32,
+    pub cr_time: u32,
+    pub cr_time_extra: u32,
+    pub generation_hi: u32,
+    pub project_id: u32,
+}
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub struct InodeRaw {
+    pub base: InodeRawBase,
+    pub ext: Option<InodeRawExt>,
+}
+
+impl InodeRaw {
+    pub fn parse(bytes: &[u8]) -> Self {
+        Self {
+            base: bytes.pread_with(0, scroll::LE).unwrap(),
+            ext: if bytes.len() >= EXTENDED_INODE_SIZE as usize {
+                Some(bytes.pread_with(BASE_INODE_SIZE as usize, scroll::LE).unwrap())
+            } else {
+                None
+            }
+        }
+    }
+    pub fn serialize(this: &Self, bytes: &mut [u8]) {
+        bytes.pwrite_with(&this.base, 0, scroll::LE);
+
+        if let Some(ref ext) = this.ext {
+            bytes.pwrite_with(ext, EXTENDED_INODE_SIZE as usize, scroll::LE).unwrap();
+        }
+    }
+    pub fn ty(&self) -> InodeType {
+        InodeType::from_type_and_perm(self.base.mode).0.unwrap()
+    }
+    pub fn permissions(&self) -> u16 {
+        InodeType::from_type_and_perm(self.base.mode).1
+    }
+    pub fn set_permissions(&mut self, permissions: u16) {
+        debug_assert_eq!(permissions & InodeType::PERM_MASK, permissions);
+        let other = self.mode & !InodeType::PERM_MASK;
+        self.mode = other | permissions;
+    }
+    pub fn set_uid(&mut self, uid: u32) {
+        unimplemented!()
+    }
+    pub fn set_gid(&mut self, gid: u32) {
+        unimplemented!()
+    }
+    pub fn size(&self, superblock: &Superblock) -> u64 {
+        u64::from(self.base.size_lo) | if superblock.ro_compat_features().contains(RoFeatureFlags::EXTENDED_FILE_SIZE) && self.ty() != InodeType::Dir {
+            u64::from(self.base.size_hi_or_dir_acl)
+        } else { 0 } << 32
+    }
+    pub fn generation(&self) -> u64 {
+        u64::from(self.base.generation_lo) | u64::from(self.ext.as_ref().map(|ext| ext.generation_hi).unwrap_or(0)) << 32
+    }
+    pub fn cr_time(&self) -> Option<u32> {
+        self.ext.as_ref().map(|ext| ext.cr_time)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub struct Inode {
+    pub block_size: u32,
+    pub size: u64,
+    pub addr: u32,
+    pub raw: InodeRaw,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -202,7 +280,7 @@ impl Inode {
         let inode_bytes = &mut containing_block
             [inode_index_in_block * inode_size..inode_index_in_block * inode_size + inode_size];
 
-        Self::serialize(this, &filesystem.superblock, inode_bytes);
+        Self::serialize(this, inode_bytes);
 
         Ok(write_block(
             filesystem,
@@ -211,122 +289,24 @@ impl Inode {
         )?)
     }
     pub fn parse(superblock: &Superblock, addr: u32, bytes: &[u8]) -> Self {
-        let (ty, permissions) = InodeType::from_type_and_perm(read_u16(bytes, 0));
-        let ty = ty.unwrap();
-
-        let os_specific_2 = {
-            let mut os_specific_bytes = [0u8; 12];
-            os_specific_bytes.copy_from_slice(&bytes[116..128]);
-            os_specific_bytes
-        };
-        let gid_low = read_u16(bytes, 24);
-        let uid_low = read_u16(bytes, 2);
-
-        let (gid_high, uid_high) = match superblock.os_id {
-            OsId::Linux | OsId::Hurd => (read_u16(&os_specific_2, 4), read_u16(&os_specific_2, 6)),
-            _ => (0, 0),
-        };
-
-        let gid = gid_low as u32 | ((gid_high as u32) << 16);
-        let uid = uid_low as u32 | ((uid_high as u32) << 16);
-
-        let size_low = read_u32(bytes, 4);
-        let size_high_or_acl = read_u32(bytes, 108);
-
-        let size = u64::from(size_low)
-            | if let Some(extended) = superblock.extended.as_ref() {
-                if extended
-                    .req_features_for_rw
-                    .contains(RoFeatureFlags::EXTENDED_FILE_SIZE)
-                    && ty == InodeType::File
-                {
-                    u64::from(size_high_or_acl) << 32
-                } else {
-                    0
-                }
-            } else {
-                0
-            };
+        let raw = InodeRaw::parse(bytes);
+        let size = raw.size(superblock);
 
         Self {
             block_size: superblock.block_size,
             addr,
-            ty,
-            permissions,
-            uid,
+            raw,
             size,
-            last_access_time: read_u32(bytes, 8),
-            creation_time: read_u32(bytes, 12),
-            last_modification_time: read_u32(bytes, 16),
-            deletion_time: read_u32(bytes, 20),
-            gid,
-            hard_link_count: read_u16(bytes, 26),
-            disk_sector_count: read_u32(bytes, 28),
-            flags: read_u32(bytes, 32),
-            os_specific_1: read_u32(bytes, 36),
-            direct_ptrs: {
-                let mut direct_ptrs = [0u32; 12];
-                for index in 0..12 {
-                    let mut le_bytes = [0u8; mem::size_of::<u32>()];
-                    le_bytes.copy_from_slice(&bytes[40 + index * 4..40 + index * 4 + 4]);
-                    let direct_ptr = u32::from_le_bytes(le_bytes);
-                    direct_ptrs[index] = direct_ptr;
-                }
-                direct_ptrs
-            },
-            singly_indirect_ptr: read_u32(bytes, 88),
-            doubly_indirect_ptr: read_u32(bytes, 92),
-            triply_indirect_ptr: read_u32(bytes, 96),
-            generation_number: read_u32(bytes, 100),
-            extended_atribute_block: read_u32(bytes, 104),
-            size_high_or_acl: read_u32(bytes, 108),
-            fragment_baddr: read_u32(bytes, 112),
-            os_specific_2,
         }
     }
-    pub fn serialize(this: &Inode, superblock: &Superblock, buffer: &mut [u8]) {
-        write_u16(
-            buffer,
-            0,
-            InodeType::to_type_and_perm((this.ty, this.permissions)),
-        );
-        write_u16(buffer, 2, this.uid as u16);
-        write_u32(buffer, 4, this.size as u32);
-        write_u32(buffer, 8, this.last_access_time);
-        write_u32(buffer, 12, this.creation_time);
-        write_u32(buffer, 16, this.last_modification_time);
-        write_u32(buffer, 20, this.deletion_time);
-        write_u16(buffer, 24, this.gid as u16);
-        write_u16(buffer, 26, this.hard_link_count);
-        write_u32(buffer, 28, this.disk_sector_count);
-        write_u32(buffer, 32, this.flags);
-        write_u32(buffer, 36, this.os_specific_1);
-
-        let stride = mem::size_of::<u32>();
-        for (index, direct_ptr) in this.direct_ptrs.iter().enumerate() {
-            buffer[40 + index * stride..40 + (index + 1) * stride]
-                .copy_from_slice(&direct_ptr.to_le_bytes());
-        }
-
-        write_u32(buffer, 88, this.singly_indirect_ptr);
-        write_u32(buffer, 92, this.doubly_indirect_ptr);
-        write_u32(buffer, 96, this.triply_indirect_ptr);
-        write_u32(buffer, 100, this.generation_number);
-        write_u32(buffer, 104, this.extended_atribute_block);
-        write_u32(buffer, 108, this.size_high_or_acl);
-        write_u32(buffer, 112, this.fragment_baddr);
-
-        assert!(u32::from(superblock.inode_size()) <= superblock.block_size);
-
-        // TODO: Serialize the os specific high uid and gid.
-        buffer[116..128].copy_from_slice(&this.os_specific_2);
-
-        for byte in &mut buffer[BASE_INODE_SIZE.try_into().unwrap()..] {
-            *byte = 0;
-        }
+    pub fn serialize(this: &Inode, buffer: &mut [u8]) {
+        InodeRaw::serialize(&this.raw, buffer)
+    }
+    pub fn size(&self) -> u64 {
+        self.size
     }
     pub fn size_in_blocks(&self) -> u64 {
-        fal::div_round_up(self.size, self.block_size.into())
+        fal::div_round_up(self.size(), self.block_size.into())
     }
     fn entry_count(block_size: u32) -> usize {
         block_size as usize / mem::size_of::<u32>()
@@ -390,13 +370,13 @@ impl Inode {
         let triply_indir_size = doubly_indir_size + entry_count * entry_count * entry_count;
 
         Ok(if rel_baddr < direct_size {
-            self.direct_ptrs[usize::try_from(rel_baddr).unwrap()]
+            self.raw.base.direct_ptrs[usize::try_from(rel_baddr).unwrap()]
         } else if rel_baddr < singly_indir_size {
-            Self::read_singly(filesystem, self.singly_indirect_ptr, rel_baddr)?
+            Self::read_singly(filesystem, self.raw.base.singly_indirect_ptr, rel_baddr)?
         } else if rel_baddr < doubly_indir_size {
-            Self::read_doubly(filesystem, self.doubly_indirect_ptr, rel_baddr)?
+            Self::read_doubly(filesystem, self.raw.base.doubly_indirect_ptr, rel_baddr)?
         } else if rel_baddr < triply_indir_size {
-            Self::read_triply(filesystem, self.triply_indirect_ptr, rel_baddr)?
+            Self::read_triply(filesystem, self.raw.base.triply_indirect_ptr, rel_baddr)?
         } else {
             panic!("Read exceeding maximum ext2 file size.");
         })
@@ -567,7 +547,7 @@ impl Inode {
         &'a self,
         filesystem: &'a Filesystem<D>,
     ) -> io::Result<RawDirIterator<'a, D>> {
-        if self.ty != InodeType::Dir {
+        if self.ty() != InodeType::Dir {
             // TODO: ENOTDIR
             return Err(io::Error::from(io::ErrorKind::InvalidInput));
         }
@@ -627,7 +607,7 @@ impl Inode {
         filesystem: &mut Filesystem<D>,
         inode: u32,
     ) -> io::Result<()> {
-        assert_eq!(self.hard_link_count, 0);
+        assert_eq!(self.base.hardlink_count, 0);
 
         // Frees the inode and its owned blocks.
         block_group::free_inode(inode, filesystem)
@@ -672,15 +652,39 @@ impl Inode {
         DirEntry::serialize(&entry, &filesystem.superblock, &mut bytes);
         self.write(filesystem, offset, &bytes)?;
 
-        entry_inode_struct.hard_link_count -= 1;
+        entry_inode_struct.base.hardlink_count -= 1;
 
-        if entry_inode_struct.hard_link_count == 0 {
+        if entry_inode_struct.base.hardlink_count == 0 {
             entry_inode_struct.remove(filesystem, entry.inode)?;
         } else {
             Inode::store(&entry_inode_struct, filesystem)?;
         }
 
         Ok(())
+    }
+}
+impl std::ops::Deref for Inode {
+    type Target = InodeRaw;
+
+    fn deref(&self) -> &InodeRaw {
+        &self.raw
+    }
+}
+impl std::ops::Deref for InodeRaw {
+    type Target = InodeRawBase;
+
+    fn deref(&self) -> &InodeRawBase {
+        &self.base
+    }
+}
+impl std::ops::DerefMut for Inode {
+    fn deref_mut(&mut self) -> &mut InodeRaw {
+        &mut self.raw
+    }
+}
+impl std::ops::DerefMut for InodeRaw {
+    fn deref_mut(&mut self) -> &mut InodeRawBase {
+        &mut self.base
     }
 }
 pub struct RawDirIterator<'a, D: fal::Device> {
@@ -842,7 +846,7 @@ impl DirEntry {
     pub fn ty<D: fal::Device>(&self, filesystem: &Filesystem<D>) -> fal::Result<InodeType> {
         Ok(match self.type_indicator {
             Some(ty) => ty,
-            None => Inode::load(filesystem, self.inode)?.ty,
+            None => Inode::load(filesystem, self.inode)?.ty(),
         })
     }
 }

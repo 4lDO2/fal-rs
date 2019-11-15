@@ -117,7 +117,7 @@ impl<D: fal::DeviceMut> Filesystem<D> {
             offset: 0,
         };
 
-        if ty == Open::Directory && fh.inode.ty == inode::InodeType::File {
+        if ty == Open::Directory && fh.inode.ty() == inode::InodeType::File {
             return Err(fal::Error::NotDirectory);
         }
 
@@ -133,7 +133,7 @@ impl fal::Inode for Inode {
 
     #[inline]
     fn generation_number(&self) -> Option<u64> {
-        Some(self.generation_number.into())
+        Some(self.generation())
     }
     #[inline]
     fn addr(&self) -> u32 {
@@ -142,28 +142,28 @@ impl fal::Inode for Inode {
     fn attrs(&self) -> fal::Attributes<u32> {
         fal::Attributes {
             access_time: Timespec {
-                sec: self.last_access_time.into(),
+                sec: self.a_time.into(),
                 nsec: 0,
             },
             change_time: Timespec {
-                sec: self.last_modification_time.into(),
+                sec: self.c_time.into(),
                 nsec: 0,
             },
             creation_time: Timespec {
-                sec: self.creation_time.into(),
+                sec: self.cr_time().unwrap_or(0).into(),
                 nsec: 0,
             },
             modification_time: Timespec {
-                sec: self.last_modification_time.into(),
+                sec: self.m_time.into(),
                 nsec: 0,
             },
-            filetype: self.ty.into(),
+            filetype: self.ty().into(),
             block_count: self.size_in_blocks(),
             flags: self.flags,
             group_id: self.gid.into(),
-            hardlink_count: self.hard_link_count.into(),
+            hardlink_count: self.hardlink_count.into(),
             inode: self.addr,
-            permissions: self.permissions,
+            permissions: self.permissions(),
             rdev: 0,
             size: self.size,
             user_id: self.uid.into(),
@@ -171,17 +171,17 @@ impl fal::Inode for Inode {
     }
     #[inline]
     fn set_perm(&mut self, permissions: u16) {
-        self.permissions = permissions & 0o777;
+        self.set_permissions(permissions)
     }
 
     #[inline]
     fn set_uid(&mut self, uid: u32) {
-        self.uid = uid;
+        self.set_uid(uid)
     }
 
     #[inline]
     fn set_gid(&mut self, gid: u32) {
-        self.gid = gid;
+        self.set_gid(gid)
     }
 }
 
@@ -224,13 +224,16 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
 
         if !general_options.immutable { superblock.store(&mut device).unwrap() }
 
-        Self {
+
+        let mut fs = Self {
             superblock,
             device: Mutex::new(device),
             fhs: HashMap::new(),
             last_fh: 0,
             general_options,
-        }
+        };
+        dbg!(crate::inode::Inode::load(&mut fs, 2).unwrap());
+        fs
     }
 
     fn unmount(self) {}
@@ -274,7 +277,7 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
             None => return Err(fal::Error::BadFd),
         };
 
-        if handle.inode.ty != inode::InodeType::Dir {
+        if handle.inode.ty() != inode::InodeType::Dir {
             return Err(fal::Error::NotDirectory);
         }
 
@@ -306,7 +309,7 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
     ) -> fal::Result<fal::DirectoryEntry<u32>> {
         let inode = self.load_inode(parent)?;
 
-        if inode.ty != inode::InodeType::Dir {
+        if inode.ty() != inode::InodeType::Dir {
             return Err(fal::Error::NotDirectory);
         }
 
@@ -332,7 +335,7 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
 
         let inode = self.load_inode(inode)?;
 
-        if inode.ty != inode::InodeType::Symlink {
+        if inode.ty() != inode::InodeType::Symlink {
             return Err(fal::Error::Invalid);
         }
 

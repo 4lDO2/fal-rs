@@ -225,7 +225,7 @@ impl Superblock {
         let mut block_bytes = [0u8; 1024];
         device.read_exact(&mut block_bytes)?;
 
-        Ok(dbg!(Self::parse(&block_bytes)))
+        Ok(Self::parse(&block_bytes))
     }
     pub fn parse(block_bytes: &[u8]) -> Self {
         let mut offset = 0;
@@ -612,6 +612,10 @@ impl Superblock {
 
         // FIXME: Write the updated checksum.
         write_u32(buffer, &mut offset, extended.superblock_checksum);
+    }
+
+    pub fn ro_compat_features(&self) -> RoFeatureFlags {
+        self.extended.as_ref().map(|ext| ext.req_features_for_rw).unwrap_or(RoFeatureFlags::empty())
     }
 
     fn serialize(&self, buffer: &mut [u8]) {
