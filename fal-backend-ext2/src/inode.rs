@@ -549,6 +549,23 @@ impl Inode {
         offset: u64,
         mut buffer: &mut [u8],
     ) -> fal::Result<usize> {
+        if self.flags().contains(InodeFlags::INLINE_DATA) {
+            if self.flags().contains(InodeFlags::EXTENTS) {
+                // TODO: Error handling
+                panic!("Inode uses both INLINE and EXTENTS for data storage; this should not be possible, right?")
+            }
+            if self.size() > 60 {
+                panic!("Inode too large to actually be INLINE ({} > 60)", self.size())
+            }
+            if offset >= self.size() {
+                return Ok(0)
+            }
+
+            let readable_file_data = &self.blocks.inner[offset as usize..self.size() as usize];
+            let bytes_to_read = std::cmp::min(buffer.len(), readable_file_data.len());
+            buffer[..bytes_to_read].copy_from_slice(&readable_file_data[..bytes_to_read]);
+            return Ok(bytes_to_read);
+        }
         if self.flags().contains(InodeFlags::EXTENTS) {
             unimplemented!()
         }
