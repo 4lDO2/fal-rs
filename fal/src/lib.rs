@@ -8,8 +8,8 @@ use std::{
     mem,
     ops::{Add, Div, Mul, Rem},
 };
-use time::Timespec;
-use uuid::Uuid;
+pub use time::Timespec;
+pub use uuid::Uuid;
 
 pub fn read_uuid(block: &[u8], offset: usize) -> Uuid {
     let mut bytes = [0u8; 16];

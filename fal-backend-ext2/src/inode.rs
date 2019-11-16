@@ -11,6 +11,8 @@ use crate::{
     write_block, write_u16, write_u32, write_u8, Filesystem,
 };
 
+use bitflags::bitflags;
+use fal::Timespec;
 use scroll::{Pread, Pwrite};
 
 pub const ROOT: u32 = 2;
@@ -24,10 +26,10 @@ pub struct InodeRawBase {
     pub uid: u16,
     pub size_lo: u32,
     
-    pub a_time: u32,
-    pub c_time: u32,
-    pub m_time: u32,
-    pub d_time: u32,
+    pub a_time_lo: i32,
+    pub c_time_lo: i32,
+    pub m_time_lo: i32,
+    pub d_time_lo: i32,
 
     pub gid: u16,
     pub hardlink_count: u16,
@@ -55,7 +57,7 @@ pub struct InodeRawExt {
     pub c_time_extra: u32,
     pub m_time_extra: u32,
     pub a_time_extra: u32,
-    pub cr_time: u32,
+    pub cr_time_lo: i32,
     pub cr_time_extra: u32,
     pub generation_hi: u32,
     pub project_id: u32,
@@ -65,6 +67,46 @@ pub struct InodeRawExt {
 pub struct InodeRaw {
     pub base: InodeRawBase,
     pub ext: Option<InodeRawExt>,
+}
+
+bitflags! {
+    pub struct InodeFlags: u32 {
+        const SECURE_DELETION = 0x1;
+        const PRESERVED = 0x2;
+        const COMPRESSED = 0x4;
+        const SYNC = 0x8;
+        const IMMUTABLE = 0x10;
+        const APPEND_ONLY = 0x20;
+        const NODUMP = 0x40;
+        const NOATIME = 0x80;
+        const DIRTY_COMPR = 0x100;
+        const HAS_COMPR_CLUSTERS = 0x200;
+        const DONT_COMPR = 0x400;
+        const ENCRYPTED = 0x800;
+        const DIR_HASH_IDX = 0x1000;
+        const AFS_MAGIC = 0x2000;
+        const ALWAYS_JOURNAL = 0x4000;
+        const DONT_MERGE = 0x8000;
+        const DIR_SYNC = 0x1_0000;
+        const TOP_DIR = 0x2_0000;
+        const HUGE_FILE = 0x4_0000;
+        const EXTENTS = 0x8_0000;
+        const VERIFY = 0x10_0000;
+        const EA_INODE = 0x20_0000;
+        const ALLOC_PAST_EOF = 0x40_0000;
+        const IS_SNAPSHOT = 0x100_0000;
+        const SNAP_DELETING = 0x400_0000;
+        const SNAP_SHRUNK = 0x800_0000;
+        const INLINE_DATA = 0x1000_0000;
+        const PROJ_INHERIT = 0x2000_0000;
+        const RESERVED = 0x8000_0000;
+    }
+}
+
+impl InodeFlags {
+    pub const AGGREGATE_FLAGS: Self = Self::empty();
+    pub const USER_VISIBLE_FLAGS: Self = Self { bits: 0x705BDFFF };
+    pub const USER_MODIFIABLE_FLAGS: Self = Self { bits: 0x604BC0FF };
 }
 
 impl InodeRaw {
@@ -79,7 +121,7 @@ impl InodeRaw {
         }
     }
     pub fn serialize(this: &Self, bytes: &mut [u8]) {
-        bytes.pwrite_with(&this.base, 0, scroll::LE);
+        bytes.pwrite_with(&this.base, 0, scroll::LE).unwrap();
 
         if let Some(ref ext) = this.ext {
             bytes.pwrite_with(ext, EXTENDED_INODE_SIZE as usize, scroll::LE).unwrap();
@@ -87,6 +129,9 @@ impl InodeRaw {
     }
     pub fn ty(&self) -> InodeType {
         InodeType::from_type_and_perm(self.base.mode).0.unwrap()
+    }
+    pub fn flags(&self) -> InodeFlags {
+        InodeFlags::from_bits_truncate(self.flags)
     }
     pub fn permissions(&self) -> u16 {
         InodeType::from_type_and_perm(self.base.mode).1
@@ -96,11 +141,29 @@ impl InodeRaw {
         let other = self.mode & !InodeType::PERM_MASK;
         self.mode = other | permissions;
     }
-    pub fn set_uid(&mut self, uid: u32) {
-        unimplemented!()
+    pub fn set_uid(&mut self, uid: u32, os: OsId) {
+        let lo = (uid & 0xFFFF) as u16;
+        let hi = (uid >> 16) as u16;
+
+        self.base.uid = lo;
+
+        if os == OsId::Linux {
+            fal::write_u16(&mut self.os_specific_2, 4, hi)
+        } else if hi != 0 {
+            panic!("Only Linux filesystems support 32-bit UIDs")
+        }
     }
-    pub fn set_gid(&mut self, gid: u32) {
-        unimplemented!()
+    pub fn set_gid(&mut self, gid: u32, os: OsId) {
+        let lo = (gid & 0xFFFF) as u16;
+        let hi = (gid >> 16) as u16;
+
+        self.base.gid = lo;
+
+        if os == OsId::Linux {
+            fal::write_u16(&mut self.os_specific_2, 6, hi)
+        } else if hi != 0 {
+            panic!("Only Linux filesystems support 32-bit GIDs")
+        }
     }
     pub fn size(&self, superblock: &Superblock) -> u64 {
         u64::from(self.base.size_lo) | if superblock.ro_compat_features().contains(RoFeatureFlags::EXTENDED_FILE_SIZE) && self.ty() != InodeType::Dir {
@@ -110,8 +173,34 @@ impl InodeRaw {
     pub fn generation(&self) -> u64 {
         u64::from(self.base.generation_lo) | u64::from(self.ext.as_ref().map(|ext| ext.generation_hi).unwrap_or(0)) << 32
     }
-    pub fn cr_time(&self) -> Option<u32> {
-        self.ext.as_ref().map(|ext| ext.cr_time)
+
+    fn decode_timestamp(base: i32, extra: u32) -> Timespec {
+        let epoch_ext = (extra & 0b11) as i32;
+
+        Timespec {
+            sec: i64::from(base) | i64::from(epoch_ext) << 32,
+            nsec: (extra >> 2) as i32,
+        }
+    }
+
+    pub fn a_time(&self) -> Timespec {
+        Self::decode_timestamp(self.a_time_lo, self.ext.as_ref().map(|ext| ext.a_time_extra).unwrap_or(0))
+    }
+    pub fn c_time(&self) -> Timespec {
+        Self::decode_timestamp(self.c_time_lo, self.ext.as_ref().map(|ext| ext.c_time_extra).unwrap_or(0))
+    }
+    pub fn m_time(&self) -> Timespec {
+        Self::decode_timestamp(self.m_time_lo, self.ext.as_ref().map(|ext| ext.m_time_extra).unwrap_or(0))
+    }
+    pub fn d_time(&self) -> Timespec {
+        Timespec {
+            sec: self.d_time_lo.into(),
+            nsec: 0,
+        }
+    }
+
+    pub fn cr_time(&self) -> Option<Timespec> {
+        self.ext.as_ref().map(|ext| Self::decode_timestamp(ext.cr_time_lo, ext.cr_time_extra))
     }
 }
 
@@ -120,6 +209,7 @@ pub struct Inode {
     pub block_size: u32,
     pub size: u64,
     pub addr: u32,
+    pub os: OsId,
     pub raw: InodeRaw,
 }
 
@@ -297,6 +387,7 @@ impl Inode {
             addr,
             raw,
             size,
+            os: superblock.os_id,
         }
     }
     pub fn serialize(this: &Inode, buffer: &mut [u8]) {
@@ -411,6 +502,10 @@ impl Inode {
         offset: u64,
         mut buffer: &mut [u8],
     ) -> fal::Result<usize> {
+        if self.flags().contains(InodeFlags::EXTENTS) {
+            unimplemented!()
+        }
+
         let mut bytes_read = 0;
 
         let off_from_rel_block = offset % u64::from(filesystem.superblock.block_size);

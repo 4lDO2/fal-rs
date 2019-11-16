@@ -141,22 +141,10 @@ impl fal::Inode for Inode {
     }
     fn attrs(&self) -> fal::Attributes<u32> {
         fal::Attributes {
-            access_time: Timespec {
-                sec: self.a_time.into(),
-                nsec: 0,
-            },
-            change_time: Timespec {
-                sec: self.c_time.into(),
-                nsec: 0,
-            },
-            creation_time: Timespec {
-                sec: self.cr_time().unwrap_or(0).into(),
-                nsec: 0,
-            },
-            modification_time: Timespec {
-                sec: self.m_time.into(),
-                nsec: 0,
-            },
+            access_time: self.a_time(),
+            change_time: self.c_time(),
+            creation_time: self.cr_time().unwrap_or(Timespec::new(0, 0)),
+            modification_time: self.m_time(),
             filetype: self.ty().into(),
             block_count: self.size_in_blocks(),
             flags: self.flags,
@@ -176,12 +164,12 @@ impl fal::Inode for Inode {
 
     #[inline]
     fn set_uid(&mut self, uid: u32) {
-        self.set_uid(uid)
+        self.raw.set_uid(uid, self.os)
     }
 
     #[inline]
     fn set_gid(&mut self, gid: u32) {
-        self.set_gid(gid)
+        self.raw.set_gid(gid, self.os)
     }
 }
 
@@ -224,16 +212,15 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
 
         if !general_options.immutable { superblock.store(&mut device).unwrap() }
 
+        // TODO: Check for feature flags here.
 
-        let mut fs = Self {
+        Self {
             superblock,
             device: Mutex::new(device),
             fhs: HashMap::new(),
             last_fh: 0,
             general_options,
-        };
-        dbg!(crate::inode::Inode::load(&mut fs, 2).unwrap());
-        fs
+        }
     }
 
     fn unmount(self) {}
@@ -377,7 +364,6 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
 
 impl<D: fal::DeviceMut> fal::FilesystemMut<D> for Filesystem<D> {
     fn unmount(self) {
-        dbg!("Storing filesystem superblock");
         self.superblock
             .store(&mut *self.device.lock().unwrap())
             .unwrap()
