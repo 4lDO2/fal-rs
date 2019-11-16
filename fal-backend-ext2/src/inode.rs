@@ -1,12 +1,13 @@
 use std::{
     convert::{TryFrom, TryInto},
     ffi::{OsStr, OsString},
-    io, mem,
+    fmt, io, mem,
 };
 
 use crate::{
     block_group, os_str_to_bytes, os_string_from_bytes, read_block, read_block_to, read_u16,
     read_u32, read_u8,
+    extents::ExtentHeader,
     superblock::{OptionalFeatureFlags, OsId, RequiredFeatureFlags, RoFeatureFlags, Superblock},
     write_block, write_u16, write_u32, write_u8, Filesystem,
 };
@@ -19,6 +20,55 @@ pub const ROOT: u32 = 2;
 
 pub const BASE_INODE_SIZE: u64 = 128;
 pub const EXTENDED_INODE_SIZE: u64 = 160;
+
+// XXX: Const generics.
+#[derive(Clone, Copy, Pread, Pwrite)]
+pub struct Blocks {
+    pub inner: [u8; 60],
+}
+
+impl PartialEq for Blocks {
+    fn eq(&self, other: &Blocks) -> bool {
+        &self.inner[..] == &other.inner[..]
+    }
+}
+
+impl Eq for Blocks {}
+
+impl fmt::Debug for Blocks {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        for byte in &self.inner[..] {
+            write!(f, "{:x}", byte)?;
+        }
+        Ok(())
+    }
+}
+impl std::hash::Hash for Blocks {
+    fn hash<T: std::hash::Hasher>(&self, hasher: &mut T) {
+        hasher.write(&self.inner)
+    }
+}
+
+impl Blocks {
+    pub fn block_ptrs(&self) -> &[u32] {
+        bytemuck::cast_slice::<u8, u32>(&self.inner[..])
+    }
+    pub fn direct_ptrs(&self) -> &[u32] {
+        &self.block_ptrs()[..12]
+    }
+    pub fn singly_indirect_ptr(&self) -> u32 {
+        self.block_ptrs()[12]
+    }
+    pub fn doubly_indirect_ptr(&self) -> u32 {
+        self.block_ptrs()[13]
+    }
+    pub fn triply_indirect_ptr(&self) -> u32 {
+        self.block_ptrs()[14]
+    }
+    pub fn tree_header(&self) -> ExtentHeader {
+        self.inner[..].pread_with(0, scroll::LE).unwrap()
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Pread, Pwrite)]
 pub struct InodeRawBase {
@@ -37,10 +87,7 @@ pub struct InodeRawBase {
     pub block_count_lo: u32,
     pub flags: u32,
     pub os_specific_1: [u8; 4],
-    pub direct_ptrs: [u32; 12],
-    pub singly_indirect_ptr: u32,
-    pub doubly_indirect_ptr: u32,
-    pub triply_indirect_ptr: u32,
+    pub blocks: Blocks,
     pub generation_lo: u32,
 
     pub file_acl_lo: u32,
@@ -461,13 +508,13 @@ impl Inode {
         let triply_indir_size = doubly_indir_size + entry_count * entry_count * entry_count;
 
         Ok(if rel_baddr < direct_size {
-            self.raw.base.direct_ptrs[usize::try_from(rel_baddr).unwrap()]
+            self.blocks.direct_ptrs()[usize::try_from(rel_baddr).unwrap()]
         } else if rel_baddr < singly_indir_size {
-            Self::read_singly(filesystem, self.raw.base.singly_indirect_ptr, rel_baddr)?
+            Self::read_singly(filesystem, self.blocks.singly_indirect_ptr(), rel_baddr)?
         } else if rel_baddr < doubly_indir_size {
-            Self::read_doubly(filesystem, self.raw.base.doubly_indirect_ptr, rel_baddr)?
+            Self::read_doubly(filesystem, self.blocks.doubly_indirect_ptr(), rel_baddr)?
         } else if rel_baddr < triply_indir_size {
-            Self::read_triply(filesystem, self.raw.base.triply_indirect_ptr, rel_baddr)?
+            Self::read_triply(filesystem, self.blocks.triply_indirect_ptr(), rel_baddr)?
         } else {
             panic!("Read exceeding maximum ext2 file size.");
         })
@@ -662,38 +709,21 @@ impl Inode {
             raw: self.raw_dir_entries(filesystem)?,
         })
     }
-    pub fn with_symlink_target<D: fal::Device, F: FnOnce(fal::Result<&[u8]>) -> ()>(
+    pub fn symlink_target<D: fal::Device>(
         &self,
         filesystem: &mut Filesystem<D>,
-        handler: F,
-    ) {
+    ) -> fal::Result<Box<[u8]>> {
         if self.size <= 60 {
             // fast symlink
-
-            let mut bytes = [0u8; 60];
-            let stride = mem::size_of::<u32>();
-            for (index, value) in self
-                .direct_ptrs
-                .iter()
-                .chain(&[
-                    self.singly_indirect_ptr,
-                    self.doubly_indirect_ptr,
-                    self.triply_indirect_ptr,
-                ])
-                .enumerate()
-            {
-                bytes[index * stride..(index + 1) * stride].copy_from_slice(&value.to_le_bytes());
-            }
-            handler(Ok(&bytes));
+            Ok(self.blocks.inner[..].to_owned().into_boxed_slice())
         } else {
             // slow symlink
 
             // TODO: Waiting for try_reserve (https://github.com/rust-lang/rust/issues/48043).
             let mut bytes = vec![0u8; self.size.try_into().unwrap()];
-            match self.read(filesystem, 0, &mut bytes) {
-                Ok(_) => handler(Ok(&bytes)),
-                Err(error) => handler(Err(error)),
-            }
+            // TODO: Handle the amount of read bytes
+            self.read(filesystem, 0, &mut bytes)?;
+            Ok(bytes.into_boxed_slice())
         }
     }
 

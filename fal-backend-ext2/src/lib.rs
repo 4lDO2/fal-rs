@@ -13,6 +13,7 @@ use uuid::Uuid;
 use fal::{time::Timespec, Filesystem as _};
 
 pub mod block_group;
+pub mod extents;
 pub mod inode;
 pub mod superblock;
 
@@ -317,25 +318,13 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
         })
     }
     fn readlink(&mut self, inode: u32) -> fal::Result<Box<[u8]>> {
-        let mut location = None;
-        let mut error = None;
-
         let inode = self.load_inode(inode)?;
 
         if inode.ty() != inode::InodeType::Symlink {
             return Err(fal::Error::Invalid);
         }
 
-        inode.with_symlink_target(self, |result| match result {
-            Ok(data) => location = Some(data.to_owned()),
-            Err(err) => error = Some(err),
-        });
-
-        if let Some(err) = error {
-            return Err(err.into());
-        }
-
-        Ok(location.unwrap().into_boxed_slice())
+        Ok(inode.symlink_target(self)?)
     }
 
     fn fh_offset(&self, fh: u64) -> u64 {
