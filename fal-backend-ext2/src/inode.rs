@@ -499,7 +499,16 @@ impl Inode {
         &self,
         filesystem: &Filesystem<D>,
         rel_baddr: u32,
-    ) -> io::Result<u32> {
+    ) -> io::Result<u64> {
+        if self.flags().contains(InodeFlags::EXTENTS) {
+            // TODO: Cache this tree.
+            let tree = self.blocks.extent_tree();
+            let leaf = tree.resolve(filesystem, rel_baddr).expect("Block not found");
+
+            let offset_from_extent_start = rel_baddr - leaf.logical_block();
+            return Ok(leaf.physical_start_block() + u64::from(offset_from_extent_start));
+        }
+
         let entry_count = Self::entry_count(filesystem.superblock.block_size) as u32;
 
         let direct_size = Self::DIRECT_PTR_COUNT as u32;
@@ -507,7 +516,7 @@ impl Inode {
         let doubly_indir_size = singly_indir_size + entry_count * entry_count;
         let triply_indir_size = doubly_indir_size + entry_count * entry_count * entry_count;
 
-        Ok(if rel_baddr < direct_size {
+        Ok(u64::from(if rel_baddr < direct_size {
             self.blocks.direct_ptrs()[usize::try_from(rel_baddr).unwrap()]
         } else if rel_baddr < singly_indir_size {
             Self::read_singly(filesystem, self.blocks.singly_indirect_ptr(), rel_baddr)?
@@ -517,7 +526,7 @@ impl Inode {
             Self::read_triply(filesystem, self.blocks.triply_indirect_ptr(), rel_baddr)?
         } else {
             panic!("Read exceeding maximum ext2 file size.");
-        })
+        }))
     }
     pub fn read_block_to<D: fal::Device>(
         &self,
@@ -565,10 +574,6 @@ impl Inode {
             let bytes_to_read = std::cmp::min(buffer.len(), readable_file_data.len());
             buffer[..bytes_to_read].copy_from_slice(&readable_file_data[..bytes_to_read]);
             return Ok(bytes_to_read);
-        }
-        if self.flags().contains(InodeFlags::EXTENTS) {
-            dbg!(self.blocks.extent_tree().resolve(filesystem, 0));
-            unimplemented!()
         }
 
         let mut bytes_read = 0;
