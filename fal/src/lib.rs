@@ -8,8 +8,8 @@ use std::{
     mem,
     ops::{Add, Div, Mul, Rem},
 };
-use time::Timespec;
-use uuid::Uuid;
+pub use time::Timespec;
+pub use uuid::Uuid;
 
 pub fn read_uuid(block: &[u8], offset: usize) -> Uuid {
     let mut bytes = [0u8; 16];
@@ -154,6 +154,7 @@ pub enum FileType {
     CharacterDevice,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Attributes<InodeAddr: Into<u64>> {
     pub filetype: FileType,
     pub size: u64,
@@ -203,6 +204,7 @@ pub enum Error {
     IsDirectory,
     NotDirectory,
     AccessDenied,
+    ReadonlyFs,
     Other(i32),
     Io(io::Error),
 }
@@ -217,6 +219,7 @@ impl Error {
             Self::IsDirectory => libc::EISDIR,
             Self::NotDirectory => libc::ENOTDIR,
             Self::AccessDenied => libc::EACCES,
+            Self::ReadonlyFs => libc::EROFS,
             Self::Io(_) => libc::EIO,
         }
     }
@@ -227,15 +230,16 @@ impl std::error::Error for Error {}
 impl std::fmt::Display for Error {
     fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Error::NoEntity => writeln!(formatter, "no such file or directory"),
-            Error::BadFd => writeln!(formatter, "bad file descriptor"),
-            Error::Overflow => writeln!(formatter, "overflow"),
-            Error::Invalid => writeln!(formatter, "invalid argument"),
-            Error::Io(err) => writeln!(formatter, "i/o error: `{}`", err),
-            Error::IsDirectory => writeln!(formatter, "is directory"),
-            Error::NotDirectory => writeln!(formatter, "not directory"),
-            Error::AccessDenied => writeln!(formatter, "access denied"),
-            Error::Other(n) => writeln!(formatter, "other ({})", n),
+            Error::NoEntity => write!(formatter, "no such file or directory"),
+            Error::BadFd => write!(formatter, "bad file descriptor"),
+            Error::Overflow => write!(formatter, "overflow"),
+            Error::Invalid => write!(formatter, "invalid argument"),
+            Error::Io(err) => write!(formatter, "i/o error: `{}`", err),
+            Error::IsDirectory => write!(formatter, "is directory"),
+            Error::NotDirectory => write!(formatter, "not directory"),
+            Error::AccessDenied => write!(formatter, "access denied"),
+            Error::ReadonlyFs => write!(formatter, "read-only filesystem"),
+            Error::Other(n) => write!(formatter, "other ({})", n),
         }
     }
 }
@@ -248,6 +252,54 @@ impl From<io::Error> for Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Describes how access times are handled within a filesystem implementation. These do not
+/// directly correspond to the options documented in mount(8), but they are related.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AccessTime {
+    /// Update the access time of inodes when they are read.
+    Atime,
+
+    /// Don't update the access times of inodes.
+    Noatime,
+
+    /// Update the access times of inodes when they are changed or modified.
+    Relatime,
+
+    // TODO: strictatime, lazyatime?
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Options {
+    /// Files are writable
+    pub write: bool,
+
+    /// Files are executable
+    pub execute: bool,
+
+    /// The underlying disk won't be touched, and metadata such as the last mount time won't be
+    /// altered. This flag is automatically enabled if the user was not allowed to open the disk in
+    /// write mode.
+    pub immutable: bool,
+
+    /// How file access times are written.
+    pub f_atime: AccessTime,
+
+    /// How directory access times are written.
+    pub d_atime: AccessTime,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            write: true,
+            execute: true,
+            f_atime: AccessTime::Relatime,
+            d_atime: AccessTime::Relatime,
+            immutable: false,
+        }
+    }
+}
+
 /// An abstract filesystem. Typically implemented by the backend.
 pub trait Filesystem<D: Device>
 where
@@ -259,13 +311,16 @@ where
     /// An inode structure, capable of retrieving inode information.
     type InodeStruct: Inode + Clone;
 
+    /// Any type that can represent filesystem-specific options.
+    type Options: Default;
+
     /// The root inode address (for example 2 on ext2/3/4).
     fn root_inode(&self) -> Self::InodeAddr;
 
     // TODO: Support mounting multiple devices as one filesystem, for filesystems that support it.
     /// Mount the filesystem from a device. The path paramter is only used to change the "last
-    /// mount path" for filesystems that supports it".
-    fn mount(device: D, path: &OsStr) -> Self;
+    /// mount path" for filesystems that support it.
+    fn mount(device: D, general_options: Options, fs_specific_options: Self::Options, path: &OsStr) -> Self;
 
     /// Unmount the filesystem.
     fn unmount(self);
@@ -313,7 +368,7 @@ where
     // inodes aren't typically that slow to clone. However with generic associated types, this
     // will likely work.
     //
-    // https://github.com/rust-lang/rfcs/pull/1598
+    // https://github.com/rust-lang/rust/issues/44265
     //
     /// Retrieve a reference to data about an open file handle.
     fn fh_inode(&self, fh: u64) -> Self::InodeStruct;

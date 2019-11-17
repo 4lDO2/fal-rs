@@ -7,7 +7,7 @@ DEFAULT_DISK_SIZE=512M # not sure about which size is the best
 DEFAULT_RANDOM1_SIZE=32M
 DEFAULT_RANDOM2_SIZE=128M
 
-disk="$prefix/disk_$fs_type.img"
+disk="$prefix/disk.img"
 mountpoint="$prefix/disk_${fs_type}_mountpoint"
 dir_struct_file="$prefix/disk_${fs_type}_struct"
 hashes_file="$prefix/dish_${fs_type}_hashes"
@@ -35,6 +35,16 @@ if ! [ -e "$disk" ]; then
             ;;
         "ext2")
             mkfs.ext2 "$disk"
+            mount "$disk" "$mountpoint"
+            chown -R `whoami` "$mountpoint"
+            ;;
+        "ext3")
+            mkfs.ext3 "$disk"
+            mount "$disk" "$mountpoint"
+            chown -R `whoami` "$mountpoint"
+            ;;
+        "ext4")
+            mkfs.ext4 "$disk"
             mount "$disk" "$mountpoint"
             chown -R `whoami` "$mountpoint"
             ;;

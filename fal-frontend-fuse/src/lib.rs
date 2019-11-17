@@ -12,28 +12,6 @@ use time::Timespec;
 
 use fal::Inode;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum AccessTime {
-    Atime,
-    Noatime,
-    Relatime,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Options {
-    write: bool,
-    execute: bool,
-    access_time: AccessTime,
-}
-impl Default for Options {
-    fn default() -> Self {
-        Self {
-            write: true,
-            execute: true,
-            access_time: AccessTime::Atime,
-        }
-    }
-}
 #[derive(Debug)]
 pub enum OptionsParseError<'a> {
     UnknownOption(&'a str),
@@ -46,30 +24,38 @@ impl std::fmt::Display for OptionsParseError<'_> {
 }
 impl std::error::Error for OptionsParseError<'_> {}
 
-impl Options {
-    pub fn parse<'a>(options_str: &'a str) -> Result<Self, OptionsParseError<'a>> {
-        let mut options = Self::default();
+pub fn parse_fs_options(options_str: &'_ str) -> Result<fal::Options, OptionsParseError<'_>> {
+    let mut options = fal::Options::default();
 
-        for option in options_str.split(',') {
-            match option {
-                "ro" => options.write = false,
-                "rw" => options.write = true,
-                "exec" => options.execute = true,
-                "noexec" => options.execute = false,
-                "atime" => options.access_time = AccessTime::Atime,
-                "noatime" => options.access_time = AccessTime::Noatime,
-                "relatime" => options.access_time = AccessTime::Relatime,
-                other => return Err(OptionsParseError::UnknownOption(other)),
+    for option in options_str.split(',') {
+        match option {
+            "ro" => options.write = false,
+            "rw" => options.write = true,
+            "exec" => options.execute = true,
+            "noexec" => options.execute = false,
+            "atime" => {
+                options.f_atime = fal::AccessTime::Atime;
+                options.d_atime = fal::AccessTime::Atime;
             }
+            "noatime" => {
+                options.f_atime = fal::AccessTime::Noatime;
+                options.d_atime = fal::AccessTime::Noatime;
+            }
+            "relatime" => {
+                options.f_atime = fal::AccessTime::Relatime;
+                options.d_atime = fal::AccessTime::Relatime;
+            }
+            "immutable" => options.immutable = true,
+            other => return Err(OptionsParseError::UnknownOption(other)),
         }
-
-        Ok(options)
     }
+
+    Ok(options)
 }
 
 pub struct FuseFilesystem<Backend: fal::FilesystemMut<File>> {
     inner: Option<Backend>,
-    options: Options,
+    options: fal::Options,
 }
 
 fn fuse_filetype(ty: fal::FileType) -> fuse::FileType {
@@ -106,9 +92,9 @@ fn fuse_attr<InodeAddr: Into<u64>>(attrs: fal::Attributes<InodeAddr>) -> fuse::F
 }
 
 impl<Backend: fal::FilesystemMut<File>> FuseFilesystem<Backend> {
-    pub fn init(device: File, path: &OsStr, options: Options) -> io::Result<Self> {
+    pub fn init(device: File, path: &OsStr, options: fal::Options) -> io::Result<Self> {
         Ok(Self {
-            inner: Some(Backend::mount(device, path)),
+            inner: Some(Backend::mount(device, options, Default::default(), path)),
             options,
         })
     }
@@ -411,9 +397,9 @@ impl<Backend: fal::FilesystemMut<File>> fuse::Filesystem for FuseFilesystem<Back
     fn statfs(&mut self, _req: &Request, _inode: u64, reply: ReplyStatfs) {
         let stat: fal::FsAttributes = self.inner().filesystem_attrs();
         reply.statfs(
-            stat.total_blocks.into(),
-            stat.free_blocks.into(),
-            stat.available_blocks.into(),
+            stat.total_blocks,
+            stat.free_blocks,
+            stat.available_blocks,
             stat.inode_count,
             stat.free_inodes,
             stat.block_size,

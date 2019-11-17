@@ -8,11 +8,10 @@ use std::{
     time::SystemTime,
 };
 
-use uuid::Uuid;
-
 use fal::{time::Timespec, Filesystem as _};
 
 pub mod block_group;
+pub mod extents;
 pub mod inode;
 pub mod superblock;
 
@@ -26,7 +25,7 @@ pub use fal::{
 
 fn read_block_to<D: fal::Device>(
     filesystem: &Filesystem<D>,
-    block_address: u32,
+    block_address: u64,
     buffer: &mut [u8],
 ) -> io::Result<()> {
     debug_assert!(block_group::block_exists(block_address, filesystem)?);
@@ -34,19 +33,19 @@ fn read_block_to<D: fal::Device>(
 }
 fn read_block_to_raw<D: fal::Device>(
     filesystem: &Filesystem<D>,
-    block_address: u32,
+    block_address: u64,
     buffer: &mut [u8],
 ) -> io::Result<()> {
     let mut guard = filesystem.device.lock().unwrap();
     guard.seek(SeekFrom::Start(
-        block_address as u64 * u64::from(filesystem.superblock.block_size),
+        block_address * u64::from(filesystem.superblock.block_size),
     ))?;
     guard.read_exact(buffer)?;
     Ok(())
 }
 fn read_block<D: fal::Device>(
     filesystem: &Filesystem<D>,
-    block_address: u32,
+    block_address: u64,
 ) -> io::Result<Box<[u8]>> {
     let mut vector = vec![0; filesystem.superblock.block_size.try_into().unwrap()];
     read_block_to(filesystem, block_address, &mut vector)?;
@@ -54,7 +53,7 @@ fn read_block<D: fal::Device>(
 }
 fn write_block_raw<D: fal::DeviceMut>(
     filesystem: &Filesystem<D>,
-    block_address: u32,
+    block_address: u64,
     buffer: &[u8],
 ) -> io::Result<()> {
     let mut guard = filesystem.device.lock().unwrap();
@@ -66,7 +65,7 @@ fn write_block_raw<D: fal::DeviceMut>(
 }
 fn write_block<D: fal::DeviceMut>(
     filesystem: &Filesystem<D>,
-    block_address: u32,
+    block_address: u64,
     buffer: &[u8],
 ) -> io::Result<()> {
     debug_assert!(block_group::block_exists(block_address, filesystem)?);
@@ -100,6 +99,7 @@ pub struct Filesystem<D> {
     pub device: Mutex<D>,
     pub fhs: HashMap<u64, FileHandle>,
     last_fh: u64,
+    general_options: fal::Options,
 }
 
 #[derive(Debug, PartialEq)]
@@ -116,7 +116,7 @@ impl<D: fal::DeviceMut> Filesystem<D> {
             offset: 0,
         };
 
-        if ty == Open::Directory && fh.inode.ty == inode::InodeType::File {
+        if ty == Open::Directory && fh.inode.ty() == inode::InodeType::File {
             return Err(fal::Error::NotDirectory);
         }
 
@@ -132,7 +132,7 @@ impl fal::Inode for Inode {
 
     #[inline]
     fn generation_number(&self) -> Option<u64> {
-        Some(self.generation_number.into())
+        Some(self.generation())
     }
     #[inline]
     fn addr(&self) -> u32 {
@@ -140,29 +140,17 @@ impl fal::Inode for Inode {
     }
     fn attrs(&self) -> fal::Attributes<u32> {
         fal::Attributes {
-            access_time: Timespec {
-                sec: self.last_access_time.into(),
-                nsec: 0,
-            },
-            change_time: Timespec {
-                sec: self.last_modification_time.into(),
-                nsec: 0,
-            },
-            creation_time: Timespec {
-                sec: self.creation_time.into(),
-                nsec: 0,
-            },
-            modification_time: Timespec {
-                sec: self.last_modification_time.into(),
-                nsec: 0,
-            },
-            filetype: self.ty.into(),
+            access_time: self.a_time(),
+            change_time: self.c_time(),
+            creation_time: self.cr_time().unwrap_or(Timespec { sec: 0, nsec: 0 }),
+            modification_time: self.m_time(),
+            filetype: self.ty().into(),
             block_count: self.size_in_blocks(),
             flags: self.flags,
             group_id: self.gid.into(),
-            hardlink_count: self.hard_link_count.into(),
+            hardlink_count: self.hardlink_count.into(),
             inode: self.addr,
-            permissions: self.permissions,
+            permissions: self.permissions(),
             rdev: 0,
             size: self.size,
             user_id: self.uid.into(),
@@ -170,17 +158,17 @@ impl fal::Inode for Inode {
     }
     #[inline]
     fn set_perm(&mut self, permissions: u16) {
-        self.permissions = permissions & 0o777;
+        self.set_permissions(permissions)
     }
 
     #[inline]
     fn set_uid(&mut self, uid: u32) {
-        self.uid = uid;
+        self.raw.set_uid(uid, self.os)
     }
 
     #[inline]
     fn set_gid(&mut self, gid: u32) {
-        self.gid = gid;
+        self.raw.set_gid(gid, self.os)
     }
 }
 
@@ -194,13 +182,19 @@ pub struct FileHandle {
 impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
     type InodeAddr = u32;
     type InodeStruct = Inode;
+    type Options = ();
 
     #[inline]
     fn root_inode(&self) -> u32 {
         2
     }
 
-    fn mount(mut device: D, path: &OsStr) -> Self {
+    fn mount(
+        mut device: D,
+        general_options: fal::Options,
+        _ext_specific_options: (),
+        path: &OsStr,
+    ) -> Self {
         let mut superblock = Superblock::load(&mut device).unwrap();
 
         superblock.last_mount_time = SystemTime::now()
@@ -211,16 +205,27 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
         superblock.mounts_left_before_fsck -= 1;
 
         if let Some(extended) = superblock.extended.as_mut() {
-            extended.last_mount_path = Some(std::ffi::CString::new(path.as_bytes()).unwrap());
+            let path_bytes = path.as_bytes();
+            extended.last_mount_path[..path_bytes.len()].copy_from_slice(path_bytes);
+
+            // NUL
+            if path_bytes.len() < 64 {
+                extended.last_mount_path[63] = 0;
+            }
         }
 
-        superblock.store(&mut device).unwrap();
+        if !general_options.immutable {
+            superblock.store(&mut device).unwrap()
+        }
+
+        // TODO: Check for feature flags here.
 
         Self {
             superblock,
             device: Mutex::new(device),
             fhs: HashMap::new(),
             last_fh: 0,
+            general_options,
         }
     }
 
@@ -265,7 +270,7 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
             None => return Err(fal::Error::BadFd),
         };
 
-        if handle.inode.ty != inode::InodeType::Dir {
+        if handle.inode.ty() != inode::InodeType::Dir {
             return Err(fal::Error::NotDirectory);
         }
 
@@ -274,17 +279,15 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
                 .inode
                 .dir_entries(self)?
                 .enumerate()
-                .skip(self.fhs[&fh].offset as usize + offset as usize)
-                .next()
+                .nth(self.fhs[&fh].offset as usize + offset as usize)
             {
                 Some((offset, entry)) => Some({
-                    let entry = fal::DirectoryEntry {
+                    fal::DirectoryEntry {
                         filetype: entry.ty(self)?.into(),
                         name: entry.name,
-                        inode: entry.inode.into(),
+                        inode: entry.inode,
                         offset: offset as u64,
-                    };
-                    entry
+                    }
                 }),
                 None => None,
             },
@@ -297,14 +300,14 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
     ) -> fal::Result<fal::DirectoryEntry<u32>> {
         let inode = self.load_inode(parent)?;
 
-        if inode.ty != inode::InodeType::Dir {
+        if inode.ty() != inode::InodeType::Dir {
             return Err(fal::Error::NotDirectory);
         }
 
         let (offset, entry) = match inode
             .dir_entries(self)?
             .enumerate()
-            .find(|(_, entry)| &entry.name == name)
+            .find(|(_, entry)| entry.name == name)
         {
             Some(inode) => inode,
             None => return Err(fal::Error::NoEntity),
@@ -313,30 +316,18 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
         Ok(fal::DirectoryEntry {
             filetype: entry.ty(self)?.into(),
             name: entry.name,
-            inode: entry.inode.into(),
+            inode: entry.inode,
             offset: offset as u64,
         })
     }
     fn readlink(&mut self, inode: u32) -> fal::Result<Box<[u8]>> {
-        let mut location = None;
-        let mut error = None;
-
         let inode = self.load_inode(inode)?;
 
-        if inode.ty != inode::InodeType::Symlink {
+        if inode.ty() != inode::InodeType::Symlink {
             return Err(fal::Error::Invalid);
         }
 
-        inode.with_symlink_target(self, |result| match result {
-            Ok(data) => location = Some(data.to_owned()),
-            Err(err) => error = Some(err),
-        });
-
-        if let Some(err) = error {
-            return Err(err.into());
-        }
-
-        Ok(location.unwrap().into_boxed_slice())
+        Ok(inode.symlink_target(self)?)
     }
 
     fn fh_offset(&self, fh: u64) -> u64 {
@@ -365,12 +356,14 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
 
 impl<D: fal::DeviceMut> fal::FilesystemMut<D> for Filesystem<D> {
     fn unmount(self) {
-        dbg!("Storing filesystem superblock");
         self.superblock
             .store(&mut *self.device.lock().unwrap())
             .unwrap()
     }
     fn store_inode(&mut self, inode: &Inode) -> fal::Result<()> {
+        if self.general_options.immutable {
+            return Err(fal::Error::ReadonlyFs);
+        }
         Inode::store(inode, self)
     }
     fn unlink(&mut self, _parent: u32, _name: &OsStr) -> fal::Result<()> {

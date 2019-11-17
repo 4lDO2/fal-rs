@@ -1,11 +1,15 @@
 [package]
-name = "fal-backend-ext2"
+name = "fal-backend-ext4"
 version = "0.1.0"
 authors = ["4lDO2 <4lDO2@protonmail.com>"]
 edition = "2018"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+arrayvec = "0.5"
 bitflags = "1.2"
+bytemuck = "0.1"
+crc = "1"
+scroll = { version = "0.10", features = ["derive"] }
 uuid = "0.7"
 fal = { path = "../fal", version = "0.1" }

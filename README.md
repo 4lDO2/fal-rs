@@ -5,7 +5,7 @@ Allows backends (like ext2, apfs, btrfs, xfs etc.) to communicate with the front
 
 # Features implemented
 ## Backends
-- ext2: Read-only (+writing metadata)
+- ext2/ext3/ext4: Read-only (+writing metadata, but I haven't checked if this actually works in a while). Ext2 filesystems can be read in quite an error-free way, whereas ext4 should be _mostly_ working.
 - apfs: Read-only (everything isn't implemented to fully cover the limited spec provided by Apple, however reading files and listing directories is implemented)
 - btrfs: WIP (reading B-trees is implemented, and probably error-free)
 - xfs: TODO
@@ -18,9 +18,9 @@ Allows backends (like ext2, apfs, btrfs, xfs etc.) to communicate with the front
 - macOS kexts: TODO
 
 # TODO
-- [ ] Create/use a proper parsing library (maybe use `nom`?)
+- [ ] Create/use a proper parsing library. `scroll` is currently used in `fal-backend-ext4`, but some structs need manual parsing.
 - [ ] Optimizations
-- [ ] Testing, which requires either storing binary fs images in the repo, or depending on the system's mkfs.
+- [ ] Testing, which requires either storing binary fs images in the repo, or depending on the system's mkfs. There is a limited test suite, but it has to be expanded and improved.
 
 ## License
 

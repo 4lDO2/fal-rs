@@ -8,8 +8,8 @@ license = "MIT OR Apache-2.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = ["ext2", "apfs"]
-ext2 = ["fal-backend-ext2"]
+default = ["ext4", "apfs"]
+ext4 = ["fal-backend-ext4"]
 apfs = ["fal-backend-apfs"]
 btrfs = ["fal-backend-btrfs"]
 
@@ -21,6 +21,6 @@ libc = "0.2"
 time = "0.1"
 fuse = "0.3"
 
-fal-backend-ext2 = { version = "0.1", optional = true, path = "../fal-backend-ext2" }
+fal-backend-ext4 = { version = "0.1", optional = true, path = "../fal-backend-ext4" }
 fal-backend-btrfs = { version = "0.1", optional = true, path = "../fal-backend-btrfs" }
 fal-backend-apfs = { version = "0.1", optional = true, path = "../fal-backend-apfs" }
