@@ -389,10 +389,10 @@ impl Inode {
 
         let containing_block_index = block_group_descriptor.inode_table_start_baddr()
             + u64::from(
-                inode_index_in_group * u32::from(inode_size) / filesystem.superblock.block_size,
+                inode_index_in_group * u32::from(inode_size) / filesystem.superblock.block_size(),
             );
 
-        let max_inodes_in_block = filesystem.superblock.block_size / u32::from(inode_size);
+        let max_inodes_in_block = filesystem.superblock.block_size() / u32::from(inode_size);
 
         let inode_index_in_block =
             usize::try_from(inode_index_in_group % max_inodes_in_block).unwrap();
@@ -431,10 +431,10 @@ impl Inode {
 
         let containing_block_index = block_group_descriptor.inode_table_start_baddr()
             + u64::from(
-                inode_index_in_group * u32::from(inode_size) / filesystem.superblock.block_size,
+                inode_index_in_group * u32::from(inode_size) / filesystem.superblock.block_size(),
             );
 
-        let max_inodes_in_block = filesystem.superblock.block_size / u32::from(inode_size);
+        let max_inodes_in_block = filesystem.superblock.block_size() / u32::from(inode_size);
 
         let inode_index_in_block =
             usize::try_from(inode_index_in_group % max_inodes_in_block).unwrap();
@@ -457,11 +457,11 @@ impl Inode {
         let size = raw.size(superblock);
 
         Self {
-            block_size: superblock.block_size,
+            block_size: superblock.block_size(),
             addr,
             raw,
             size,
-            os: superblock.os_id,
+            os: superblock.os_id(),
         }
     }
     pub fn serialize(this: &Inode, buffer: &mut [u8]) {
@@ -494,7 +494,7 @@ impl Inode {
         doubly_baddr: u32,
         rel_baddr: u32,
     ) -> io::Result<u32> {
-        let entry_count = Self::entry_count(filesystem.superblock.block_size);
+        let entry_count = Self::entry_count(filesystem.superblock.block_size());
 
         let doubly_indirect_block_bytes = read_block(filesystem, doubly_baddr.try_into().unwrap())?;
         let index = (rel_baddr as usize - Self::DIRECT_PTR_COUNT - entry_count) / entry_count;
@@ -509,7 +509,7 @@ impl Inode {
         triply_baddr: u32,
         rel_baddr: u32,
     ) -> io::Result<u32> {
-        let entry_count = Self::entry_count(filesystem.superblock.block_size);
+        let entry_count = Self::entry_count(filesystem.superblock.block_size());
 
         let triply_indirect_block_bytes = read_block(filesystem, triply_baddr.try_into().unwrap())?;
         let index =
@@ -538,7 +538,7 @@ impl Inode {
             return Ok(leaf.physical_start_block() + u64::from(offset_from_extent_start));
         }
 
-        let entry_count = Self::entry_count(filesystem.superblock.block_size) as u32;
+        let entry_count = Self::entry_count(filesystem.superblock.block_size()) as u32;
 
         let direct_size = Self::DIRECT_PTR_COUNT as u32;
         let singly_indir_size = direct_size + entry_count;
@@ -618,11 +618,11 @@ impl Inode {
 
         let mut bytes_read = 0;
 
-        let off_from_rel_block = offset % u64::from(filesystem.superblock.block_size);
-        let rel_baddr_start = offset / u64::from(filesystem.superblock.block_size);
+        let off_from_rel_block = offset % u64::from(filesystem.superblock.block_size());
+        let rel_baddr_start = offset / u64::from(filesystem.superblock.block_size());
 
         let mut block_bytes =
-            (vec![0u8; usize::try_from(filesystem.superblock.block_size).unwrap()])
+            (vec![0u8; usize::try_from(filesystem.superblock.block_size()).unwrap()])
                 .into_boxed_slice();
 
         if off_from_rel_block != 0 {
@@ -635,7 +635,7 @@ impl Inode {
             let off_from_rel_block_usize = usize::try_from(off_from_rel_block).unwrap();
             let end = std::cmp::min(
                 buffer.len(),
-                usize::try_from(filesystem.superblock.block_size).unwrap()
+                usize::try_from(filesystem.superblock.block_size()).unwrap()
                     - off_from_rel_block_usize,
             );
             buffer[..end].copy_from_slice(
@@ -648,7 +648,7 @@ impl Inode {
                 return self
                     .read(
                         filesystem,
-                        fal::round_up(offset, u64::from(filesystem.superblock.block_size)),
+                        fal::round_up(offset, u64::from(filesystem.superblock.block_size())),
                         &mut buffer[end..],
                     )
                     .map(|b| b + bytes_read);
@@ -659,15 +659,15 @@ impl Inode {
 
         let mut current_rel_baddr = u32::try_from(rel_baddr_start).unwrap();
 
-        while buffer.len() >= usize::try_from(filesystem.superblock.block_size).unwrap() {
+        while buffer.len() >= usize::try_from(filesystem.superblock.block_size()).unwrap() {
             self.read_block_to(current_rel_baddr, filesystem, &mut block_bytes)?;
 
-            buffer[..usize::try_from(filesystem.superblock.block_size).unwrap()]
+            buffer[..usize::try_from(filesystem.superblock.block_size()).unwrap()]
                 .copy_from_slice(&block_bytes);
 
             bytes_read += block_bytes.len();
 
-            buffer = &mut buffer[usize::try_from(filesystem.superblock.block_size).unwrap()..];
+            buffer = &mut buffer[usize::try_from(filesystem.superblock.block_size()).unwrap()..];
             current_rel_baddr += 1;
         }
 
@@ -686,10 +686,10 @@ impl Inode {
         offset: u64,
         mut buffer: &[u8],
     ) -> fal::Result<()> {
-        let off_from_rel_block = offset % u64::from(filesystem.superblock.block_size);
-        let rel_baddr_start = offset / u64::from(filesystem.superblock.block_size);
+        let off_from_rel_block = offset % u64::from(filesystem.superblock.block_size());
+        let rel_baddr_start = offset / u64::from(filesystem.superblock.block_size());
 
-        let mut block_bytes = vec![0u8; usize::try_from(filesystem.superblock.block_size).unwrap()]
+        let mut block_bytes = vec![0u8; usize::try_from(filesystem.superblock.block_size()).unwrap()]
             .into_boxed_slice();
 
         if off_from_rel_block != 0 {
@@ -702,7 +702,7 @@ impl Inode {
             let off_from_rel_block_usize = usize::try_from(off_from_rel_block).unwrap();
             let end = std::cmp::min(
                 buffer.len(),
-                usize::try_from(filesystem.superblock.block_size).unwrap()
+                usize::try_from(filesystem.superblock.block_size()).unwrap()
                     - off_from_rel_block_usize,
             );
             block_bytes[off_from_rel_block_usize..off_from_rel_block_usize + end]
@@ -717,7 +717,7 @@ impl Inode {
             if u64::try_from(buffer.len()).unwrap() >= off_from_rel_block {
                 return self.write(
                     filesystem,
-                    fal::round_up(offset, u64::from(filesystem.superblock.block_size)),
+                    fal::round_up(offset, u64::from(filesystem.superblock.block_size())),
                     &buffer[end..],
                 );
             } else {
@@ -727,16 +727,16 @@ impl Inode {
 
         let mut current_rel_baddr = u32::try_from(rel_baddr_start).unwrap();
 
-        while buffer.len() >= usize::try_from(filesystem.superblock.block_size).unwrap() {
+        while buffer.len() >= usize::try_from(filesystem.superblock.block_size()).unwrap() {
             self.read_block_to(current_rel_baddr, filesystem, &mut block_bytes)?;
 
             block_bytes.copy_from_slice(
-                &buffer[..usize::try_from(filesystem.superblock.block_size).unwrap()],
+                &buffer[..usize::try_from(filesystem.superblock.block_size()).unwrap()],
             );
 
             self.write_content_block(current_rel_baddr, filesystem, &block_bytes)?;
 
-            buffer = &buffer[usize::try_from(filesystem.superblock.block_size).unwrap()..];
+            buffer = &buffer[usize::try_from(filesystem.superblock.block_size()).unwrap()..];
             current_rel_baddr += 1;
         }
 
@@ -987,16 +987,14 @@ impl DirEntry {
 
         Self {
             inode: read_u32(bytes, 0),
-            type_indicator: if let Some(extended) = superblock.extended.as_ref() {
-                if extended
-                    .opt_features_present
+            type_indicator:
+                if superblock
+                    .compat_features()
                     .contains(OptionalFeatureFlags::INODE_EXTENDED_ATTRS)
                 {
                     InodeType::from_direntry_ty_indicator(read_u8(bytes, 7))
-                } else {
-                    None
                 }
-            } else {
+            else {
                 None
             },
             name,
@@ -1008,10 +1006,7 @@ impl DirEntry {
         write_u16(bytes, 4, this.total_entry_size);
         write_u8(bytes, 6, this.name.len() as u8);
 
-        let use_ty_indicator = match superblock.extended {
-            Some(ref ext) => ext.req_features_present.contains(RequiredFeatureFlags::DIR_TYPE),
-            None => false,
-        };
+        let use_ty_indicator = superblock.incompat_features().contains(RequiredFeatureFlags::DIR_TYPE);
 
         if use_ty_indicator {
             write_u8(

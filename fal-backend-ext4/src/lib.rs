@@ -13,6 +13,7 @@ use fal::{time::Timespec, Filesystem as _};
 pub mod block_group;
 pub mod extents;
 pub mod inode;
+pub mod journal;
 pub mod superblock;
 
 pub use inode::Inode;
@@ -38,7 +39,7 @@ fn read_block_to_raw<D: fal::Device>(
 ) -> io::Result<()> {
     let mut guard = filesystem.device.lock().unwrap();
     guard.seek(SeekFrom::Start(
-        block_address * u64::from(filesystem.superblock.block_size),
+        block_address * u64::from(filesystem.superblock.block_size()),
     ))?;
     guard.read_exact(buffer)?;
     Ok(())
@@ -47,7 +48,7 @@ fn read_block<D: fal::Device>(
     filesystem: &Filesystem<D>,
     block_address: u64,
 ) -> io::Result<Box<[u8]>> {
-    let mut vector = vec![0; filesystem.superblock.block_size.try_into().unwrap()];
+    let mut vector = vec![0; filesystem.superblock.block_size().try_into().unwrap()];
     read_block_to(filesystem, block_address, &mut vector)?;
     Ok(vector.into_boxed_slice())
 }
@@ -58,7 +59,7 @@ fn write_block_raw<D: fal::DeviceMut>(
 ) -> io::Result<()> {
     let mut guard = filesystem.device.lock().unwrap();
     guard.seek(SeekFrom::Start(
-        block_address as u64 * u64::from(filesystem.superblock.block_size),
+        block_address as u64 * u64::from(filesystem.superblock.block_size()),
     ))?;
     guard.write_all(buffer)?;
     Ok(())
@@ -343,7 +344,7 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
 
     fn filesystem_attrs(&self) -> fal::FsAttributes {
         fal::FsAttributes {
-            block_size: self.superblock.block_size,
+            block_size: self.superblock.block_size(),
             free_blocks: self.superblock.unalloc_block_count.into(),
             available_blocks: self.superblock.unalloc_block_count.into(), // TODO: What role does reserved_block_count have?
             free_inodes: self.superblock.unalloc_inode_count.into(),
