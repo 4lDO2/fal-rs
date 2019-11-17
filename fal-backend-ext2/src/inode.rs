@@ -525,7 +525,7 @@ impl Inode {
         } else if rel_baddr < triply_indir_size {
             Self::read_triply(filesystem, self.blocks.triply_indirect_ptr(), rel_baddr)?
         } else {
-            panic!("Read exceeding maximum ext2 file size.");
+            panic!("Read exceeding maximum ext2/3 file size.");
         }))
     }
     pub fn read_block_to<D: fal::Device>(

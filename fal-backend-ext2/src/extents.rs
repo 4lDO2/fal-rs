@@ -225,7 +225,7 @@ impl ExtentTree {
             // block in case it was inserted in sorted order.
             let closest_idx = match self.resolve_local_leaf(logical_block) {
                 Ok(equal_idx) => equal_idx,
-                Err(lower_idx) => lower_idx,
+                Err(lower_idx) => std::cmp::min(lower_idx, self.leaves().unwrap().len() - 1),
             };
             let closest_item = self.leaves().unwrap()[closest_idx];
 
