@@ -2,7 +2,7 @@
 members = [
     "fal-backend-apfs",
     "fal-backend-btrfs",
-    "fal-backend-ext2",
+    "fal-backend-ext4",
     "fal-frontend-fuse",
     "fal-frontend-redox",
     "fal",

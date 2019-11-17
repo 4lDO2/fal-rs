@@ -149,7 +149,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "fal-backend-ext2"
+name = "fal-backend-ext4"
 version = "0.1.0"
 dependencies = [
  "arrayvec 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -170,7 +170,7 @@ dependencies = [
  "fal 0.1.0",
  "fal-backend-apfs 0.1.0",
  "fal-backend-btrfs 0.1.0",
- "fal-backend-ext2 0.1.0",
+ "fal-backend-ext4 0.1.0",
  "fuse 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.65 (registry+https://github.com/rust-lang/crates.io-index)",
  "time 0.1.42 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -183,7 +183,7 @@ dependencies = [
  "fal 0.1.0",
  "fal-backend-apfs 0.1.0",
  "fal-backend-btrfs 0.1.0",
- "fal-backend-ext2 0.1.0",
+ "fal-backend-ext4 0.1.0",
  "redox_syscall 0.1.56 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 

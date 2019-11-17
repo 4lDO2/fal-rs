@@ -75,9 +75,9 @@ fn main() {
             .unwrap_or_else(|_| File::open(device).expect("Failed to open device"));
 
         match filesystem_type {
-            #[cfg(feature = "ext2")]
-            "ext2" => fuse::mount(
-                FuseFilesystem::<fal_backend_ext2::Filesystem<std::fs::File>>::init(
+            #[cfg(feature = "ext4")]
+            "ext2" | "ext3" | "ext4" => fuse::mount(
+                FuseFilesystem::<fal_backend_ext4::Filesystem<std::fs::File>>::init(
                     file,
                     mount_point.as_ref(),
                     fuse_options,
