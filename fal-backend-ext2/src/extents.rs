@@ -1,8 +1,4 @@
-use crate::{
-    Filesystem,
-    inode::Blocks,
-    read_block,
-};
+use crate::{inode::Blocks, read_block, Filesystem};
 
 use scroll::{Pread, Pwrite};
 
@@ -89,6 +85,9 @@ impl ExtentLeaf {
             self.raw_len
         }
     }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
     pub fn is_initialized(&self) -> bool {
         self.raw_len <= 32768
     }
@@ -146,22 +145,38 @@ impl ExtentTree {
             return Err(InvalidData("Entry count too high"));
         }
         if header.max_entry_count as usize * ITEM_SIZE > 60 {
-            return Err(InvalidData("Max entry count makes it overflow the available space of the extent tree"));
+            return Err(InvalidData(
+                "Max entry count makes it overflow the available space of the extent tree",
+            ));
         }
 
         let body = if header.depth > 0 {
-            ExtentTreeBody::Internal((0..header.entry_count as usize).map(|i| bytes.pread_with(HEADER_SIZE + i * ITEM_SIZE, scroll::LE).unwrap()).collect())
+            ExtentTreeBody::Internal(
+                (0..header.entry_count as usize)
+                    .map(|i| {
+                        bytes
+                            .pread_with(HEADER_SIZE + i * ITEM_SIZE, scroll::LE)
+                            .unwrap()
+                    })
+                    .collect(),
+            )
         } else {
-            ExtentTreeBody::Leaf((0..header.entry_count as usize).map(|i| bytes.pread_with(HEADER_SIZE + i * ITEM_SIZE, scroll::LE).unwrap()).collect())
+            ExtentTreeBody::Leaf(
+                (0..header.entry_count as usize)
+                    .map(|i| {
+                        bytes
+                            .pread_with(HEADER_SIZE + i * ITEM_SIZE, scroll::LE)
+                            .unwrap()
+                    })
+                    .collect(),
+            )
         };
 
-        let tail = bytes.pread_with(bytes.len() - TAIL_SIZE, scroll::LE).unwrap();
+        let tail = bytes
+            .pread_with(bytes.len() - TAIL_SIZE, scroll::LE)
+            .unwrap();
 
-        Ok(Self {
-            header,
-            body,
-            tail,
-        })
+        Ok(Self { header, body, tail })
     }
 
     /// Check that all the items in the current node are sorted. This is a fundamental requirement
@@ -172,7 +187,7 @@ impl ExtentTree {
                 let mut old = None;
                 for item in items {
                     if !old.map(|old| old < item).unwrap_or(true) {
-                        return false
+                        return false;
                     }
                     old = Some(item);
                 }
@@ -181,7 +196,7 @@ impl ExtentTree {
                 let mut old = None;
                 for item in items {
                     if !old.map(|old| old < item).unwrap_or(true) {
-                        return false
+                        return false;
                     }
                     old = Some(item);
                 }
@@ -191,11 +206,15 @@ impl ExtentTree {
     }
 
     fn resolve_local_internal(&self, logical_block: u32) -> Result<usize, usize> {
-        let items = self.internal_node_items().expect("Calling resolve_local_internal on a leaf node");
+        let items = self
+            .internal_node_items()
+            .expect("Calling resolve_local_internal on a leaf node");
         items.binary_search_by_key(&logical_block, |item| item.block)
     }
     fn resolve_local_leaf(&self, logical_block: u32) -> Result<usize, usize> {
-        let items = self.leaves().expect("Calling resolve_local_leaf on an internal node");
+        let items = self
+            .leaves()
+            .expect("Calling resolve_local_leaf on an internal node");
         items.binary_search_by_key(&logical_block, |item| item.block)
     }
     fn leaves(&self) -> Option<&[ExtentLeaf]> {
@@ -219,7 +238,11 @@ impl ExtentTree {
     /// Get the extent that contains the logical_block. The extent may have a start offset smaller
     /// than the logical_block, but the logical block has to be inside the bounds indicated by the
     /// start block and length of the extent.
-    pub fn resolve<D: fal::Device>(&self, filesystem: &Filesystem<D>, logical_block: u32) -> Option<ExtentLeaf> {
+    pub fn resolve<D: fal::Device>(
+        &self,
+        filesystem: &Filesystem<D>,
+        logical_block: u32,
+    ) -> Option<ExtentLeaf> {
         if self.is_leaf() {
             // Find the closest item, i.e. the item which would have been placed before the logical
             // block in case it was inserted in sorted order.

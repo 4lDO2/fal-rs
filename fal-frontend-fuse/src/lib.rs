@@ -24,7 +24,7 @@ impl std::fmt::Display for OptionsParseError<'_> {
 }
 impl std::error::Error for OptionsParseError<'_> {}
 
-pub fn parse_fs_options<'a>(options_str: &'a str) -> Result<fal::Options, OptionsParseError<'a>> {
+pub fn parse_fs_options(options_str: &'_ str) -> Result<fal::Options, OptionsParseError<'_>> {
     let mut options = fal::Options::default();
 
     for option in options_str.split(',') {
@@ -397,9 +397,9 @@ impl<Backend: fal::FilesystemMut<File>> fuse::Filesystem for FuseFilesystem<Back
     fn statfs(&mut self, _req: &Request, _inode: u64, reply: ReplyStatfs) {
         let stat: fal::FsAttributes = self.inner().filesystem_attrs();
         reply.statfs(
-            stat.total_blocks.into(),
-            stat.free_blocks.into(),
-            stat.available_blocks.into(),
+            stat.total_blocks,
+            stat.free_blocks,
+            stat.available_blocks,
             stat.inode_count,
             stat.free_inodes,
             stat.block_size,

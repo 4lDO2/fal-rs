@@ -8,8 +8,6 @@ use std::{
     time::SystemTime,
 };
 
-use uuid::Uuid;
-
 use fal::{time::Timespec, Filesystem as _};
 
 pub mod block_group;
@@ -144,7 +142,7 @@ impl fal::Inode for Inode {
         fal::Attributes {
             access_time: self.a_time(),
             change_time: self.c_time(),
-            creation_time: self.cr_time().unwrap_or(Timespec::new(0, 0)),
+            creation_time: self.cr_time().unwrap_or(Timespec { sec: 0, nsec: 0 }),
             modification_time: self.m_time(),
             filetype: self.ty().into(),
             block_count: self.size_in_blocks(),
@@ -191,7 +189,12 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
         2
     }
 
-    fn mount(mut device: D, general_options: fal::Options, _ext_specific_options: (), path: &OsStr) -> Self {
+    fn mount(
+        mut device: D,
+        general_options: fal::Options,
+        _ext_specific_options: (),
+        path: &OsStr,
+    ) -> Self {
         let mut superblock = Superblock::load(&mut device).unwrap();
 
         superblock.last_mount_time = SystemTime::now()
@@ -211,7 +214,9 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
             }
         }
 
-        if !general_options.immutable { superblock.store(&mut device).unwrap() }
+        if !general_options.immutable {
+            superblock.store(&mut device).unwrap()
+        }
 
         // TODO: Check for feature flags here.
 
@@ -274,17 +279,15 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
                 .inode
                 .dir_entries(self)?
                 .enumerate()
-                .skip(self.fhs[&fh].offset as usize + offset as usize)
-                .next()
+                .nth(self.fhs[&fh].offset as usize + offset as usize)
             {
                 Some((offset, entry)) => Some({
-                    let entry = fal::DirectoryEntry {
+                    fal::DirectoryEntry {
                         filetype: entry.ty(self)?.into(),
                         name: entry.name,
-                        inode: entry.inode.into(),
+                        inode: entry.inode,
                         offset: offset as u64,
-                    };
-                    entry
+                    }
                 }),
                 None => None,
             },
@@ -304,7 +307,7 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
         let (offset, entry) = match inode
             .dir_entries(self)?
             .enumerate()
-            .find(|(_, entry)| &entry.name == name)
+            .find(|(_, entry)| entry.name == name)
         {
             Some(inode) => inode,
             None => return Err(fal::Error::NoEntity),
@@ -313,7 +316,7 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
         Ok(fal::DirectoryEntry {
             filetype: entry.ty(self)?.into(),
             name: entry.name,
-            inode: entry.inode.into(),
+            inode: entry.inode,
             offset: offset as u64,
         })
     }

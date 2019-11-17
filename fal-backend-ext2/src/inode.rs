@@ -5,9 +5,9 @@ use std::{
 };
 
 use crate::{
-    block_group, os_str_to_bytes, os_string_from_bytes, read_block, read_block_to, read_u16,
-    read_u32, read_u8,
+    block_group,
     extents::ExtentTree,
+    os_str_to_bytes, os_string_from_bytes, read_block, read_block_to, read_u16, read_u32, read_u8,
     superblock::{OptionalFeatureFlags, OsId, RequiredFeatureFlags, RoFeatureFlags, Superblock},
     write_block, write_u16, write_u32, write_u8, Filesystem,
 };
@@ -29,7 +29,7 @@ pub struct Blocks {
 
 impl PartialEq for Blocks {
     fn eq(&self, other: &Blocks) -> bool {
-        &self.inner[..] == &other.inner[..]
+        self.inner[..] == other.inner[..]
     }
 }
 
@@ -75,7 +75,7 @@ pub struct InodeRawBase {
     pub mode: u16,
     pub uid: u16,
     pub size_lo: u32,
-    
+
     pub a_time_lo: i32,
     pub c_time_lo: i32,
     pub m_time_lo: i32,
@@ -152,8 +152,8 @@ bitflags! {
 
 impl InodeFlags {
     pub const AGGREGATE_FLAGS: Self = Self::empty();
-    pub const USER_VISIBLE_FLAGS: Self = Self { bits: 0x705BDFFF };
-    pub const USER_MODIFIABLE_FLAGS: Self = Self { bits: 0x604BC0FF };
+    pub const USER_VISIBLE_FLAGS: Self = Self { bits: 0x705B_DFFF };
+    pub const USER_MODIFIABLE_FLAGS: Self = Self { bits: 0x604B_C0FF };
 }
 
 impl InodeRaw {
@@ -161,17 +161,23 @@ impl InodeRaw {
         Self {
             base: bytes.pread_with(0, scroll::LE).unwrap(),
             ext: if bytes.len() >= EXTENDED_INODE_SIZE as usize {
-                Some(bytes.pread_with(BASE_INODE_SIZE as usize, scroll::LE).unwrap())
+                Some(
+                    bytes
+                        .pread_with(BASE_INODE_SIZE as usize, scroll::LE)
+                        .unwrap(),
+                )
             } else {
                 None
-            }
+            },
         }
     }
     pub fn serialize(this: &Self, bytes: &mut [u8]) {
         bytes.pwrite_with(&this.base, 0, scroll::LE).unwrap();
 
         if let Some(ref ext) = this.ext {
-            bytes.pwrite_with(ext, EXTENDED_INODE_SIZE as usize, scroll::LE).unwrap();
+            bytes
+                .pwrite_with(ext, EXTENDED_INODE_SIZE as usize, scroll::LE)
+                .unwrap();
         }
     }
     pub fn ty(&self) -> InodeType {
@@ -213,12 +219,20 @@ impl InodeRaw {
         }
     }
     pub fn size(&self, superblock: &Superblock) -> u64 {
-        u64::from(self.base.size_lo) | if superblock.ro_compat_features().contains(RoFeatureFlags::EXTENDED_FILE_SIZE) && self.ty() != InodeType::Dir {
-            u64::from(self.base.size_hi_or_dir_acl)
-        } else { 0 } << 32
+        u64::from(self.base.size_lo)
+            | if superblock
+                .ro_compat_features()
+                .contains(RoFeatureFlags::EXTENDED_FILE_SIZE)
+                && self.ty() != InodeType::Dir
+            {
+                u64::from(self.base.size_hi_or_dir_acl)
+            } else {
+                0
+            } << 32
     }
     pub fn generation(&self) -> u64 {
-        u64::from(self.base.generation_lo) | u64::from(self.ext.as_ref().map(|ext| ext.generation_hi).unwrap_or(0)) << 32
+        u64::from(self.base.generation_lo)
+            | u64::from(self.ext.as_ref().map(|ext| ext.generation_hi).unwrap_or(0)) << 32
     }
 
     fn decode_timestamp(base: i32, extra: u32) -> Timespec {
@@ -231,13 +245,22 @@ impl InodeRaw {
     }
 
     pub fn a_time(&self) -> Timespec {
-        Self::decode_timestamp(self.a_time_lo, self.ext.as_ref().map(|ext| ext.a_time_extra).unwrap_or(0))
+        Self::decode_timestamp(
+            self.a_time_lo,
+            self.ext.as_ref().map(|ext| ext.a_time_extra).unwrap_or(0),
+        )
     }
     pub fn c_time(&self) -> Timespec {
-        Self::decode_timestamp(self.c_time_lo, self.ext.as_ref().map(|ext| ext.c_time_extra).unwrap_or(0))
+        Self::decode_timestamp(
+            self.c_time_lo,
+            self.ext.as_ref().map(|ext| ext.c_time_extra).unwrap_or(0),
+        )
     }
     pub fn m_time(&self) -> Timespec {
-        Self::decode_timestamp(self.m_time_lo, self.ext.as_ref().map(|ext| ext.m_time_extra).unwrap_or(0))
+        Self::decode_timestamp(
+            self.m_time_lo,
+            self.ext.as_ref().map(|ext| ext.m_time_extra).unwrap_or(0),
+        )
     }
     pub fn d_time(&self) -> Timespec {
         Timespec {
@@ -247,7 +270,9 @@ impl InodeRaw {
     }
 
     pub fn cr_time(&self) -> Option<Timespec> {
-        self.ext.as_ref().map(|ext| Self::decode_timestamp(ext.cr_time_lo, ext.cr_time_extra))
+        self.ext
+            .as_ref()
+            .map(|ext| Self::decode_timestamp(ext.cr_time_lo, ext.cr_time_extra))
     }
 }
 
@@ -289,9 +314,7 @@ impl InodeType {
             raw & Self::PERM_MASK,
         )
     }
-    pub fn to_type_and_perm((this, perm): (Self, u16)) -> u16 {
-        assert_eq!(perm & Self::PERM_MASK, perm);
-
+    pub fn to_mode(this: Self) -> u16 {
         (match this {
             InodeType::Fifo => 0x1000,
             InodeType::CharDev => 0x2000,
@@ -300,7 +323,7 @@ impl InodeType {
             InodeType::File => 0x8000,
             InodeType::Symlink => 0xA000,
             InodeType::UnixSock => 0xC000,
-        }) | perm
+        })
     }
     pub fn from_direntry_ty_indicator(indicator: u8) -> Option<Self> {
         match indicator {
@@ -365,7 +388,9 @@ impl Inode {
         let inode_size = filesystem.superblock.inode_size();
 
         let containing_block_index = block_group_descriptor.inode_table_start_baddr()
-            + u64::from(inode_index_in_group * u32::from(inode_size) / filesystem.superblock.block_size);
+            + u64::from(
+                inode_index_in_group * u32::from(inode_size) / filesystem.superblock.block_size,
+            );
 
         let max_inodes_in_block = filesystem.superblock.block_size / u32::from(inode_size);
 
@@ -405,7 +430,9 @@ impl Inode {
         let inode_size = filesystem.superblock.inode_size();
 
         let containing_block_index = block_group_descriptor.inode_table_start_baddr()
-            + u64::from(inode_index_in_group * u32::from(inode_size) / filesystem.superblock.block_size);
+            + u64::from(
+                inode_index_in_group * u32::from(inode_size) / filesystem.superblock.block_size,
+            );
 
         let max_inodes_in_block = filesystem.superblock.block_size / u32::from(inode_size);
 
@@ -503,7 +530,9 @@ impl Inode {
         if self.flags().contains(InodeFlags::EXTENTS) {
             // TODO: Cache this tree.
             let tree = self.blocks.extent_tree();
-            let leaf = tree.resolve(filesystem, rel_baddr).expect("Block not found");
+            let leaf = tree
+                .resolve(filesystem, rel_baddr)
+                .expect("Block not found");
 
             let offset_from_extent_start = rel_baddr - leaf.logical_block();
             return Ok(leaf.physical_start_block() + u64::from(offset_from_extent_start));
@@ -538,7 +567,11 @@ impl Inode {
             return Err(fal::Error::Overflow);
         }
         let abs_baddr = self.absolute_baddr(filesystem, rel_baddr)?;
-        Ok(read_block_to(filesystem, abs_baddr.try_into().unwrap(), buffer)?)
+        Ok(read_block_to(
+            filesystem,
+            abs_baddr.try_into().unwrap(),
+            buffer,
+        )?)
     }
     pub fn write_content_block<D: fal::DeviceMut>(
         &self,
@@ -550,7 +583,11 @@ impl Inode {
             return Err(fal::Error::Overflow);
         }
         let abs_baddr = self.absolute_baddr(filesystem, rel_baddr)?;
-        Ok(write_block(filesystem, abs_baddr.try_into().unwrap(), buffer)?)
+        Ok(write_block(
+            filesystem,
+            abs_baddr.try_into().unwrap(),
+            buffer,
+        )?)
     }
     pub fn read<D: fal::Device>(
         &self,
@@ -564,10 +601,13 @@ impl Inode {
                 panic!("Inode uses both INLINE and EXTENTS for data storage; this should not be possible, right?")
             }
             if self.size() > 60 {
-                panic!("Inode too large to actually be INLINE ({} > 60)", self.size())
+                panic!(
+                    "Inode too large to actually be INLINE ({} > 60)",
+                    self.size()
+                )
             }
             if offset >= self.size() {
-                return Ok(0)
+                return Ok(0);
             }
 
             let readable_file_data = &self.blocks.inner[offset as usize..self.size() as usize];
@@ -631,7 +671,7 @@ impl Inode {
             current_rel_baddr += 1;
         }
 
-        if buffer.len() != 0 {
+        if !buffer.is_empty() {
             self.read_block_to(current_rel_baddr, filesystem, &mut block_bytes)?;
             let buffer_len = buffer.len();
             buffer.copy_from_slice(&block_bytes[..buffer_len]);
@@ -700,7 +740,7 @@ impl Inode {
             current_rel_baddr += 1;
         }
 
-        if buffer.len() != 0 {
+        if !buffer.is_empty() {
             self.read_block_to(current_rel_baddr, filesystem, &mut block_bytes)?;
             block_bytes[..buffer.len()].copy_from_slice(&buffer);
             self.write_content_block(current_rel_baddr, filesystem, &block_bytes)?;
@@ -902,10 +942,10 @@ impl<'a, D: fal::Device> Iterator for RawDirIterator<'a, D> {
 
             let value = Some((entry, self.current_entry_offset));
             self.current_entry_offset += u64::try_from(length).unwrap();
-            return value;
+            value
         } else {
             self.finished = true;
-            return None;
+            None
         }
     }
 }
@@ -942,7 +982,7 @@ impl DirEntry {
             .iter()
             .copied()
             .position(|byte| byte == 0)
-            .unwrap_or(name_bytes.len())];
+            .unwrap_or_else(|| name_bytes.len())];
         let name = os_string_from_bytes(name_bytes);
 
         Self {
@@ -968,23 +1008,19 @@ impl DirEntry {
         write_u16(bytes, 4, this.total_entry_size);
         write_u8(bytes, 6, this.name.len() as u8);
 
-        if superblock
-            .extended
-            .as_ref()
-            .map(|extended| {
-                extended
-                    .req_features_present
-                    .contains(RequiredFeatureFlags::DIR_TYPE)
-            })
-            .unwrap_or(false)
-        {
+        let use_ty_indicator = match superblock.extended {
+            Some(ref ext) => ext.req_features_present.contains(RequiredFeatureFlags::DIR_TYPE),
+            None => false,
+        };
+
+        if use_ty_indicator {
             write_u8(
                 bytes,
                 7,
                 InodeType::to_direntry_ty_indicator(this.type_indicator.unwrap()),
             );
         } else {
-            write_u8(bytes, 7, (this.name.len() >> 8) as u8);
+            write_u8(bytes, 7, 0);
         }
     }
     pub fn serialize(this: &Self, superblock: &Superblock, bytes: &mut [u8]) {

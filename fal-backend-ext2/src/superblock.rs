@@ -1,4 +1,7 @@
-use fal::parsing::{read_u8, read_u16, read_u32, read_u64, read_uuid, write_u8, write_u16, write_u32, write_u64, write_uuid};
+use fal::parsing::{
+    read_u16, read_u32, read_u64, read_u8, read_uuid, write_u16, write_u32, write_u64, write_u8,
+    write_uuid,
+};
 use uuid::Uuid;
 
 use std::{
@@ -17,16 +20,18 @@ pub const SIGNATURE: u16 = 0xEF53;
 
 fn take<T>(bytes: &[u8], offset: &mut usize, amount: usize) -> ArrayVec<T>
 where
-    T: arrayvec::Array<Item = u8>
+    T: arrayvec::Array<Item = u8>,
 {
-        let mut array = ::arrayvec::ArrayVec::new();
-        array.try_extend_from_slice(&bytes[*offset..*offset + amount]).unwrap();
-        *offset += amount;
-        array
+    let mut array = ::arrayvec::ArrayVec::new();
+    array
+        .try_extend_from_slice(&bytes[*offset..*offset + amount])
+        .unwrap();
+    *offset += amount;
+    array
 }
 
 fn take_vec(bytes: &[u8], offset: &mut usize, amount: usize) -> Vec<u8> {
-    let vector = bytes[*offset .. *offset + amount].to_owned();
+    let vector = bytes[*offset..*offset + amount].to_owned();
     *offset += amount;
     vector
 }
@@ -138,7 +143,6 @@ pub struct SuperblockExtension {
     pub last_error_time_hi: u8,
 
     // 2 bytes of zero padding
-
     pub encoding: u16,
     pub encoding_flags: u16,
 
@@ -247,7 +251,8 @@ impl Superblock {
         let signature = read_u16(&block_bytes, &mut offset);
         assert_eq!(signature, SIGNATURE);
         let fs_state = FilesystemState::try_parse(read_u16(&block_bytes, &mut offset)).unwrap();
-        let error_handling = ErrorHandlingMethod::try_parse(read_u16(&block_bytes, &mut offset)).unwrap();
+        let error_handling =
+            ErrorHandlingMethod::try_parse(read_u16(&block_bytes, &mut offset)).unwrap();
         let minor_version = read_u16(&block_bytes, &mut offset);
         let last_fsck_time = read_u32(&block_bytes, &mut offset);
         let interval_between_forced_fscks = read_u32(&block_bytes, &mut offset);
@@ -283,7 +288,12 @@ impl Superblock {
             let journal_device = read_u32(&block_bytes, &mut offset);
             let orphan_inode_head_list = read_u32(&block_bytes, &mut offset);
 
-            let hash_seed = [read_u32(&block_bytes, &mut offset), read_u32(&block_bytes, &mut offset), read_u32(&block_bytes, &mut offset), read_u32(&block_bytes, &mut offset)];
+            let hash_seed = [
+                read_u32(&block_bytes, &mut offset),
+                read_u32(&block_bytes, &mut offset),
+                read_u32(&block_bytes, &mut offset),
+                read_u32(&block_bytes, &mut offset),
+            ];
             let default_hash_version = read_u8(&block_bytes, &mut offset);
             let jnl_backup_type = read_u8(&block_bytes, &mut offset);
 
@@ -291,15 +301,19 @@ impl Superblock {
             let default_mounts_ops = read_u32(&block_bytes, &mut offset);
             let first_meta_bg = read_u32(&block_bytes, &mut offset);
             let mkfs_time = read_u32(&block_bytes, &mut offset);
-            let jnl_blocks = (0..17).map(|_| read_u32(&block_bytes, &mut offset)).collect::<ArrayVec<_>>().into_inner().unwrap();
+            let jnl_blocks = (0..17)
+                .map(|_| read_u32(&block_bytes, &mut offset))
+                .collect::<ArrayVec<_>>()
+                .into_inner()
+                .unwrap();
 
             let block_count_hi = read_u32(&block_bytes, &mut offset);
             let reserved_block_count_hi = read_u32(&block_bytes, &mut offset);
             let free_block_count_hi = read_u32(&block_bytes, &mut offset);
 
-            let min_extra_isize =read_u16(&block_bytes, &mut offset);
-            let want_extra_isize =read_u16(&block_bytes, &mut offset);
-            let flags =read_u32(&block_bytes, &mut offset);
+            let min_extra_isize = read_u16(&block_bytes, &mut offset);
+            let want_extra_isize = read_u16(&block_bytes, &mut offset);
+            let flags = read_u32(&block_bytes, &mut offset);
 
             let raid_stride = read_u16(&block_bytes, &mut offset);
             let mmp_interval = read_u16(&block_bytes, &mut offset);
@@ -379,7 +393,10 @@ impl Superblock {
                 user_quota_ino: read_u32(block_bytes, &mut offset),
                 group_quota_ino: read_u32(block_bytes, &mut offset),
                 overhead_blocks: read_u32(block_bytes, &mut offset),
-                backup_bgs: [read_u32(block_bytes, &mut offset), read_u32(block_bytes, &mut offset)],
+                backup_bgs: [
+                    read_u32(block_bytes, &mut offset),
+                    read_u32(block_bytes, &mut offset),
+                ],
                 encrypt_algos: take(block_bytes, &mut offset, 4).into_inner().unwrap(),
                 encrypt_pw_salt: take(block_bytes, &mut offset, 16).into_inner().unwrap(),
                 lost_found_ino: read_u32(block_bytes, &mut offset),
@@ -475,7 +492,11 @@ impl Superblock {
         write_u16(buffer, &mut offset, self.mounts_since_fsck);
         write_u16(buffer, &mut offset, self.mounts_left_before_fsck);
         write_u16(buffer, &mut offset, SIGNATURE);
-        write_u16(buffer, &mut offset, FilesystemState::serialize(self.fs_state));
+        write_u16(
+            buffer,
+            &mut offset,
+            FilesystemState::serialize(self.fs_state),
+        );
         write_u16(
             buffer,
             &mut offset,
@@ -615,7 +636,10 @@ impl Superblock {
     }
 
     pub fn ro_compat_features(&self) -> RoFeatureFlags {
-        self.extended.as_ref().map(|ext| ext.req_features_for_rw).unwrap_or(RoFeatureFlags::empty())
+        self.extended
+            .as_ref()
+            .map(|ext| ext.req_features_for_rw)
+            .unwrap_or_else(RoFeatureFlags::empty)
     }
 
     fn serialize(&self, buffer: &mut [u8]) {
@@ -649,7 +673,13 @@ impl Superblock {
             .unwrap_or(128)
     }
     pub fn is_64bit(&self) -> bool {
-        self.extended.as_ref().map(|ext| ext.req_features_present.contains(RequiredFeatureFlags::_64_BIT)).unwrap_or(false)
+        self.extended
+            .as_ref()
+            .map(|ext| {
+                ext.req_features_present
+                    .contains(RequiredFeatureFlags::_64_BIT)
+            })
+            .unwrap_or(false)
     }
 }
 #[derive(Clone, Copy, Debug)]
