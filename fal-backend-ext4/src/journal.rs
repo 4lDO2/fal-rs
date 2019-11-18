@@ -8,7 +8,7 @@ use quick_error::quick_error;
 use scroll::{Pread, Pwrite};
 use uuid::Uuid;
 
-use crate::{Filesystem, Inode};
+use crate::{Filesystem, Inode, superblock::Superblock};
 
 pub const JOURNAL_HEADER_MAGIC: u32 = 0xC03B3998;
 
@@ -115,6 +115,13 @@ impl JournalSuperblock {
     pub fn incomat_features(&self) -> JournalIncompatFeatureFlags {
         self.ext.as_ref().map(|ext| JournalIncompatFeatureFlags::from_bits(ext.incompat_features).unwrap_or_else(JournalIncompatFeatureFlags::empty)).unwrap_or(JournalIncompatFeatureFlags::empty())
     }
+    pub fn uuid(&self, ext4_superblock: &Superblock) -> [u8; 16] {
+        if let Some(ref ext) = self.ext {
+            ext.uuid
+        } else {
+            ext4_superblock.extended.as_ref().unwrap().journal_id
+        }
+    }
 }
 
 bitflags! {
@@ -156,12 +163,13 @@ impl JournalChecksumType {
     }
 }
 
-#[derive(Clone, Copy, Debug, Pread, Pwrite)]
+#[derive(Clone, Copy, Debug)]
 pub struct JournalBlockTag {
     pub data_block_lo: u32,
     pub flags: u32,
     pub data_block_hi: u32,
     pub checksum: u32,
+    pub uuid: [u8; 16],
 }
 
 bitflags! {
@@ -174,14 +182,41 @@ bitflags! {
 }
 
 impl JournalBlockTag {
-    pub fn parse(bytes: &[u8], incompat_flags: JournalIncompatFeatureFlags) -> Result<Self, scroll::Error> {
-        let this: Self = bytes.pread_with(0, scroll::BE)?;
+    pub fn parse(bytes: &[u8], offset: &mut usize, incompat_flags: JournalIncompatFeatureFlags, journal_uuid: [u8; 16]) -> Result<Self, scroll::Error> {
+        let data_block_lo = bytes.gread_with(offset, scroll::BE)?;
+        let flags = bytes.gread_with(offset, scroll::BE)?;
+        let data_block_hi = bytes.gread_with(offset, scroll::BE)?;
+        let checksum = bytes.gread_with(offset, scroll::BE)?;
 
-        if !incompat_flags.contains(JournalIncompatFeatureFlags::_64_BIT) && this.data_block_hi != 0 {
+        let wrapped_flags = match JournalTagFlags::from_bits(flags) {
+            Some(f) => f,
+            None => return Err(scroll::Error::BadInput { size: 4, msg: "the journal block tag flags contained unknown flags" }),
+        };
+
+        if !incompat_flags.contains(JournalIncompatFeatureFlags::_64_BIT) && data_block_hi != 0 {
             return Err(scroll::Error::BadInput { size: 4, msg: "Nonzero high data block address without the 64 bit journal feature" });
         }
 
-        Ok(this)
+        let mut uuid = journal_uuid;
+
+        if !wrapped_flags.contains(JournalTagFlags::SAME_UUID) {
+            let new_offset = *offset + 16;
+            if new_offset >= bytes.len() {
+                // TODO: The documentation is cryptic (in this particular case), what do size and
+                // len mean?
+                return Err(scroll::Error::TooBig { size: 32, len: bytes.len() - *offset });
+            }
+            uuid.copy_from_slice(&bytes[*offset..new_offset]);
+            *offset = new_offset;
+        }
+
+        Ok(Self {
+            checksum,
+            data_block_hi,
+            data_block_lo,
+            flags,
+            uuid,
+        })
     }
     pub fn tag_size(incompat_flags: JournalIncompatFeatureFlags) -> usize {
         if incompat_flags.contains(JournalIncompatFeatureFlags::V3_CHECKSUM) {
@@ -204,7 +239,7 @@ pub struct JournalDescriptorBlock {
 }
 
 impl JournalDescriptorBlock {
-    pub fn parse(bytes: &[u8], incompat_flags: JournalIncompatFeatureFlags) -> Result<Self, scroll::Error> {
+    pub fn parse(bytes: &[u8], incompat_flags: JournalIncompatFeatureFlags, journal_uuid: [u8; 16]) -> Result<Self, scroll::Error> {
         let header: JournalHeader = bytes.pread_with(0, scroll::BE)?;
 
         if header.block_ty != BlockType::Descriptor as u32 {
@@ -215,7 +250,10 @@ impl JournalDescriptorBlock {
         }
 
         let tag_size = JournalBlockTag::tag_size(incompat_flags);
-        let tags = (0..1012 / tag_size).map(|i| JournalBlockTag::parse(&bytes[12 + i * tag_size..12 + (i + 1) * tag_size], incompat_flags)).take_while(|t| t.is_ok()).collect::<Result<Vec<_>, _>>()?;
+
+        let mut offset = 12;
+
+        let tags = (0..1012 / tag_size).map(|_| JournalBlockTag::parse(&bytes, &mut offset, incompat_flags, journal_uuid)).take_while(|t| t.is_ok()).collect::<Result<Vec<_>, _>>()?;
         let tail = bytes.pread_with(1020, scroll::BE)?;
 
         Ok(Self {
@@ -226,11 +264,38 @@ impl JournalDescriptorBlock {
     }
 }
 
+#[derive(Clone, Copy, Debug, Pread, Pwrite)]
+pub struct JournalCommitBlock {
+    pub header: JournalHeader,
+    pub checksum_ty: u8,
+    pub checksum_size: u8,
+    pub padding: [u8; 2],
+    pub checksum: [u32; 8],
+    pub commit_sec: u64,
+    pub commit_nsec: u32,
+}
+
+impl JournalCommitBlock {
+    pub fn parse(bytes: &[u8]) -> Result<Self, scroll::Error> {
+        let this: Self = bytes.pread_with(0, scroll::BE)?;
+
+        if this.header.block_ty != BlockType::BlockCommitRecord as u32 {
+            return Err(scroll::Error::BadInput { size: 4, msg: "the journal commit block header didn't have the type 'block commit header'" })
+        }
+        if this.header.magic != JOURNAL_HEADER_MAGIC {
+            return Err(scroll::Error::BadInput { size: 4, msg: "the journal commit block's magic number didn't match" });
+        }
+
+        Ok(this)
+    }
+}
+
 #[derive(Debug)]
 pub struct Journal {
     pub inode: Inode,
     pub superblock: JournalSuperblock,
     pub descriptor_block: JournalDescriptorBlock,
+    //pub commit_block: JournalCommitBlock,
 }
 
 quick_error! {
@@ -269,7 +334,8 @@ impl Journal {
         let inode = Inode::load(filesystem, journal_inode)?;
 
         let mut superblock_bytes = vec! [0u8; 1024];
-        inode.read(filesystem, 0, &mut superblock_bytes)?;
+        // TODO: Use the journal block size.
+        inode.read_block_to(0, filesystem, &mut superblock_bytes)?;
 
         let superblock = JournalSuperblock::parse(&superblock_bytes)?;
 
@@ -280,7 +346,7 @@ impl Journal {
         let mut descriptor_block_bytes = superblock_bytes;
         inode.read_block_to(1, filesystem, &mut descriptor_block_bytes)?;
 
-        let descriptor_block = JournalDescriptorBlock::parse(&descriptor_block_bytes, superblock.incomat_features())?;
+        let descriptor_block = JournalDescriptorBlock::parse(&descriptor_block_bytes, superblock.incomat_features(), superblock.uuid(&filesystem.superblock))?;
 
         Ok(Some(Self {
             inode,
