@@ -17,6 +17,7 @@ pub mod journal;
 pub mod superblock;
 
 pub use inode::Inode;
+pub use journal::Journal;
 pub use superblock::Superblock;
 
 pub use fal::{
@@ -99,8 +100,9 @@ pub struct Filesystem<D> {
     pub superblock: Superblock,
     pub device: Mutex<D>,
     pub fhs: HashMap<u64, FileHandle>,
-    last_fh: u64,
-    general_options: fal::Options,
+    pub last_fh: u64,
+    pub general_options: fal::Options,
+    pub journal: Option<Journal>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -221,13 +223,22 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
 
         // TODO: Check for feature flags here.
 
-        Self {
+        let mut filesystem = Self {
             superblock,
             device: Mutex::new(device),
             fhs: HashMap::new(),
             last_fh: 0,
             general_options,
-        }
+            journal: None,
+        };
+        filesystem.journal = match Journal::load(&filesystem) {
+            Ok(j) => dbg!(j),
+            Err(err) => {
+                eprintln!("The filesystem journal failed loading: {}", err);
+                None
+            }
+        };
+        filesystem
     }
 
     fn unmount(self) {}

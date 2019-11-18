@@ -201,7 +201,8 @@ bitflags! {
     }
 }
 
-fn log2_round_up<T: From<u8> + AddAssign + ShrAssign + Eq>(mut t: T) -> T {
+// Not used yet, but it will be necessary when filesystem creation is implemented.
+fn _log2_round_up<T: From<u8> + AddAssign + ShrAssign + Eq>(mut t: T) -> T {
     if t == 1.into() {
         return 0.into();
     }
