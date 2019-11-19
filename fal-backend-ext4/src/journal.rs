@@ -1,7 +1,7 @@
 //! Journaling structures and procedures.
 //! __NOTE: Every field here is stored as _big endian___
 
-use std::{io, error::Error, fmt};
+use std::{fmt, ops::Range};
 
 use bitflags::bitflags;
 use quick_error::quick_error;
@@ -17,6 +17,12 @@ pub struct JournalHeader {
     pub magic: u32,
     pub block_ty: u32,
     pub xid: u32,
+}
+
+impl JournalHeader {
+    pub fn is_valid(&self) -> bool {
+        return self.magic == JOURNAL_HEADER_MAGIC && self.block_ty >= 1 && self.block_ty <= 5
+    }
 }
 
 #[repr(u32)]
@@ -112,7 +118,7 @@ impl JournalSuperblock {
             ext: v2,
         })
     }
-    pub fn incomat_features(&self) -> JournalIncompatFeatureFlags {
+    pub fn incompat_features(&self) -> JournalIncompatFeatureFlags {
         self.ext.as_ref().map(|ext| JournalIncompatFeatureFlags::from_bits(ext.incompat_features).unwrap_or_else(JournalIncompatFeatureFlags::empty)).unwrap_or(JournalIncompatFeatureFlags::empty())
     }
     pub fn uuid(&self, ext4_superblock: &Superblock) -> [u8; 16] {
@@ -163,7 +169,7 @@ impl JournalChecksumType {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct JournalBlockTag {
     pub data_block_lo: u32,
     pub flags: u32,
@@ -223,6 +229,20 @@ impl JournalBlockTag {
             return 16;
         }
         12 + if incompat_flags.contains(JournalIncompatFeatureFlags::V2_CHECKSUM) { 2 } else { 0 } - if incompat_flags.contains(JournalIncompatFeatureFlags::_64_BIT) { 4 } else { 0 }
+    }
+    pub fn data_block(&self) -> u64 {
+        u64::from(self.data_block_lo) | (u64::from(self.data_block_hi) << 32)
+    }
+}
+
+impl fmt::Debug for JournalBlockTag {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("JournalBlockTag")
+            .field("data_block", &self.data_block())
+            .field("flags", &JournalTagFlags::from_bits_truncate(self.flags))
+            .field("checksum", &self.checksum)
+            .field("uuid", &Uuid::from_bytes(self.uuid))
+            .finish()
     }
 }
 
@@ -294,8 +314,6 @@ impl JournalCommitBlock {
 pub struct Journal {
     pub inode: Inode,
     pub superblock: JournalSuperblock,
-    pub descriptor_block: JournalDescriptorBlock,
-    //pub commit_block: JournalCommitBlock,
 }
 
 quick_error! {
@@ -319,6 +337,57 @@ quick_error! {
     }
 }
 
+#[derive(Debug)]
+pub struct Transaction {
+    pub desc_blocks: Vec<(JournalDescriptorBlock, Range<u32>)>,
+    pub commit_block: JournalCommitBlock,
+}
+
+/// Returns the address of the found block, and the header of that block. The block bytes are also
+/// updated with the content of the last read block.
+fn find_meta_block<D: fal::Device>(filesystem: &Filesystem<D>, journal_inode: &Inode, start_baddr: u32, block_bytes: &mut [u8], superblock: &JournalSuperblock) -> Result<Option<(u32, JournalHeader)>, JournalInitError> {
+    for baddr in start_baddr..superblock.max_len {
+        journal_inode.read_block_to(baddr, filesystem, block_bytes)?;
+        let header: JournalHeader = match block_bytes.pread_with::<JournalHeader>(0, scroll::BE) {
+            Ok(h) => h,
+            Err(_) => continue,
+        };
+        if !header.is_valid() {
+            continue;
+        }
+        return Ok(Some((baddr, header)));
+    }
+    Ok(None)
+}
+/// Returns the address of the block where the next transaction starts, and the transaction.
+pub fn find_transaction<D: fal::Device>(filesystem: &Filesystem<D>, journal_inode: &Inode, start_baddr: u32, block_bytes: &mut [u8], journal_superblock: &JournalSuperblock) -> Result<Option<(u32, Transaction)>, JournalInitError> {
+    let mut desc_blocks = vec! [];
+    let mut start_block = start_baddr;
+    let mut previous_desc_block = None;
+
+    while let Some((meta_baddr, header)) = find_meta_block(filesystem, journal_inode, start_block, block_bytes, journal_superblock)? {
+        if header.block_ty == BlockType::Descriptor as u32 || header.block_ty == BlockType::BlockCommitRecord as u32 {
+            if let Some(desc_block) = previous_desc_block.take() {
+                desc_blocks.push((desc_block, start_block..meta_baddr - 1));
+            }
+            start_block = meta_baddr + 1;
+        }
+
+        if header.block_ty == BlockType::Descriptor as u32 {
+            // The block bytes won't be changed since the last read in find_meta_block.
+            let new_desc_block = JournalDescriptorBlock::parse(block_bytes, journal_superblock.incompat_features(), journal_superblock.uuid(&filesystem.superblock))?;
+            previous_desc_block = Some(new_desc_block);
+        } else if header.block_ty == BlockType::BlockCommitRecord as u32 {
+            let commit_block = JournalCommitBlock::parse(block_bytes)?;
+            return Ok(Some((start_block, Transaction {
+                commit_block,
+                desc_blocks,
+            })))
+        }
+    }
+    Ok(None)
+}
+
 impl Journal {
     pub fn load<D: fal::Device>(filesystem: &Filesystem<D>) -> Result<Option<Self>, JournalInitError> {
         let journal_inode = match filesystem.superblock.extended.as_ref() {
@@ -331,27 +400,30 @@ impl Journal {
         // multi-dev configurations, where one filesystem provides references to other disks.
         if journal_inode == 0 { return Ok(None) }
 
-        let inode = Inode::load(filesystem, journal_inode)?;
+        let mut inode = Inode::load(filesystem, journal_inode)?;
 
         let mut superblock_bytes = vec! [0u8; 1024];
         // TODO: Use the journal block size.
-        inode.read_block_to(0, filesystem, &mut superblock_bytes)?;
+        inode.read(filesystem, 0, &mut superblock_bytes)?;
 
         let superblock = JournalSuperblock::parse(&superblock_bytes)?;
+        inode.block_size = superblock.block_size;
 
-        if !superblock.incomat_features().contains(JournalIncompatFeatureFlags::V3_CHECKSUM) {
+        if !superblock.incompat_features().contains(JournalIncompatFeatureFlags::V3_CHECKSUM) {
             return Err(JournalInitError::UnsupportedJournalFormat)
         }
 
-        let mut descriptor_block_bytes = superblock_bytes;
-        inode.read_block_to(1, filesystem, &mut descriptor_block_bytes)?;
+        let mut block_bytes = vec! [0u8; superblock.block_size as usize];
 
-        let descriptor_block = JournalDescriptorBlock::parse(&descriptor_block_bytes, superblock.incomat_features(), superblock.uuid(&filesystem.superblock))?;
+        let mut current_baddr = superblock.first_log_block;
+        while let Some((next_transacton_baddr, transaction)) = find_transaction(filesystem, &inode, current_baddr, &mut block_bytes, &superblock)? {
+            dbg!(transaction);
+            current_baddr = next_transacton_baddr;
+        }
 
         Ok(Some(Self {
             inode,
             superblock,
-            descriptor_block,
         }))
     }
 }
