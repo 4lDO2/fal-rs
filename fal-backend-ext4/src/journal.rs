@@ -345,7 +345,7 @@ pub struct Transaction {
 
 /// Returns the address of the found block, and the header of that block. The block bytes are also
 /// updated with the content of the last read block.
-fn find_meta_block<D: fal::Device>(filesystem: &Filesystem<D>, journal_inode: &Inode, start_baddr: u32, block_bytes: &mut [u8], superblock: &JournalSuperblock) -> Result<Option<(u32, JournalHeader)>, JournalInitError> {
+pub fn find_meta_block<D: fal::Device>(filesystem: &Filesystem<D>, journal_inode: &Inode, start_baddr: u32, block_bytes: &mut [u8], superblock: &JournalSuperblock) -> Result<Option<(u32, JournalHeader)>, JournalInitError> {
     for baddr in start_baddr..superblock.max_len {
         journal_inode.read_block_to(baddr, filesystem, block_bytes)?;
         let header: JournalHeader = match block_bytes.pread_with::<JournalHeader>(0, scroll::BE) {
@@ -363,12 +363,14 @@ fn find_meta_block<D: fal::Device>(filesystem: &Filesystem<D>, journal_inode: &I
 pub fn find_transaction<D: fal::Device>(filesystem: &Filesystem<D>, journal_inode: &Inode, start_baddr: u32, block_bytes: &mut [u8], journal_superblock: &JournalSuperblock) -> Result<Option<(u32, Transaction)>, JournalInitError> {
     let mut desc_blocks = vec! [];
     let mut start_block = start_baddr;
-    let mut previous_desc_block = None;
+    let mut previous_desc_block: Option<JournalDescriptorBlock> = None;
 
     while let Some((meta_baddr, header)) = find_meta_block(filesystem, journal_inode, start_block, block_bytes, journal_superblock)? {
         if header.block_ty == BlockType::Descriptor as u32 || header.block_ty == BlockType::BlockCommitRecord as u32 {
             if let Some(desc_block) = previous_desc_block.take() {
-                desc_blocks.push((desc_block, start_block..meta_baddr - 1));
+                let len = meta_baddr - 1 - start_block;
+                let end = start_block + std::cmp::min(desc_block.tags.len() as u32, len);
+                desc_blocks.push((desc_block, start_block..end));
             }
             start_block = meta_baddr + 1;
         }
