@@ -101,6 +101,10 @@ impl std::ops::DerefMut for JournalSuperblock {
     }
 }
 
+pub fn calculate_crc32c(value: u32, bytes: &[u8]) -> u32 {
+    crc32::update(value ^ (!0), &crc32::CASTAGNOLI_TABLE, bytes) ^ (!0)
+}
+
 impl JournalSuperblock {
     pub fn calculate_crc32(bytes: &[u8], polynomial: u32) -> u32 {
         let mut hasher = crc32::Digest::new_with_initial(polynomial, 0);
@@ -126,9 +130,10 @@ impl JournalSuperblock {
             };
 
             let calculated_checksum = match checksum_ty {
-                JournalChecksumType::Crc32 => Self::calculate_crc32(bytes, crc32::IEEE),
                 JournalChecksumType::Crc32c => Self::calculate_crc32(bytes, crc32::CASTAGNOLI),
-                other => unimplemented!("checksum of type: {:?}", other),
+
+                // I have only seen the jbd2 code use crc32c. It's a bit strange that they don't even include md5 and sha1 for compatibility purposes.
+                other => unimplemented!("checksum of type: {:?}", other), 
             };
 
             if calculated_checksum != v2.checksum {
@@ -147,6 +152,9 @@ impl JournalSuperblock {
             base: v1,
             ext: v2,
         })
+    }
+    pub fn seed(&self) -> u32 {
+        calculate_crc32c(!0, &self.ext.unwrap().uuid)
     }
     pub fn checksum_ty(&self) -> Option<JournalChecksumType> {
         self.ext.as_ref().map(|ext| ext.checksum_ty).map(|raw| JournalChecksumType::from_raw(raw).expect("Somehow the init check was bypassed"))
@@ -292,6 +300,12 @@ pub struct JournalDescriptorBlock {
 }
 
 impl JournalDescriptorBlock {
+    fn calculate_crc32c(seed: u32, bytes: &[u8]) -> u32 {
+        let mut hasher = crc32::Digest::new_with_initial(crc32::CASTAGNOLI, seed ^ (!0));
+        hasher.write(&bytes[..bytes.len() - 4]);
+        hasher.write(&[0u8; 4]);
+        hasher.sum32() ^ (!0)
+    }
     pub fn parse(bytes: &[u8], superblock: &JournalSuperblock, uuid: [u8; 16]) -> Result<Self, scroll::Error> {
         let header: JournalHeader = bytes.pread_with(0, scroll::BE)?;
 
@@ -307,7 +321,11 @@ impl JournalDescriptorBlock {
         let mut offset = 12;
 
         let tags = (0..(superblock.block_size as usize - 12) / tag_size).map(|_| JournalBlockTag::parse(&bytes, &mut offset, superblock.incompat_features(), uuid)).take_while(Result::is_ok).collect::<Result<Vec<_>, _>>().expect("logic error");
-        let tail = bytes.pread_with(superblock.block_size as usize - 4, scroll::BE)?;
+        let tail: JournalDescriptorBlockTail = bytes.pread_with(superblock.block_size as usize - 4, scroll::BE)?;
+
+        if tail.checksum != Self::calculate_crc32c(superblock.seed(), bytes) {
+            return Err(scroll::Error::BadInput { size: 4, msg: "journal descriptor block checksum didn't match" })
+        }
 
         Ok(Self {
             header,
@@ -329,14 +347,28 @@ pub struct JournalCommitBlock {
 }
 
 impl JournalCommitBlock {
-    pub fn parse(bytes: &[u8]) -> Result<Self, scroll::Error> {
+    pub fn calculate_crc32c(seed: u32, bytes: &[u8]) -> u32 {
+        let mut hasher = crc32::Digest::new_with_initial(crc32::CASTAGNOLI, seed ^ (!0));
+        hasher.write(&bytes[..0xC]);
+        hasher.write(&[0u8; 2]);
+        hasher.write(&bytes[0xE..0x10]);
+        hasher.write(&[0u8; 4]);
+        hasher.write(&bytes[0x14..]);
+        hasher.sum32() ^ (!0)
+    }
+    pub fn parse(seed: u32, bytes: &[u8]) -> Result<Self, scroll::Error> {
         let this: Self = bytes.pread_with(0, scroll::BE)?;
+
+        if this.header.magic != JOURNAL_HEADER_MAGIC {
+            return Err(scroll::Error::BadInput { size: 4, msg: "the journal commit block's magic number didn't match" });
+        }
 
         if this.header.block_ty != BlockType::BlockCommitRecord as u32 {
             return Err(scroll::Error::BadInput { size: 4, msg: "the journal commit block header didn't have the type 'block commit header'" })
         }
-        if this.header.magic != JOURNAL_HEADER_MAGIC {
-            return Err(scroll::Error::BadInput { size: 4, msg: "the journal commit block's magic number didn't match" });
+
+        if this.checksum[0] != Self::calculate_crc32c(seed, bytes) {
+            return Err(scroll::Error::BadInput { size: 4, msg: "checksum mismatch in the journal commit block" })
         }
 
         Ok(this)
@@ -413,7 +445,7 @@ pub fn find_transaction<D: fal::Device>(filesystem: &Filesystem<D>, journal_inod
             let new_desc_block = JournalDescriptorBlock::parse(block_bytes, journal_superblock, journal_superblock.uuid(&filesystem.superblock))?;
             previous_desc_block = Some(new_desc_block);
         } else if header.block_ty == BlockType::BlockCommitRecord as u32 {
-            let commit_block = JournalCommitBlock::parse(block_bytes)?;
+            let commit_block = JournalCommitBlock::parse(journal_superblock.seed(), block_bytes)?;
             return Ok(Some((start_block, Transaction {
                 commit_block,
                 desc_blocks,
@@ -421,6 +453,35 @@ pub fn find_transaction<D: fal::Device>(filesystem: &Filesystem<D>, journal_inod
         }
     }
     Ok(None)
+}
+quick_error! {
+    #[derive(Debug)]
+    pub enum VerifyTransactionError {
+        Io(err: fal::Error) {
+            from()
+            description("i/o error")
+        }
+        ChecksumMismatch {
+            description("checksums mismatch")
+        }
+    }
+}
+
+pub fn calculate_tag_crc32(seed: u32, sequence: u32, data_block: &[u8]) -> u32 {
+    let checksum = calculate_crc32c(seed, &sequence.to_be_bytes());
+    calculate_crc32c(checksum, data_block)
+}
+pub fn verify_transaction<D: fal::Device>(filesystem: &Filesystem<D>, transaction: &Transaction, journal_inode: &Inode, journal_superblock: &JournalSuperblock) -> Result<(), VerifyTransactionError> {
+    let mut data_block = vec! [0u8; journal_superblock.block_size as usize];
+    for (desc, data_block_range) in &transaction.desc_blocks {
+        for (tag, data_baddr) in desc.tags.iter().zip(data_block_range.clone()) {
+            journal_inode.read_block_to(data_baddr, filesystem, &mut data_block)?;
+            if tag.checksum != calculate_tag_crc32(journal_superblock.seed(), transaction.commit_block.header.xid, &data_block) {
+                return Err(VerifyTransactionError::ChecksumMismatch)
+            }
+        }
+    }
+    Ok(())
 }
 
 impl Journal {
@@ -452,7 +513,7 @@ impl Journal {
 
         let mut current_baddr = superblock.first_log_block;
         while let Some((next_transacton_baddr, transaction)) = find_transaction(filesystem, &inode, current_baddr, &mut block_bytes, &superblock)? {
-            dbg!(transaction);
+            verify_transaction(filesystem, &transaction, &inode, &superblock).unwrap();
             current_baddr = next_transacton_baddr;
         }
 
