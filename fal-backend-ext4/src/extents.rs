@@ -1,4 +1,4 @@
-use crate::{inode::Blocks, read_block, Filesystem};
+use crate::{calculate_crc32c, inode::Blocks, read_block, Filesystem};
 
 use scroll::{Pread, Pwrite};
 
@@ -122,31 +122,32 @@ pub enum ExtentTreeBody {
 pub struct ExtentTree {
     pub header: ExtentHeader,
     pub body: ExtentTreeBody,
-    pub tail: ExtentTail,
+    pub tail: Option<ExtentTail>,
+    pub checksum_seed: u32,
 }
 
-// The error type doesn't have to be more complex than this, because it doesn't really matter what
-// causes the data to be invalid in this case.
-/// An invalid data pattern caused when parsing any of the extent tree structures.
-#[derive(Debug)]
-pub struct InvalidData(&'static str);
-
 impl ExtentTree {
+    pub fn calculate_crc32c(seed: u32, bytes: &[u8]) -> u32 {
+        calculate_crc32c(seed, &bytes[..bytes.len() - TAIL_SIZE])
+    }
     /// Initialize an extent tree from the blocks field of an inode.
-    pub fn from_inode_blocks_field(blocks: &Blocks) -> Result<Self, InvalidData> {
-        Self::from_block(&blocks.inner)
+    pub fn from_inode_blocks_field(seed: u32, blocks: &Blocks) -> Result<Self, scroll::Error> {
+        Self::init(seed, &blocks.inner, false)
+    }
+    pub fn from_block(seed: u32, bytes: &[u8]) -> Result<Self, scroll::Error> {
+        Self::init(seed, bytes, true)
     }
 
-    pub fn from_block(bytes: &[u8]) -> Result<Self, InvalidData> {
-        let header: ExtentHeader = bytes.pread_with(0, scroll::LE).unwrap();
+    fn init(seed: u32, bytes: &[u8], use_tail: bool) -> Result<Self, scroll::Error> {
+        let header: ExtentHeader = bytes.pread_with(0, scroll::LE)?;
 
         if header.entry_count > header.max_entry_count {
-            return Err(InvalidData("Entry count too high"));
+            return Err(scroll::Error::BadInput { size: 2, msg: "Entry count too high" });
         }
         if header.max_entry_count as usize * ITEM_SIZE > 60 {
-            return Err(InvalidData(
-                "Max entry count makes it overflow the available space of the extent tree",
-            ));
+            return Err(scroll::Error::BadInput { size: 2,
+                msg: "Max entry count makes it overflow the available space of the extent tree",
+            });
         }
 
         let body = if header.depth > 0 {
@@ -171,11 +172,15 @@ impl ExtentTree {
             )
         };
 
-        let tail = bytes
+        let tail: ExtentTail = bytes
             .pread_with(bytes.len() - TAIL_SIZE, scroll::LE)
             .unwrap();
 
-        Ok(Self { header, body, tail })
+        if use_tail && tail.checksum != Self::calculate_crc32c(seed, bytes) {
+            panic!("extent tail checksum mismatch");
+        }
+
+        Ok(Self { header, body, tail: if use_tail { Some(tail) } else { None }, checksum_seed: seed })
     }
 
     /// Check that all the items in the current node are sorted. This is a fundamental requirement
@@ -269,7 +274,7 @@ impl ExtentTree {
 
             // Load the subtree and search it.
             let child_node_block = read_block(filesystem, item.physical_leaf_block()).unwrap();
-            let child_node = Self::from_block(&child_node_block).unwrap();
+            let child_node = Self::from_block(self.checksum_seed, &child_node_block).unwrap();
             child_node.resolve(filesystem, logical_block)
         }
     }

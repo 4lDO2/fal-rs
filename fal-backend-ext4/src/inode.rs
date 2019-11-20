@@ -65,8 +65,8 @@ impl Blocks {
     pub fn triply_indirect_ptr(&self) -> u32 {
         self.block_ptrs()[14]
     }
-    pub fn extent_tree(&self) -> ExtentTree {
-        ExtentTree::from_inode_blocks_field(self).unwrap()
+    pub fn extent_tree(&self, seed: u32) -> ExtentTree {
+        ExtentTree::from_inode_blocks_field(seed, self).unwrap()
     }
 }
 
@@ -485,7 +485,6 @@ impl Inode {
             checksum_seed,
             os: superblock.os_id(),
         };
-        dbg!(&this);
         if let Some(checksum) = this.checksum(superblock.os_id()) {
             if InodeRaw::calculate_crc32c(&bytes, checksum_seed) != checksum {
                 return Err(scroll::Error::BadInput { size: 4, msg: "inode checksum mismatch" })
@@ -558,7 +557,7 @@ impl Inode {
     ) -> io::Result<u64> {
         if self.flags().contains(InodeFlags::EXTENTS) {
             // TODO: Cache this tree.
-            let tree = self.blocks.extent_tree();
+            let tree = self.blocks.extent_tree(self.checksum_seed);
             let leaf = tree
                 .resolve(filesystem, rel_baddr)
                 .expect("Block not found");
