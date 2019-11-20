@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    block_group,
+    block_group, calculate_crc32c,
     extents::ExtentTree,
     os_str_to_bytes, os_string_from_bytes, read_block, read_block_to, read_u16, read_u32, read_u8,
     superblock::{OptionalFeatureFlags, OsId, RequiredFeatureFlags, RoFeatureFlags, Superblock},
@@ -157,19 +157,17 @@ impl InodeFlags {
 }
 
 impl InodeRaw {
-    pub fn parse(bytes: &[u8]) -> Self {
-        Self {
-            base: bytes.pread_with(0, scroll::LE).unwrap(),
+    pub fn parse(bytes: &[u8]) -> Result<Self, scroll::Error> {
+        Ok(Self {
+            base: bytes.pread_with(0, scroll::LE)?,
             ext: if bytes.len() >= EXTENDED_INODE_SIZE as usize {
                 Some(
-                    bytes
-                        .pread_with(BASE_INODE_SIZE as usize, scroll::LE)
-                        .unwrap(),
+                    bytes.pread_with(BASE_INODE_SIZE as usize, scroll::LE)?
                 )
             } else {
                 None
             },
-        }
+        })
     }
     pub fn serialize(this: &Self, bytes: &mut [u8]) {
         bytes.pwrite_with(&this.base, 0, scroll::LE).unwrap();
@@ -217,6 +215,25 @@ impl InodeRaw {
         } else if hi != 0 {
             panic!("Only Linux filesystems support 32-bit GIDs")
         }
+    }
+    pub fn checksum(&self, os_id: OsId) -> Option<u32> {
+        if os_id != OsId::Linux { return None }
+        let lo = fal::read_u16(&self.os_specific_2, 8);
+        let hi = self.ext.as_ref().map(|ext| ext.checksum_hi).unwrap_or(0);
+        Some(u32::from(lo) | (u32::from(hi) << 16))
+    }
+    pub fn calculate_crc32c(bytes: &[u8], checksum_seed: u32) -> u32 {
+        let mut checksum = calculate_crc32c(checksum_seed, &bytes[..0x7C]);
+        checksum = calculate_crc32c(checksum, &[0u8; 2]);
+        checksum = calculate_crc32c(checksum, &bytes[0x7E..0x80 as usize]);
+
+        if bytes.len() > BASE_INODE_SIZE as usize {
+            checksum = calculate_crc32c(checksum, &bytes[0x80..0x82]);
+            checksum = calculate_crc32c(checksum, &[0u8; 2]);
+            checksum = calculate_crc32c(checksum, &bytes[0x84..]);
+        }
+
+        checksum
     }
     pub fn size(&self, superblock: &Superblock) -> u64 {
         u64::from(self.base.size_lo)
@@ -281,6 +298,7 @@ pub struct Inode {
     pub block_size: u32,
     pub size: u64,
     pub addr: u32,
+    pub checksum_seed: u32,
     pub os: OsId,
     pub raw: InodeRaw,
 }
@@ -405,7 +423,7 @@ impl Inode {
             &filesystem.superblock,
             inode_address,
             inode_bytes,
-        ))
+        ).unwrap())
     }
     pub fn store<D: fal::DeviceMut>(
         this: &Self,
@@ -452,17 +470,28 @@ impl Inode {
             &containing_block,
         )?)
     }
-    pub fn parse(superblock: &Superblock, addr: u32, bytes: &[u8]) -> Self {
-        let raw = InodeRaw::parse(bytes);
+    pub fn parse(superblock: &Superblock, addr: u32, bytes: &[u8]) -> Result<Self, scroll::Error> {
+        let raw = InodeRaw::parse(bytes)?;
         let size = raw.size(superblock);
 
-        Self {
+        let mut checksum_seed = calculate_crc32c(superblock.checksum_seed().unwrap(), &addr.to_le_bytes());
+        checksum_seed = calculate_crc32c(checksum_seed, &raw.generation_lo.to_le_bytes());
+
+        let this = Self {
             block_size: superblock.block_size(),
             addr,
             raw,
             size,
+            checksum_seed,
             os: superblock.os_id(),
+        };
+        dbg!(&this);
+        if let Some(checksum) = this.checksum(superblock.os_id()) {
+            if InodeRaw::calculate_crc32c(&bytes, checksum_seed) != checksum {
+                return Err(scroll::Error::BadInput { size: 4, msg: "inode checksum mismatch" })
+            }
         }
+        Ok(this)
     }
     pub fn serialize(this: &Inode, buffer: &mut [u8]) {
         InodeRaw::serialize(&this.raw, buffer)

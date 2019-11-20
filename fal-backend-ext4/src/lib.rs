@@ -8,6 +8,7 @@ use std::{
     time::SystemTime,
 };
 
+use crc::{crc32, Hasher64};
 use fal::{time::Timespec, Filesystem as _};
 
 pub mod block_group;
@@ -382,3 +383,8 @@ impl<D: fal::DeviceMut> fal::FilesystemMut<D> for Filesystem<D> {
         unimplemented!()
     }
 }
+
+pub fn calculate_crc32c(value: u32, bytes: &[u8]) -> u32 {
+    crc32::update(value ^ (!0), &crc32::CASTAGNOLI_TABLE, bytes) ^ (!0)
+}
+

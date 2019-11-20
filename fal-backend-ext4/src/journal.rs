@@ -9,7 +9,7 @@ use quick_error::quick_error;
 use scroll::{Pread, Pwrite};
 use uuid::Uuid;
 
-use crate::{Filesystem, Inode, superblock::Superblock};
+use crate::{calculate_crc32c, Filesystem, Inode, superblock::Superblock};
 
 pub const JOURNAL_HEADER_MAGIC: u32 = 0xC03B3998;
 
@@ -99,10 +99,6 @@ impl std::ops::DerefMut for JournalSuperblock {
     fn deref_mut(&mut self) -> &mut JournalSuperblockV1 {
         &mut self.base
     }
-}
-
-pub fn calculate_crc32c(value: u32, bytes: &[u8]) -> u32 {
-    crc32::update(value ^ (!0), &crc32::CASTAGNOLI_TABLE, bytes) ^ (!0)
 }
 
 impl JournalSuperblock {

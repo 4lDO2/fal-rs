@@ -1,12 +1,12 @@
-use scroll::{Pread, Pwrite};
-
 use std::{
     io::{self, SeekFrom},
     ops::{AddAssign, ShrAssign},
 };
 
 use bitflags::bitflags;
-use crc::{crc32, Hasher32};
+use scroll::{Pread, Pwrite};
+
+use crate::calculate_crc32c;
 
 pub const SUPERBLOCK_OFFSET: u64 = 1024;
 pub const SUPERBLOCK_LEN: u64 = 1024;
@@ -227,10 +227,17 @@ impl Superblock {
 
         Ok(Self::parse(&block_bytes))
     }
+    pub fn calculate_crc32c(bytes: &[u8]) -> u32 {
+        calculate_crc32c(!0, &bytes[..1020])
+    }
     pub fn parse(block_bytes: &[u8]) -> Self {
         let base: SuperblockBase = block_bytes.pread_with(0, scroll::LE).unwrap();
         let extended = if base.major_version >= 1 {
-            Some(block_bytes.pread_with(84, scroll::LE).unwrap())
+            let ext: SuperblockExtension = block_bytes.pread_with(84, scroll::LE).unwrap();
+            if ext.superblock_checksum != Self::calculate_crc32c(block_bytes) {
+                panic!("superblock checksum mismatch")
+            }
+            Some(ext)
         } else { None };
 
         Self {
@@ -262,6 +269,16 @@ impl Superblock {
             .as_ref()
             .map(|ext| RoFeatureFlags::from_bits(ext.req_features_for_rw).unwrap())
             .unwrap_or_else(RoFeatureFlags::empty)
+    }
+    pub fn uuid(&self) -> [u8; 16] {
+        self.extended.as_ref().map(|ext| ext.fs_id).unwrap_or([0u8; 16])
+    }
+    pub fn checksum_seed(&self) -> Option<u32> {
+        if self.incompat_features().contains(RequiredFeatureFlags::CSUM_SEED) {
+            self.extended.as_ref().map(|ext| ext.checksum_seed)
+        } else {
+            self.extended.as_ref().map(|ext| calculate_crc32c(!0, &ext.fs_id))
+        }
     }
 
     fn serialize(&self, buffer: &mut [u8]) {

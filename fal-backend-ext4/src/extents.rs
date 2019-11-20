@@ -13,7 +13,6 @@ pub const ITEM_SIZE: usize = 12;
 /// The size of the tree header.
 pub const HEADER_SIZE: usize = 12;
 
-/// The size of the tail.
 pub const TAIL_SIZE: usize = 4;
 
 /// The header of an extent tree, stored at the beginning of the inode.blocks field, or its own
