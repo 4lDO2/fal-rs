@@ -4,6 +4,7 @@
 use std::{fmt, ops::Range};
 
 use bitflags::bitflags;
+use crc::{crc32, Hasher32};
 use quick_error::quick_error;
 use scroll::{Pread, Pwrite};
 use uuid::Uuid;
@@ -53,7 +54,9 @@ pub struct JournalSuperblockV2 {
     pub ro_compat_features: u32,
     pub uuid: [u8; 16],
     pub user_count: u32,
-    pub dyn_super_block: u32,
+    pub dyn_super_block: u32, // not used
+    pub max_trans_blocks: u32, // not used
+    pub max_trans_data_blocks: u32, // not used
     pub checksum_ty: u8,
     pub padding2: [u8; 3],
     pub padding: [u32; 42],
@@ -70,6 +73,8 @@ impl fmt::Debug for JournalSuperblockV2 {
             .field("uuid", &Uuid::from_bytes(self.uuid))
             .field("user_count", &self.user_count)
             .field("dyn_super_block", &self.dyn_super_block)
+            .field("max_trans_blocks", &self.max_trans_blocks)
+            .field("max_trans_data_blocks", &self.max_trans_data_blocks)
             .field("checksum_ty", &JournalChecksumType::from_raw(self.checksum_ty))
             .field("checksum", &self.checksum)
             .field("users", &&self.users[..])
@@ -97,6 +102,13 @@ impl std::ops::DerefMut for JournalSuperblock {
 }
 
 impl JournalSuperblock {
+    pub fn calculate_crc32(bytes: &[u8], polynomial: u32) -> u32 {
+        let mut hasher = crc32::Digest::new_with_initial(polynomial, 0);
+        hasher.write(&bytes[..0xFC]); // Every field before the checksum
+        hasher.write(&[0u8; 4]); // The checksum replaced with zeros
+        hasher.write(&bytes[0x100..0x400]); // Every field after the checksum
+        hasher.sum32() ^ (!0u32)
+    }
     pub fn parse(bytes: &[u8]) -> Result<Self, scroll::Error> {
         let mut offset = 0;
         let v1: JournalSuperblockV1 = bytes.gread_with(&mut offset, scroll::BE)?;
@@ -106,7 +118,25 @@ impl JournalSuperblock {
         }
 
         let v2 = if v1.header.block_ty == BlockType::SuperblockV2 as u32 {
-            Some(bytes.gread_with(&mut offset, scroll::BE)?)
+            let v2: JournalSuperblockV2 = bytes.gread_with(&mut offset, scroll::BE)?;
+
+            let checksum_ty = match JournalChecksumType::from_raw(v2.checksum_ty) {
+                Some(t) => t,
+                None => return Err(scroll::Error::BadInput { size: 4, msg: "invalid journal superblock checksum type" })
+            };
+
+            let calculated_checksum = match checksum_ty {
+                JournalChecksumType::Crc32 => Self::calculate_crc32(bytes, crc32::IEEE),
+                JournalChecksumType::Crc32c => Self::calculate_crc32(bytes, crc32::CASTAGNOLI),
+                other => unimplemented!("checksum of type: {:?}", other),
+            };
+
+            if calculated_checksum != v2.checksum {
+                // TODO: This state should probably be given its own error enum variant.
+                return Err(scroll::Error::BadInput { size: 4, msg: "checksum mismatch" })
+            }
+
+            Some(v2)
         } else if v1.header.block_ty == BlockType::SuperblockV1 as u32 {
             None
         } else {
@@ -117,6 +147,9 @@ impl JournalSuperblock {
             base: v1,
             ext: v2,
         })
+    }
+    pub fn checksum_ty(&self) -> Option<JournalChecksumType> {
+        self.ext.as_ref().map(|ext| ext.checksum_ty).map(|raw| JournalChecksumType::from_raw(raw).expect("Somehow the init check was bypassed"))
     }
     pub fn incompat_features(&self) -> JournalIncompatFeatureFlags {
         self.ext.as_ref().map(|ext| JournalIncompatFeatureFlags::from_bits(ext.incompat_features).unwrap_or_else(JournalIncompatFeatureFlags::empty)).unwrap_or(JournalIncompatFeatureFlags::empty())
@@ -200,7 +233,7 @@ impl JournalBlockTag {
         };
 
         if !incompat_flags.contains(JournalIncompatFeatureFlags::_64_BIT) && data_block_hi != 0 {
-            return Err(scroll::Error::BadInput { size: 4, msg: "Nonzero high data block address without the 64 bit journal feature" });
+            return Err(scroll::Error::BadInput { size: 4, msg: "nonzero high data block address without the 64 bit journal feature" });
         }
 
         let mut uuid = journal_uuid;
@@ -259,7 +292,7 @@ pub struct JournalDescriptorBlock {
 }
 
 impl JournalDescriptorBlock {
-    pub fn parse(bytes: &[u8], incompat_flags: JournalIncompatFeatureFlags, journal_uuid: [u8; 16]) -> Result<Self, scroll::Error> {
+    pub fn parse(bytes: &[u8], superblock: &JournalSuperblock, uuid: [u8; 16]) -> Result<Self, scroll::Error> {
         let header: JournalHeader = bytes.pread_with(0, scroll::BE)?;
 
         if header.block_ty != BlockType::Descriptor as u32 {
@@ -269,12 +302,12 @@ impl JournalDescriptorBlock {
             return Err(scroll::Error::BadInput { size: 4, msg: "the journal descriptor's magic number didn't match" });
         }
 
-        let tag_size = JournalBlockTag::tag_size(incompat_flags);
+        let tag_size = JournalBlockTag::tag_size(superblock.incompat_features());
 
         let mut offset = 12;
 
-        let tags = (0..1012 / tag_size).map(|_| JournalBlockTag::parse(&bytes, &mut offset, incompat_flags, journal_uuid)).take_while(|t| t.is_ok()).collect::<Result<Vec<_>, _>>()?;
-        let tail = bytes.pread_with(1020, scroll::BE)?;
+        let tags = (0..(superblock.block_size as usize - 12) / tag_size).map(|_| JournalBlockTag::parse(&bytes, &mut offset, superblock.incompat_features(), uuid)).take_while(Result::is_ok).collect::<Result<Vec<_>, _>>().expect("logic error");
+        let tail = bytes.pread_with(superblock.block_size as usize - 4, scroll::BE)?;
 
         Ok(Self {
             header,
@@ -377,7 +410,7 @@ pub fn find_transaction<D: fal::Device>(filesystem: &Filesystem<D>, journal_inod
 
         if header.block_ty == BlockType::Descriptor as u32 {
             // The block bytes won't be changed since the last read in find_meta_block.
-            let new_desc_block = JournalDescriptorBlock::parse(block_bytes, journal_superblock.incompat_features(), journal_superblock.uuid(&filesystem.superblock))?;
+            let new_desc_block = JournalDescriptorBlock::parse(block_bytes, journal_superblock, journal_superblock.uuid(&filesystem.superblock))?;
             previous_desc_block = Some(new_desc_block);
         } else if header.block_ty == BlockType::BlockCommitRecord as u32 {
             let commit_block = JournalCommitBlock::parse(block_bytes)?;
