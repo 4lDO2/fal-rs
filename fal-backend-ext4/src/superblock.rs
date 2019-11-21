@@ -285,6 +285,9 @@ impl Superblock {
     pub fn fragment_size(&self) -> u32 {
         1024 << self.log_fragment_size
     }
+    pub fn block_count(&self) -> u64 {
+        u64::from(self.block_count) | (u64::from(self.extended.as_ref().map(|ext| ext.block_count_hi).unwrap_or(0)) << 32)
+    }
     pub fn ro_compat_features(&self) -> RoFeatureFlags {
         self.extended
             .as_ref()

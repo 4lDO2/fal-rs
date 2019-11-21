@@ -245,6 +245,7 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
             general_options,
             journal: None,
         };
+        dbg!(block_group::allocate_blocks(&filesystem, 1024));
         filesystem.journal = match Journal::load(&filesystem) {
             Ok(j) => j,
             Err(err) => {
@@ -399,4 +400,3 @@ impl<D: fal::DeviceMut> fal::FilesystemMut<D> for Filesystem<D> {
 pub fn calculate_crc32c(value: u32, bytes: &[u8]) -> u32 {
     crc32::update(value ^ (!0), &crc32::CASTAGNOLI_TABLE, bytes) ^ (!0)
 }
-
