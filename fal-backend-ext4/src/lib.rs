@@ -8,7 +8,7 @@ use std::{
     time::SystemTime,
 };
 
-use crc::{crc32, Hasher64};
+use crc::crc32;
 use fal::{time::Timespec, Filesystem as _};
 
 pub mod block_group;
@@ -21,6 +21,19 @@ pub use inode::Inode;
 pub use journal::Journal;
 pub use superblock::Superblock;
 
+use inode::InodeIoError;
+
+trait ConvertToFalError<T> {
+    fn into_fal_result(self, warning_start: &'static str) -> fal::Result<T>;
+}
+impl<T> ConvertToFalError<T> for Result<T, InodeIoError> {
+    fn into_fal_result(self, warning_start: &'static str) -> fal::Result<T> {
+        self.map_err(|err| err.into_fal_error_or_with(|err| {
+            log::warn!("{}, because of an internal error: {}", warning_start, err)
+        }))
+    }
+}
+
 pub use fal::{
     read_u16, read_u32, read_u64, read_u8, read_uuid, write_u16, write_u32, write_u64, write_u8,
     write_uuid,
@@ -31,7 +44,7 @@ fn read_block_to<D: fal::Device>(
     block_address: u64,
     buffer: &mut [u8],
 ) -> io::Result<()> {
-    debug_assert!(block_group::block_exists(block_address, filesystem)?);
+    debug_assert!(block_group::block_exists(block_address, filesystem).unwrap_or(false));
     read_block_to_raw(filesystem, block_address, buffer)
 }
 fn read_block_to_raw<D: fal::Device>(
@@ -71,7 +84,7 @@ fn write_block<D: fal::DeviceMut>(
     block_address: u64,
     buffer: &[u8],
 ) -> io::Result<()> {
-    debug_assert!(block_group::block_exists(block_address, filesystem)?);
+    debug_assert!(block_group::block_exists(block_address, filesystem).unwrap_or(false));
     write_block_raw(filesystem, block_address, buffer)
 }
 
@@ -245,7 +258,7 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
     fn unmount(self) {}
 
     fn load_inode(&mut self, addr: Self::InodeAddr) -> fal::Result<Self::InodeStruct> {
-        Inode::load(self, addr)
+        Inode::load(self, addr).into_fal_result("Inode failed to load")
     }
     fn open_file(&mut self, addr: Self::InodeAddr) -> fal::Result<u64> {
         self.open(addr, Open::File)
@@ -254,7 +267,7 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
         if self.fhs.get(&fh).is_some() {
             let inode: inode::Inode = self.fhs[&fh].inode;
 
-            let bytes_read = inode.read(self, offset, buffer)?;
+            let bytes_read = inode.read(self, offset, buffer).into_fal_result("File couldn't be read")?;
 
             self.fhs.get_mut(&fh).unwrap().offset += bytes_read as u64;
 
@@ -288,15 +301,13 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
         }
 
         Ok(
-            match handle
-                .inode
-                .dir_entries(self)?
+            match handle.inode.dir_entries(self).into_fal_result("Directory couldn't be read")?
                 .enumerate()
                 .nth(self.fhs[&fh].offset as usize + offset as usize)
             {
                 Some((offset, entry)) => Some({
                     fal::DirectoryEntry {
-                        filetype: entry.ty(self)?.into(),
+                        filetype: entry.ty(self).into_fal_result("File type couldn't be detected")?.into(),
                         name: entry.name,
                         inode: entry.inode,
                         offset: offset as u64,
@@ -318,7 +329,7 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
         }
 
         let (offset, entry) = match inode
-            .dir_entries(self)?
+            .dir_entries(self).into_fal_result("Filename couldn't be resolved")?
             .enumerate()
             .find(|(_, entry)| entry.name == name)
         {
@@ -327,7 +338,7 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
         };
 
         Ok(fal::DirectoryEntry {
-            filetype: entry.ty(self)?.into(),
+            filetype: entry.ty(self).into_fal_result("File type couldn't be detected")?.into(),
             name: entry.name,
             inode: entry.inode,
             offset: offset as u64,
@@ -340,7 +351,8 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
             return Err(fal::Error::Invalid);
         }
 
-        Ok(inode.symlink_target(self)?)
+        Ok(inode.symlink_target(self).into_fal_result("Failed to resolve symlink")?
+            .into_owned().into_boxed_slice())
     }
 
     fn fh_offset(&self, fh: u64) -> u64 {
@@ -377,7 +389,7 @@ impl<D: fal::DeviceMut> fal::FilesystemMut<D> for Filesystem<D> {
         if self.general_options.immutable {
             return Err(fal::Error::ReadonlyFs);
         }
-        Inode::store(inode, self)
+        Inode::store(inode, self).into_fal_result("Failed to write inode")
     }
     fn unlink(&mut self, _parent: u32, _name: &OsStr) -> fal::Result<()> {
         unimplemented!()

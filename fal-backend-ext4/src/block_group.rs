@@ -2,6 +2,7 @@ use crate::{calculate_crc32c, read_block, read_block_to_raw, superblock, superbl
 use std::{convert::TryFrom, io};
 
 use bitflags::bitflags;
+use quick_error::quick_error;
 use scroll::{Pread, Pwrite};
 
 #[derive(Debug, Pread, Pwrite)]
@@ -59,7 +60,7 @@ impl BlockGroupDescriptor {
                 .ext
                 .as_ref()
                 .map(|ext| (u64::from(ext.block_bm_baddr_hi) << 32))
-                .unwrap_or_default()
+                .unwrap_or(0)
     }
     pub fn inode_usage_bm_start_baddr(&self) -> u64 {
         u64::from(self.base.inode_bm_baddr_lo)
@@ -67,7 +68,7 @@ impl BlockGroupDescriptor {
                 .ext
                 .as_ref()
                 .map(|ext| (u64::from(ext.inode_bm_baddr_hi) << 32))
-                .unwrap_or_default()
+                .unwrap_or(0)
     }
     pub fn inode_table_start_baddr(&self) -> u64 {
         u64::from(self.base.inode_table_baddr_lo)
@@ -75,7 +76,7 @@ impl BlockGroupDescriptor {
                 .ext
                 .as_ref()
                 .map(|ext| (u64::from(ext.inode_table_baddr_hi) << 32))
-                .unwrap_or_default()
+                .unwrap_or(0)
     }
     pub fn block_bm_checksum(&self) -> u32 {
         u32::from(self.base.block_bm_csum_lo)
@@ -94,27 +95,32 @@ impl BlockGroupDescriptor {
         }
         checksum
     }
-    pub fn parse(bytes: &[u8], superblock: &Superblock) -> Self {
-        Self {
-            base: bytes.pread_with(0, scroll::LE).unwrap(),
+    pub fn parse(bytes: &[u8], superblock: &Superblock) -> Result<Self, scroll::Error> {
+        let this = Self {
+            base: bytes.pread_with(0, scroll::LE)?,
             ext: if superblock.is_64bit() {
-                Some(bytes.pread_with(Self::SIZE as usize, scroll::LE).unwrap())
+                Some(bytes.pread_with(Self::SIZE as usize, scroll::LE)?)
             } else {
                 None
             },
+        };
+
+        if BlockGroupDescriptorFlags::from_bits(this.base.flags).is_none() {
+            return Err(scroll::Error::BadInput { size: 2, msg: "invalid block group flags bitmask" });
         }
+
+        Ok(this)
     }
-    pub fn serialize(this: &Self, bytes: &mut [u8]) {
-        bytes.pwrite_with(&this.base, 0, scroll::LE).unwrap();
+    pub fn serialize(this: &Self, bytes: &mut [u8]) -> Result<(), scroll::Error> {
+        bytes.pwrite_with(&this.base, 0, scroll::LE)?;
 
         if let Some(ref ext) = this.ext {
-            bytes
-                .pwrite_with(ext, Self::SIZE as usize, scroll::LE)
-                .unwrap();
+            bytes.pwrite_with(ext, Self::SIZE as usize, scroll::LE)?;
         }
+        Ok(())
     }
     pub fn flags(&self) -> BlockGroupDescriptorFlags {
-        BlockGroupDescriptorFlags::from_bits(self.base.flags).unwrap_or(BlockGroupDescriptorFlags::empty())
+        BlockGroupDescriptorFlags::from_bits(self.base.flags).unwrap()
     }
 }
 
@@ -124,10 +130,30 @@ pub fn block_address(superblock: &superblock::Superblock, offset: u64) -> u64 {
 pub fn block_offset(superblock: &superblock::Superblock, offset: u64) -> u64 {
     offset % u64::from(superblock.block_size())
 }
+
+quick_error! {
+    #[derive(Debug)]
+    pub enum BgdError {
+        IoError(err: io::Error) {
+            from()
+            description("disk i/o error")
+            cause(err)
+        }
+        ParseError(err: scroll::Error) {
+            from()
+            description("block group descriptor parsing error")
+            cause(err)
+        }
+        ChecksumMismatch {
+            description("invalid block group descriptor checksum")
+        }
+    }
+}
+
 pub fn load_block_group_descriptor<D: fal::Device>(
     filesystem: &Filesystem<D>,
     index: u64,
-) -> io::Result<BlockGroupDescriptor> {
+) -> Result<BlockGroupDescriptor, BgdError> {
     let size = if filesystem.superblock.is_64bit() {
         BlockGroupDescriptor::SIZE_64BIT
     } else {
@@ -155,10 +181,10 @@ pub fn load_block_group_descriptor<D: fal::Device>(
     let desc = BlockGroupDescriptor::parse(
         descriptor_bytes,
         &filesystem.superblock,
-    );
+    )?;
     if filesystem.superblock.has_metadata_checksums() {
         if desc.base.csum != BlockGroupDescriptor::calculate_crc32c(filesystem.superblock.checksum_seed().unwrap(), index as u32, descriptor_bytes) as u16 {
-            panic!("Block group descriptor checksum mismatch");
+            return Err(BgdError::ChecksumMismatch);
         }
     }
     Ok(desc)
@@ -169,7 +195,7 @@ pub fn inode_block_group_index(superblock: &superblock::Superblock, inode: u32) 
 pub fn inode_index_inside_group(superblock: &superblock::Superblock, inode: u32) -> u32 {
     (inode - 1) % superblock.inodes_per_group
 }
-pub fn inode_exists<D: fal::Device>(inode: u32, filesystem: &Filesystem<D>) -> io::Result<bool> {
+pub fn inode_exists<D: fal::Device>(inode: u32, filesystem: &Filesystem<D>) -> Result<bool, BgdError> {
     if inode == 0 {
         return Ok(false);
     }
@@ -206,7 +232,7 @@ pub fn free_inode<D: fal::DeviceMut>(
 ) -> io::Result<()> {
     unimplemented!()
 }
-pub fn block_exists<D: fal::Device>(baddr: u64, filesystem: &Filesystem<D>) -> io::Result<bool> {
+pub fn block_exists<D: fal::Device>(baddr: u64, filesystem: &Filesystem<D>) -> Result<bool, BgdError> {
     let group_index = baddr / u64::from(filesystem.superblock.blocks_per_group);
     let index_inside_group = baddr % u64::from(filesystem.superblock.blocks_per_group);
 

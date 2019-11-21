@@ -380,7 +380,7 @@ pub struct Journal {
 quick_error! {
     #[derive(Debug)]
     pub enum JournalInitError {
-        Io(err: fal::Error) {
+        Io(err: crate::inode::InodeIoError) {
             cause(err)
             from()
             description("an i/o error occured when reading from or writing to the journal")
@@ -453,9 +453,10 @@ pub fn find_transaction<D: fal::Device>(filesystem: &Filesystem<D>, journal_inod
 quick_error! {
     #[derive(Debug)]
     pub enum VerifyTransactionError {
-        Io(err: fal::Error) {
+        Io(err: crate::inode::InodeIoError) {
             from()
             description("i/o error")
+            cause(err)
         }
         ChecksumMismatch {
             description("checksums mismatch")

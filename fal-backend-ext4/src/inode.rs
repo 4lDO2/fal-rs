@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     convert::{TryFrom, TryInto},
     ffi::{OsStr, OsString},
     fmt, io, mem,
@@ -14,12 +15,57 @@ use crate::{
 
 use bitflags::bitflags;
 use fal::Timespec;
+use quick_error::quick_error;
 use scroll::{Pread, Pwrite};
 
 pub const ROOT: u32 = 2;
 
 pub const BASE_INODE_SIZE: u64 = 128;
 pub const EXTENDED_INODE_SIZE: u64 = 160;
+
+quick_error! {
+    #[derive(Debug)]
+    pub enum InodeIoError {
+        DiskIoError(err: io::Error) {
+            from()
+            description("disk i/o error")
+            cause(err)
+        }
+        BgdError(err: block_group::BgdError) {
+            from()
+            description("block group descriptor table error")
+            cause(err)
+        }
+        ParseError(err: scroll::Error) {
+            from()
+            description("inode parsing error")
+            cause(err)
+        }
+        ChecksumMismatch {
+            description("inode checksum mismatch")
+        }
+        FrontendError(err: fal::Error) {
+            description("frontend error")
+            from()
+            cause(err)
+        }
+        InodeTooLargeForInline(size: u64) {
+            description("inode size too large for being inline")
+            display("inode size too large for being inline ({} > 60)", size)
+        }
+    }
+}
+impl InodeIoError {
+    pub fn into_fal_error_or_with<F: Fn(Self)>(self, internal_error_handler: F) -> fal::Error {
+        match self {
+            Self::FrontendError(err) => err,
+            _ => {
+                internal_error_handler(self);
+                fal::Error::Io
+            }
+        }
+    }
+}
 
 // XXX: Const generics.
 #[derive(Clone, Copy, Pread, Pwrite)]
@@ -169,14 +215,13 @@ impl InodeRaw {
             },
         })
     }
-    pub fn serialize(this: &Self, bytes: &mut [u8]) {
-        bytes.pwrite_with(&this.base, 0, scroll::LE).unwrap();
+    pub fn serialize(this: &Self, bytes: &mut [u8]) -> Result<(), scroll::Error> {
+        bytes.pwrite_with(&this.base, 0, scroll::LE)?;
 
         if let Some(ref ext) = this.ext {
-            bytes
-                .pwrite_with(ext, EXTENDED_INODE_SIZE as usize, scroll::LE)
-                .unwrap();
+            bytes.pwrite_with(ext, EXTENDED_INODE_SIZE as usize, scroll::LE)?;
         }
+        Ok(())
     }
     pub fn ty(&self) -> InodeType {
         InodeType::from_type_and_perm(self.base.mode).0.unwrap()
@@ -388,13 +433,13 @@ impl Inode {
     pub fn load<R: fal::Device>(
         filesystem: &Filesystem<R>,
         inode_address: u32,
-    ) -> fal::Result<Self> {
+    ) -> Result<Self, InodeIoError> {
         if inode_address == 0 {
-            return Err(fal::Error::Invalid);
+            return Err(fal::Error::Invalid.into());
         }
 
         if !block_group::inode_exists(inode_address, filesystem)? {
-            return Err(fal::Error::NoEntity);
+            return Err(fal::Error::NoEntity.into());
         }
 
         let block_group_index =
@@ -428,15 +473,15 @@ impl Inode {
     pub fn store<D: fal::DeviceMut>(
         this: &Self,
         filesystem: &mut Filesystem<D>,
-    ) -> fal::Result<()> {
+    ) -> Result<(), InodeIoError> {
         let inode_address = this.addr;
 
         if inode_address == 0 {
-            return Err(fal::Error::Invalid);
+            return Err(fal::Error::Invalid.into());
         }
 
         if !block_group::inode_exists(inode_address, filesystem)? {
-            return Err(fal::Error::NoEntity);
+            return Err(fal::Error::NoEntity.into());
         }
 
         let block_group_index =
@@ -490,9 +535,12 @@ impl Inode {
                 return Err(scroll::Error::BadInput { size: 4, msg: "inode checksum mismatch" })
             }
         }
+        if this.flags().contains(InodeFlags::EXTENTS | InodeFlags::INLINE_DATA) {
+            return Err(scroll::Error::BadInput { size: 4, msg: "inode uses both extents and inline data" });
+        }
         Ok(this)
     }
-    pub fn serialize(this: &Inode, buffer: &mut [u8]) {
+    pub fn serialize(this: &Inode, buffer: &mut [u8]) -> Result<(), scroll::Error> {
         InodeRaw::serialize(&this.raw, buffer)
     }
     pub fn size(&self) -> u64 {
@@ -590,9 +638,9 @@ impl Inode {
         rel_baddr: u32,
         filesystem: &Filesystem<D>,
         buffer: &mut [u8],
-    ) -> fal::Result<()> {
+    ) -> Result<(), InodeIoError> {
         if u64::from(rel_baddr) >= self.size_in_blocks() {
-            return Err(fal::Error::Overflow);
+            return Err(fal::Error::Overflow.into());
         }
         let abs_baddr = self.absolute_baddr(filesystem, rel_baddr)?;
         Ok(read_block_to(
@@ -606,9 +654,9 @@ impl Inode {
         rel_baddr: u32,
         filesystem: &Filesystem<D>,
         buffer: &[u8],
-    ) -> fal::Result<()> {
+    ) -> Result<(), InodeIoError> {
         if u64::from(rel_baddr) >= self.size_in_blocks() {
-            return Err(fal::Error::Overflow);
+            return Err(fal::Error::Overflow.into());
         }
         let abs_baddr = self.absolute_baddr(filesystem, rel_baddr)?;
         Ok(write_block(
@@ -622,17 +670,13 @@ impl Inode {
         filesystem: &Filesystem<D>,
         offset: u64,
         mut buffer: &mut [u8],
-    ) -> fal::Result<usize> {
+    ) -> Result<usize, InodeIoError> {
         if self.flags().contains(InodeFlags::INLINE_DATA) {
             if self.flags().contains(InodeFlags::EXTENTS) {
-                // TODO: Error handling
-                panic!("Inode uses both INLINE and EXTENTS for data storage; this should not be possible, right?")
+                panic!("Inode flag check bypassed")
             }
             if self.size() > 60 {
-                panic!(
-                    "Inode too large to actually be INLINE ({} > 60)",
-                    self.size()
-                )
+                return Err(InodeIoError::InodeTooLargeForInline(self.size()))
             }
             if offset >= self.size() {
                 return Ok(0);
@@ -713,7 +757,7 @@ impl Inode {
         filesystem: &mut Filesystem<D>,
         offset: u64,
         mut buffer: &[u8],
-    ) -> fal::Result<()> {
+    ) -> Result<(), InodeIoError> {
         let off_from_rel_block = offset % u64::from(filesystem.superblock.block_size());
         let rel_baddr_start = offset / u64::from(filesystem.superblock.block_size());
 
@@ -779,10 +823,9 @@ impl Inode {
     fn raw_dir_entries<'a, D: fal::Device>(
         &'a self,
         filesystem: &'a Filesystem<D>,
-    ) -> io::Result<RawDirIterator<'a, D>> {
+    ) -> Result<RawDirIterator<'a, D>, InodeIoError> {
         if self.ty() != InodeType::Dir {
-            // TODO: ENOTDIR
-            return Err(io::Error::from(io::ErrorKind::InvalidInput));
+            return Err(fal::Error::NotDirectory.into())
         }
         Ok(RawDirIterator {
             filesystem,
@@ -795,18 +838,18 @@ impl Inode {
     pub fn dir_entries<'a, D: fal::Device>(
         &'a self,
         filesystem: &'a Filesystem<D>,
-    ) -> io::Result<DirIterator<'a, D>> {
+    ) -> Result<DirIterator<'a, D>, InodeIoError> {
         Ok(DirIterator {
             raw: self.raw_dir_entries(filesystem)?,
         })
     }
-    pub fn symlink_target<D: fal::Device>(
-        &self,
+    pub fn symlink_target<'a, D: fal::Device>(
+        &'a self,
         filesystem: &mut Filesystem<D>,
-    ) -> fal::Result<Box<[u8]>> {
+    ) -> Result<Cow<'a, [u8]>, InodeIoError> {
         if self.size <= 60 {
             // fast symlink
-            Ok(self.blocks.inner[..].to_owned().into_boxed_slice())
+            Ok(Cow::Borrowed(&self.blocks.inner[..self.size as usize]))
         } else {
             // slow symlink
 
@@ -814,7 +857,7 @@ impl Inode {
             let mut bytes = vec![0u8; self.size.try_into().unwrap()];
             // TODO: Handle the amount of read bytes
             self.read(filesystem, 0, &mut bytes)?;
-            Ok(bytes.into_boxed_slice())
+            Ok(Cow::Owned(bytes))
         }
     }
 
@@ -832,7 +875,7 @@ impl Inode {
         &self,
         filesystem: &mut Filesystem<D>,
         name: &OsStr,
-    ) -> fal::Result<()> {
+    ) -> Result<(), InodeIoError> {
         // Remove the entry by setting the length of the entry with matching name to zero, and
         // append the length of that entry to the previous (if any).
 
@@ -842,7 +885,7 @@ impl Inode {
             .find(|(_, (entry, _))| entry.name == name)
         {
             Some(x) => x,
-            None => return Err(fal::Error::NoEntity),
+            None => return Err(fal::Error::NoEntity.into()),
         };
 
         if index > 0 {
@@ -1050,7 +1093,7 @@ impl DirEntry {
         Self::serialize_raw(this, superblock, bytes);
         bytes[8..8 + this.name.len()].copy_from_slice(&os_str_to_bytes(&this.name));
     }
-    pub fn ty<D: fal::Device>(&self, filesystem: &Filesystem<D>) -> fal::Result<InodeType> {
+    pub fn ty<D: fal::Device>(&self, filesystem: &Filesystem<D>) -> Result<InodeType, InodeIoError> {
         Ok(match self.type_indicator {
             Some(ty) => ty,
             None => Inode::load(filesystem, self.inode)?.ty(),

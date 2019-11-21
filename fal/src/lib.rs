@@ -206,7 +206,7 @@ pub enum Error {
     AccessDenied,
     ReadonlyFs,
     Other(i32),
-    Io(io::Error),
+    Io,
 }
 impl Error {
     pub fn errno(&self) -> i32 {
@@ -220,7 +220,7 @@ impl Error {
             Self::NotDirectory => libc::ENOTDIR,
             Self::AccessDenied => libc::EACCES,
             Self::ReadonlyFs => libc::EROFS,
-            Self::Io(_) => libc::EIO,
+            Self::Io => libc::EIO,
         }
     }
 }
@@ -234,19 +234,13 @@ impl std::fmt::Display for Error {
             Error::BadFd => write!(formatter, "bad file descriptor"),
             Error::Overflow => write!(formatter, "overflow"),
             Error::Invalid => write!(formatter, "invalid argument"),
-            Error::Io(err) => write!(formatter, "i/o error: `{}`", err),
+            Error::Io => write!(formatter, "i/o error"),
             Error::IsDirectory => write!(formatter, "is directory"),
             Error::NotDirectory => write!(formatter, "not directory"),
             Error::AccessDenied => write!(formatter, "access denied"),
             Error::ReadonlyFs => write!(formatter, "read-only filesystem"),
             Error::Other(n) => write!(formatter, "other ({})", n),
         }
-    }
-}
-
-impl From<io::Error> for Error {
-    fn from(error: io::Error) -> Self {
-        Self::Io(error)
     }
 }
 
