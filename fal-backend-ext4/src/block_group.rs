@@ -1,4 +1,4 @@
-use crate::{read_block, read_block_to_raw, superblock, superblock::Superblock, Filesystem};
+use crate::{calculate_crc32c, read_block, read_block_to_raw, superblock, superblock::Superblock, Filesystem};
 use std::{convert::TryFrom, io};
 
 use scroll::{Pread, Pwrite};
@@ -68,6 +68,23 @@ impl BlockGroupDescriptor {
                 .map(|ext| (u64::from(ext.inode_table_baddr_hi) << 32))
                 .unwrap_or_default()
     }
+    pub fn block_bm_checksum(&self) -> u32 {
+        u32::from(self.base.block_bm_csum_lo)
+            | self.ext.as_ref().map(|ext| (u32::from(ext.block_bm_csum_hi) << 16)).unwrap_or(0)
+    }
+    pub fn inode_bm_checksum(&self) -> u32 {
+        u32::from(self.base.inode_bm_csum_lo)
+            | self.ext.as_ref().map(|ext| (u32::from(ext.inode_bm_csum_hi) << 16)).unwrap_or(0)
+    }
+    fn calculate_crc32c(seed: u32, block_group: u32, bytes: &[u8]) -> u32 {
+        let mut checksum = calculate_crc32c(seed, &block_group.to_le_bytes());
+        checksum = calculate_crc32c(checksum, &bytes[..0x1E]);
+        checksum = calculate_crc32c(checksum, &[0u8; 2]);
+        if bytes.len() > 0x20 {
+            checksum = calculate_crc32c(checksum, &bytes[0x20..]);
+        }
+        checksum
+    }
     pub fn parse(bytes: &[u8], superblock: &Superblock) -> Self {
         Self {
             base: bytes.pread_with(0, scroll::LE).unwrap(),
@@ -112,7 +129,7 @@ pub fn load_block_group_descriptor<D: fal::Device>(
     let bgdt_offset = bgdt_first_block * u64::from(filesystem.superblock.block_size());
     let absolute_offset = bgdt_offset + index * size;
 
-    let mut block_bytes = vec![0; usize::try_from(filesystem.superblock.block_size()).unwrap()];
+    let mut block_bytes = vec![0; filesystem.superblock.block_size() as usize];
 
     read_block_to_raw(
         filesystem,
@@ -121,12 +138,18 @@ pub fn load_block_group_descriptor<D: fal::Device>(
     )?;
     let rel_offset = block_offset(&filesystem.superblock, absolute_offset);
     let descriptor_bytes =
-        &block_bytes[rel_offset as usize..rel_offset as usize + usize::try_from(size).unwrap()];
+        &block_bytes[rel_offset as usize..rel_offset as usize + size as usize];
 
-    Ok(BlockGroupDescriptor::parse(
+    let desc = BlockGroupDescriptor::parse(
         descriptor_bytes,
         &filesystem.superblock,
-    ))
+    );
+    if filesystem.superblock.has_metadata_checksums() {
+        if desc.base.csum != BlockGroupDescriptor::calculate_crc32c(filesystem.superblock.checksum_seed().unwrap(), index as u32, descriptor_bytes) as u16 {
+            panic!("Block group descriptor checksum mismatch");
+        }
+    }
+    Ok(desc)
 }
 pub fn inode_block_group_index(superblock: &superblock::Superblock, inode: u32) -> u32 {
     (inode - 1) / superblock.inodes_per_group

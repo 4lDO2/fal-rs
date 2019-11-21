@@ -310,6 +310,9 @@ impl Superblock {
             .map(|extended| extended.inode_struct_size)
             .unwrap_or(128)
     }
+    pub fn has_metadata_checksums(&self) -> bool {
+        self.ro_compat_features().contains(RoFeatureFlags::METADATA_CSUM)
+    }
     pub fn is_64bit(&self) -> bool {
         self.incompat_features()
             .contains(RequiredFeatureFlags::_64_BIT)
