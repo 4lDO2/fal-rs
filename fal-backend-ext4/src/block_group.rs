@@ -1,6 +1,7 @@
 use crate::{calculate_crc32c, read_block, read_block_to_raw, superblock, superblock::Superblock, Filesystem};
 use std::{convert::TryFrom, io};
 
+use bitflags::bitflags;
 use scroll::{Pread, Pwrite};
 
 #[derive(Debug, Pread, Pwrite)]
@@ -38,6 +39,14 @@ pub struct BlockGroupDescriptor64Ext {
 pub struct BlockGroupDescriptor {
     pub base: BlockGroupDescriptorBase,
     pub ext: Option<BlockGroupDescriptor64Ext>,
+}
+
+bitflags! {
+    pub struct BlockGroupDescriptorFlags: u16 {
+        const INODE_UNINIT = 0x1;
+        const BLOCK_BITMAP_UNINIT = 0x2;
+        const INODE_TABLE_ZEROED = 0x3;
+    }
 }
 
 impl BlockGroupDescriptor {
@@ -104,6 +113,9 @@ impl BlockGroupDescriptor {
                 .unwrap();
         }
     }
+    pub fn flags(&self) -> BlockGroupDescriptorFlags {
+        BlockGroupDescriptorFlags::from_bits(self.base.flags).unwrap_or(BlockGroupDescriptorFlags::empty())
+    }
 }
 
 pub fn block_address(superblock: &superblock::Superblock, offset: u64) -> u64 {
@@ -167,6 +179,10 @@ pub fn inode_exists<D: fal::Device>(inode: u32, filesystem: &Filesystem<D>) -> i
 
     let descriptor = load_block_group_descriptor(filesystem, group_index.into())?;
 
+    if descriptor.flags().contains(BlockGroupDescriptorFlags::INODE_UNINIT) {
+        return Ok(false);
+    }
+
     let bm_start_baddr = descriptor.inode_usage_bm_start_baddr();
     let bm_block_index = u32::try_from(
         u64::from(index_inside_group / 8) / u64::from(filesystem.superblock.block_size()),
@@ -195,6 +211,10 @@ pub fn block_exists<D: fal::Device>(baddr: u64, filesystem: &Filesystem<D>) -> i
     let index_inside_group = baddr % u64::from(filesystem.superblock.blocks_per_group);
 
     let descriptor = load_block_group_descriptor(filesystem, group_index)?;
+
+    if descriptor.flags().contains(BlockGroupDescriptorFlags::BLOCK_BITMAP_UNINIT) {
+        return Ok(false)
+    }
 
     let bm_start_baddr = descriptor.block_usage_bm_start_baddr();
     let bm_block_index = (index_inside_group / 8) / u64::from(filesystem.superblock.block_size());

@@ -4,6 +4,7 @@ use std::{
 };
 
 use bitflags::bitflags;
+use quick_error::quick_error;
 use scroll::{Pread, Pwrite};
 
 use crate::calculate_crc32c;
@@ -217,33 +218,53 @@ fn _log2_round_up<T: From<u8> + AddAssign + ShrAssign + Eq>(mut t: T) -> T {
     count
 }
 
+quick_error! {
+    #[derive(Debug)]
+    pub enum LoadSuperblockError {
+        ParseError(err: scroll::Error) {
+            description("superblock parsing error")
+            from()
+        }
+        ChecksumMismatch {
+            description("the superblock checksum was incorrect")
+        }
+        IoError(err: io::Error) {
+            description("i/o error")
+            from()
+        }
+    }
+}
+
 impl Superblock {
     /// Load and parse the super block.
-    pub fn load<R: fal::Device>(device: &mut R) -> io::Result<Self> {
+    pub fn load<R: fal::Device>(device: &mut R) -> Result<Self, LoadSuperblockError> {
         device.seek(SeekFrom::Start(SUPERBLOCK_OFFSET))?;
 
         let mut block_bytes = [0u8; 1024];
         device.read_exact(&mut block_bytes)?;
 
-        Ok(Self::parse(&block_bytes))
+        let this = Self::parse(&block_bytes)?;
+
+        if this.has_metadata_checksums() {
+            if this.extended.as_ref().unwrap().superblock_checksum != Self::calculate_crc32c(&block_bytes) {
+                return Err(LoadSuperblockError::ChecksumMismatch)
+            }
+        }
+        Ok(this)
     }
     pub fn calculate_crc32c(bytes: &[u8]) -> u32 {
         calculate_crc32c(!0, &bytes[..1020])
     }
-    pub fn parse(block_bytes: &[u8]) -> Self {
-        let base: SuperblockBase = block_bytes.pread_with(0, scroll::LE).unwrap();
+    pub fn parse(block_bytes: &[u8]) -> Result<Self, scroll::Error> {
+        let base: SuperblockBase = block_bytes.pread_with(0, scroll::LE)?;
         let extended = if base.major_version >= 1 {
-            let ext: SuperblockExtension = block_bytes.pread_with(84, scroll::LE).unwrap();
-            if ext.superblock_checksum != Self::calculate_crc32c(block_bytes) {
-                panic!("superblock checksum mismatch")
-            }
-            Some(ext)
+            Some(block_bytes.pread_with(84, scroll::LE)?)
         } else { None };
 
-        Self {
+        Ok(Self {
             base,
             extended,
-        }
+        })
     }
 
     pub fn incompat_features(&self) -> RequiredFeatureFlags {
@@ -283,16 +304,21 @@ impl Superblock {
 
     fn serialize(&self, buffer: &mut [u8]) {
         buffer.pwrite_with(&self.base, 0, scroll::LE).unwrap();
-        if self.major_version > 1 {
-            buffer.pwrite_with(self.extended.as_ref().unwrap(), 84, scroll::LE).unwrap();
+        if let Some(ref extended) = self.extended {
+            buffer.pwrite_with(extended, 84, scroll::LE).unwrap();
         }
     }
 
-    pub fn store<D: fal::DeviceMut>(&self, device: &mut D) -> io::Result<()> {
-        device.seek(SeekFrom::Start(SUPERBLOCK_OFFSET)).unwrap();
-
+    pub fn store<D: fal::DeviceMut>(&mut self, device: &mut D) -> io::Result<()> {
         let mut block_bytes = [0u8; 1024];
         self.serialize(&mut block_bytes);
+
+        if let Some(ref mut ext) = self.extended {
+            ext.superblock_checksum = Self::calculate_crc32c(&block_bytes[..1020]);
+            fal::write_u32(&mut block_bytes, 1020, ext.superblock_checksum);
+        }
+
+        device.seek(SeekFrom::Start(SUPERBLOCK_OFFSET))?;
         device.write_all(&block_bytes)?;
 
         Ok(())

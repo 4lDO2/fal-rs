@@ -368,7 +368,7 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
 }
 
 impl<D: fal::DeviceMut> fal::FilesystemMut<D> for Filesystem<D> {
-    fn unmount(self) {
+    fn unmount(mut self) {
         self.superblock
             .store(&mut *self.device.lock().unwrap())
             .unwrap()
