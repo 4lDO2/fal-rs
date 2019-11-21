@@ -30,11 +30,13 @@ quick_error! {
             from()
             description("disk i/o error")
             cause(err)
+            display("disk i/o error: {}", err)
         }
         BgdError(err: block_group::BgdError) {
             from()
             description("block group descriptor table error")
             cause(err)
+            display("block group descriptor table error: {}", err)
         }
         ParseError(err: scroll::Error) {
             from()
@@ -48,6 +50,7 @@ quick_error! {
             description("frontend error")
             from()
             cause(err)
+            display("frontend error: {}", err)
         }
         InodeTooLargeForInline(size: u64) {
             description("inode size too large for being inline")

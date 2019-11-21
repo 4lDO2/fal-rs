@@ -246,9 +246,9 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
             journal: None,
         };
         filesystem.journal = match Journal::load(&filesystem) {
-            Ok(j) => dbg!(j),
+            Ok(j) => j,
             Err(err) => {
-                eprintln!("The filesystem journal failed loading: {}", err);
+                log::warn!("The filesystem journal failed loading: {}", err);
                 None
             }
         };
