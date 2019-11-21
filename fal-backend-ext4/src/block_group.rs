@@ -282,11 +282,12 @@ pub struct Bitmap<'a, 'b> {
 }
 impl<'a, 'b> Bitmap<'a, 'b> {
     pub fn set_rel(&mut self, index_inside_group: u32, value: bool) {
-        let byte_index_inside_bm = index_inside_group / self.superblock.block_size();
-        self.bytes[byte_index_inside_bm as usize] = (value as u8) << (index_inside_group % 8)
+        let byte_index_inside_bm = (index_inside_group / 8) / self.superblock.block_size();
+        self.bytes[byte_index_inside_bm as usize] &= !(1 << (index_inside_group % 8));
+        self.bytes[byte_index_inside_bm as usize] |= (value as u8) << (index_inside_group % 8);
     }
     pub fn get_rel(&self, index_inside_group: u32) -> bool {
-        let byte_index_inside_bm = index_inside_group / self.superblock.block_size();
+        let byte_index_inside_bm = (index_inside_group / 8) / self.superblock.block_size();
         (self.bytes[byte_index_inside_bm as usize]) & (1 << (index_inside_group % 8)) != 0
     }
     pub fn set(&mut self, baddr: u64, value: bool) {
@@ -325,6 +326,11 @@ impl<'a, 'b> Bitmap<'a, 'b> {
             }
         }
         count
+    }
+    pub fn reserve_rel(&mut self, range: std::ops::Range<u32>) {
+        for index in range {
+            self.set_rel(index, true)
+        }
     }
 }
 pub fn read_block_bitmap<'a, 'b, D: fal::Device>(baddr: u64, filesystem: &'b Filesystem<D>, block_bytes: &'a mut [u8]) -> Result<Option<Bitmap<'a, 'b>>, BgdError> {
@@ -371,6 +377,10 @@ quick_error! {
             description("block group descriptor table error")
             display("block group descriptor table error: {}", err)
         }
+        InsufficientSpace(size: u32) {
+            description("no block group containing the requested amount of blocks")
+            display("no block group containing {} free contiguous blocks", size)
+        }
     }
 }
 pub fn allocate_blocks<D: fal::DeviceMut>(filesystem: &Filesystem<D>, len: u32) -> Result<Range<u64>, AllocateBlockError> {
@@ -393,7 +403,7 @@ pub fn allocate_blocks<D: fal::DeviceMut>(filesystem: &Filesystem<D>, len: u32) 
 
     let descs_per_block = filesystem.superblock.block_size() / size as u32;
 
-    for rel_baddr in 0..bgdt_block_count {
+    'block_loop: for rel_baddr in 0..bgdt_block_count {
         read_block_to_raw(filesystem, bgdt_first_block + u64::from(rel_baddr), &mut block_bytes)?;
         for rel_index in 0..descs_per_block {
             let rel_offset = rel_index * size as u32;
@@ -403,9 +413,9 @@ pub fn allocate_blocks<D: fal::DeviceMut>(filesystem: &Filesystem<D>, len: u32) 
             if descriptor.unalloc_block_count() >= len {
                 log::trace!("block group {} had {} free blocks", rel_baddr * descs_per_block + rel_index, descriptor.unalloc_block_count());
 
-                // TODO: Can bitmaps span multiple blocks?
+                // FIXME: Can bitmaps span multiple blocks?
 
-                let bitmap = match descriptor.bitmap(filesystem, &mut bitmap_block_bytes, 0)? {
+                let mut bitmap = match descriptor.bitmap(filesystem, &mut bitmap_block_bytes, 0)? {
                     Some(bm) => bm,
                     None => {
                         log::trace!("no bitmap found");
@@ -419,11 +429,44 @@ pub fn allocate_blocks<D: fal::DeviceMut>(filesystem: &Filesystem<D>, len: u32) 
                         continue
                     }
                 };
-                let available_blocks_after = bitmap.free_blocks_after_start_rel(first_unused_rel_baddr, fal::div_round_up(len as usize, 8));
-                log::trace!("Found a region {}..{}", first_unused_rel_baddr, first_unused_rel_baddr + available_blocks_after);
+                // TODO
+                let available_blocks_after = bitmap.free_blocks_after_start_rel(first_unused_rel_baddr, 0xFFFF_FFFF);
+
+                if available_blocks_after >= len {
+
+                    bitmap.reserve_rel(first_unused_rel_baddr..first_unused_rel_baddr + len);
+
+                    let bm_start_baddr = descriptor.block_usage_bm_start_baddr();
+                    // FIXME: the zero
+                    let bm_block_index = (block_group_offset(&filesystem.superblock, 0) / 8) / u64::from(filesystem.superblock.block_size());
+                    dbg!(bm_block_index);
+
+                    write_block_raw(
+                        filesystem,
+                        bm_start_baddr + bm_block_index,
+                        &bitmap_block_bytes,
+                    )?;
+
+                    let desc_index = rel_baddr * descs_per_block + rel_index;
+                    let desc_start_block = u64::from(desc_index) * u64::from(filesystem.superblock.blocks_per_group);
+                    let abs_block_range = desc_start_block + u64::from(first_unused_rel_baddr)..u64::from(desc_start_block) + u64::from(first_unused_rel_baddr) + u64::from(len);
+
+                    log::trace!("Found a region {}..{} ({}..{} absolute)", first_unused_rel_baddr, first_unused_rel_baddr + len, abs_block_range.start, abs_block_range.end);
+
+                    #[cfg(debug_assertions)]
+                    {
+                        for block in abs_block_range.clone() {
+                            if !block_exists(block, filesystem).unwrap() {
+                                log::error!("{} didn't exist", block);
+                            }
+                        }
+                    }
+
+                    return Ok(abs_block_range);
+                }
             }
         }
     }
 
-    unimplemented!()
+    Err(AllocateBlockError::InsufficientSpace(len))
 }
