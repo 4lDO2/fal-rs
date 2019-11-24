@@ -245,7 +245,7 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
             general_options,
             journal: None,
         };
-        dbg!(block_group::allocate_blocks(&filesystem, 1024));
+        block_group::allocate_blocks(&filesystem, 1024).unwrap();
         filesystem.journal = match Journal::load(&filesystem) {
             Ok(j) => j,
             Err(err) => {

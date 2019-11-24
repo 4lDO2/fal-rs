@@ -401,11 +401,19 @@ quick_error! {
         }
     }
 }
-pub fn allocate_blocks<D: fal::DeviceMut>(filesystem: &Filesystem<D>, len: u32) -> Result<Range<u64>, AllocateBlockError> {
-    // Find the first block group with a free block count of at least len.
+struct DescriptorHandle<'a> {
+    desc_bytes: &'a mut [u8],
+    desc: &'a mut BlockGroupDescriptor,
+    rel_index: u32,
+    abs_index: u32,
+}
+impl<'a> DescriptorHandle<'a> {
+    fn write(&mut self) {
+    }
+}
+pub fn iter_through_bgdescs<T, D: fal::DeviceMut, F: FnMut(DescriptorHandle) -> Result<Option<T>, AllocateBlockError>>(filesystem: &Filesystem<D>, mut function: F) -> Result<Option<T>, AllocateBlockError> {
     let block_group_count = filesystem.superblock.block_count() / u64::from(filesystem.superblock.blocks_per_group);
     let mut block_bytes = vec! [0u8; filesystem.superblock.block_size() as usize];
-    let mut bitmap_block_bytes = vec! [0u8; filesystem.superblock.block_size() as usize];
 
     let size = if filesystem.superblock.is_64bit() {
         BlockGroupDescriptor::SIZE_64BIT
@@ -427,79 +435,101 @@ pub fn allocate_blocks<D: fal::DeviceMut>(filesystem: &Filesystem<D>, len: u32) 
             let abs_index = rel_baddr * descs_per_block + rel_index;
             let rel_offset = rel_index * size as u32;
 
-            let descriptor_bytes =
+            let desc_bytes =
                 &mut block_bytes[rel_offset as usize..rel_offset as usize + size as usize];
 
-            let mut descriptor = BlockGroupDescriptor::parse(descriptor_bytes, &filesystem.superblock, abs_index)?;
+            let mut desc = BlockGroupDescriptor::parse(desc_bytes, &filesystem.superblock, abs_index)?;
 
-            if descriptor.unalloc_block_count() >= len {
-                log::trace!("block group {} had {} free blocks", abs_index, descriptor.unalloc_block_count());
-
-                // FIXME: Can bitmaps span multiple blocks?
-
-                let mut bitmap = match descriptor.bitmap(filesystem, &mut bitmap_block_bytes, 0)? {
-                    Some(bm) => bm,
-                    None => {
-                        log::trace!("no bitmap found");
-                        continue
-                    }
-                };
-                if bitmap.checksum(&filesystem.superblock) != descriptor.block_bm_checksum() {
-                    // TODO: Should the allocation really fail in this case?
-                    return Err(AllocateBlockError::ChecksumMismatch);
-                }
-
-                let first_unused_rel_baddr = match bitmap.find_first_rel() {
-                    Some(f) => f,
-                    None => {
-                        log::error!("no free block was found, even though the unused block count said the opposite.");
-                        continue
-                    }
-                };
-
-                // TODO
-                let available_blocks_after = bitmap.free_blocks_after_start_rel(first_unused_rel_baddr, 0xFFFF_FFFF);
-
-                if available_blocks_after >= len {
-
-                    bitmap.reserve_rel(first_unused_rel_baddr..first_unused_rel_baddr + len);
-
-                    let new_checksum = bitmap.checksum(&filesystem.superblock);
-                    descriptor.set_block_bm_checksum(new_checksum);
-
-                    let bm_start_baddr = descriptor.block_usage_bm_start_baddr();
-                    // FIXME: the zero
-                    let bm_block_index = (block_group_offset(&filesystem.superblock, 0) / 8) / u64::from(filesystem.superblock.block_size());
-
-                    write_block_raw(
-                        filesystem,
-                        bm_start_baddr + bm_block_index,
-                        &bitmap_block_bytes,
-                    )?;
-
-                    let desc_index = rel_baddr * descs_per_block + rel_index;
-                    let desc_start_block = u64::from(desc_index) * u64::from(filesystem.superblock.blocks_per_group);
-                    let abs_block_range = desc_start_block + u64::from(first_unused_rel_baddr)..u64::from(desc_start_block) + u64::from(first_unused_rel_baddr) + u64::from(len);
-
-                    log::trace!("Found a region {}..{} ({}..{} absolute)", first_unused_rel_baddr, first_unused_rel_baddr + len, abs_block_range.start, abs_block_range.end);
-
-                    BlockGroupDescriptor::serialize(&descriptor, filesystem.superblock.checksum_seed().unwrap(), abs_index, descriptor_bytes)?;
+            let handle = DescriptorHandle {
+                desc_bytes,
+                desc: &mut desc,
+                rel_index,
+                abs_index,
+            };
+            match function(handle)? {
+                Some(t) => {
+                    BlockGroupDescriptor::serialize(&desc, filesystem.superblock.checksum_seed().unwrap(), abs_index, desc_bytes)?;
                     write_block_raw(filesystem, bgdt_first_block + u64::from(rel_baddr), &block_bytes)?;
-
-                    #[cfg(debug_assertions)]
-                    {
-                        for block in abs_block_range.clone() {
-                            if !block_exists(block, filesystem).unwrap() {
-                                log::error!("block {} didn't exist, after it was allocated", block);
-                            }
-                        }
-                    }
-
-                    return Ok(abs_block_range);
+                    return Ok(Some(t));
                 }
+                None => continue,
             }
         }
     }
 
-    Err(AllocateBlockError::InsufficientSpace(len))
+    Ok(None)
+}
+pub fn allocate_blocks<D: fal::DeviceMut>(filesystem: &Filesystem<D>, len: u32) -> Result<Range<u64>, AllocateBlockError> {
+    let mut bitmap_block_bytes = vec! [0u8; filesystem.superblock.block_size() as usize];
+
+    // Find the first block group with a free block count of at least len.
+    match iter_through_bgdescs(filesystem, |mut handle| -> Result<Option<Range<u64>>, AllocateBlockError> {
+        if handle.desc.unalloc_block_count() >= len {
+            log::trace!("block group {} had {} free blocks", handle.abs_index, handle.desc.unalloc_block_count());
+
+            // FIXME: Can bitmaps span multiple blocks?
+
+            let mut bitmap = match handle.desc.bitmap(filesystem, &mut bitmap_block_bytes, 0)? {
+                Some(bm) => bm,
+                None => {
+                    log::trace!("no bitmap found");
+                    return Ok(None);
+                }
+            };
+            if bitmap.checksum(&filesystem.superblock) != handle.desc.block_bm_checksum() {
+                // TODO: Should the allocation really fail in this case?
+                return Err(AllocateBlockError::ChecksumMismatch);
+            }
+
+            let first_unused_rel_baddr = match bitmap.find_first_rel() {
+                Some(f) => f,
+                None => {
+                    log::error!("no free block was found, even though the unused block count said the opposite.");
+                    return Ok(None);
+                }
+            };
+
+            // TODO
+            let available_blocks_after = bitmap.free_blocks_after_start_rel(first_unused_rel_baddr, 0xFFFF_FFFF);
+
+            if available_blocks_after >= len {
+
+                bitmap.reserve_rel(first_unused_rel_baddr..first_unused_rel_baddr + len);
+
+                let new_checksum = bitmap.checksum(&filesystem.superblock);
+                handle.desc.set_block_bm_checksum(new_checksum);
+
+                let bm_start_baddr = handle.desc.block_usage_bm_start_baddr();
+                // FIXME: the zero
+                let bm_block_index = (block_group_offset(&filesystem.superblock, 0) / 8) / u64::from(filesystem.superblock.block_size());
+
+                write_block_raw(
+                    filesystem,
+                    bm_start_baddr + bm_block_index,
+                    &bitmap_block_bytes,
+                )?;
+
+                let desc_start_block = u64::from(handle.abs_index) * u64::from(filesystem.superblock.blocks_per_group);
+                let abs_block_range = desc_start_block + u64::from(first_unused_rel_baddr)..u64::from(desc_start_block) + u64::from(first_unused_rel_baddr) + u64::from(len);
+
+                log::trace!("Found a region {}..{} ({}..{} absolute)", first_unused_rel_baddr, first_unused_rel_baddr + len, abs_block_range.start, abs_block_range.end);
+
+
+                #[cfg(debug_assertions)]
+                {
+                    for block in abs_block_range.clone() {
+                        if !block_exists(block, filesystem).unwrap() {
+                            log::error!("block {} didn't exist, after it was allocated", block);
+                        }
+                    }
+                }
+
+                return Ok(Some(abs_block_range));
+            }
+        }
+        Ok(None)
+    })? {
+        Some(t) => Ok(t),
+        None => Err(AllocateBlockError::InsufficientSpace(len)),
+    }
 }
