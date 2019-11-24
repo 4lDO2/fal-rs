@@ -90,6 +90,12 @@ impl BlockGroupDescriptor {
         u32::from(self.base.block_bm_csum_lo)
             | self.ext.as_ref().map(|ext| (u32::from(ext.block_bm_csum_hi) << 16)).unwrap_or(0)
     }
+    pub fn set_block_bm_checksum(&mut self, checksum: u32) {
+        self.base.block_bm_csum_lo = checksum as u16;
+        if let Some(ref mut ext) = self.ext {
+            ext.block_bm_csum_hi = (checksum >> 16) as u16;
+        }
+    }
     pub fn inode_bm_checksum(&self) -> u32 {
         u32::from(self.base.inode_bm_csum_lo)
             | self.ext.as_ref().map(|ext| (u32::from(ext.inode_bm_csum_hi) << 16)).unwrap_or(0)
@@ -103,7 +109,7 @@ impl BlockGroupDescriptor {
         }
         checksum
     }
-    pub fn parse(bytes: &[u8], superblock: &Superblock) -> Result<Self, scroll::Error> {
+    pub fn parse(bytes: &[u8], superblock: &Superblock, index: u32) -> Result<Self, scroll::Error> {
         let this = Self {
             base: bytes.pread_with(0, scroll::LE)?,
             ext: if superblock.is_64bit() {
@@ -113,18 +119,24 @@ impl BlockGroupDescriptor {
             },
         };
 
+        if BlockGroupDescriptor::calculate_crc32c(superblock.checksum_seed().unwrap(), index, bytes) as u16 != this.base.csum {
+            return Err(scroll::Error::BadInput { size: 2, msg: "block group descriptor checksum mismatch" });
+        }
+
         if BlockGroupDescriptorFlags::from_bits(this.base.flags).is_none() {
             return Err(scroll::Error::BadInput { size: 2, msg: "invalid block group flags bitmask" });
         }
 
         Ok(this)
     }
-    pub fn serialize(this: &Self, bytes: &mut [u8]) -> Result<(), scroll::Error> {
+    pub fn serialize(this: &Self, seed: u32, block_group: u32, bytes: &mut [u8]) -> Result<(), scroll::Error> {
         bytes.pwrite_with(&this.base, 0, scroll::LE)?;
 
         if let Some(ref ext) = this.ext {
             bytes.pwrite_with(ext, Self::SIZE as usize, scroll::LE)?;
         }
+        let new_checksum = Self::calculate_crc32c(seed, block_group, bytes) as u16;
+        bytes.pwrite_with(new_checksum, 0x1E, scroll::LE)?;
         Ok(())
     }
     pub fn flags(&self) -> BlockGroupDescriptorFlags {
@@ -206,6 +218,7 @@ pub fn load_block_group_descriptor<D: fal::Device>(filesystem: &Filesystem<D>, i
     let desc = BlockGroupDescriptor::parse(
         descriptor_bytes,
         &filesystem.superblock,
+        index as u32,
     )?;
     if filesystem.superblock.has_metadata_checksums() {
         if desc.base.csum != BlockGroupDescriptor::calculate_crc32c(filesystem.superblock.checksum_seed().unwrap(), index as u32, descriptor_bytes) as u16 {
@@ -222,7 +235,7 @@ pub fn store_block_group_descriptor<D: fal::DeviceMut>(
     let mut block_bytes = vec! [0u8; filesystem.superblock.block_size() as usize];
 
     let (descriptor_bytes, absolute_offset) = get_block_group_descriptor(filesystem, index, &mut block_bytes)?;
-    BlockGroupDescriptor::serialize(bgdesc, descriptor_bytes)?;
+    BlockGroupDescriptor::serialize(bgdesc, filesystem.superblock.checksum_seed().unwrap(), index as u32, descriptor_bytes)?;
 
     if filesystem.superblock.has_metadata_checksums() {
         bgdesc.base.csum = BlockGroupDescriptor::calculate_crc32c(filesystem.superblock.checksum_seed().unwrap(), index as u32, descriptor_bytes) as u16;
@@ -282,12 +295,12 @@ pub struct Bitmap<'a, 'b> {
 }
 impl<'a, 'b> Bitmap<'a, 'b> {
     pub fn set_rel(&mut self, index_inside_group: u32, value: bool) {
-        let byte_index_inside_bm = (index_inside_group / 8) / self.superblock.block_size();
-        self.bytes[byte_index_inside_bm as usize] &= !(1 << (index_inside_group % 8));
-        self.bytes[byte_index_inside_bm as usize] |= (value as u8) << (index_inside_group % 8);
+        let byte_index_inside_bm = (index_inside_group / 8) as usize;
+        self.bytes[byte_index_inside_bm] &= !(1 << (index_inside_group % 8));
+        self.bytes[byte_index_inside_bm] |= (value as u8) << (index_inside_group % 8);
     }
     pub fn get_rel(&self, index_inside_group: u32) -> bool {
-        let byte_index_inside_bm = (index_inside_group / 8) / self.superblock.block_size();
+        let byte_index_inside_bm = index_inside_group / 8;
         (self.bytes[byte_index_inside_bm as usize]) & (1 << (index_inside_group % 8)) != 0
     }
     pub fn set(&mut self, baddr: u64, value: bool) {
@@ -302,7 +315,7 @@ impl<'a, 'b> Bitmap<'a, 'b> {
                 let mut byte = byte;
                 for i in 0..8 {
                     if byte & 1 == 0 {
-                        return Some(idx as u32 + i as u32)
+                        return Some(idx as u32 * 8 + i as u32)
                     }
                     byte >>= 1;
                 }
@@ -332,10 +345,12 @@ impl<'a, 'b> Bitmap<'a, 'b> {
             self.set_rel(index, true)
         }
     }
+    pub fn checksum(&self, superblock: &Superblock) -> u32 {
+        calculate_crc32c(superblock.checksum_seed().unwrap(), self.bytes)
+    }
 }
 pub fn read_block_bitmap<'a, 'b, D: fal::Device>(baddr: u64, filesystem: &'b Filesystem<D>, block_bytes: &'a mut [u8]) -> Result<Option<Bitmap<'a, 'b>>, BgdError> {
     let group_index = baddr / u64::from(filesystem.superblock.blocks_per_group);
-    let index_inside_group = baddr % u64::from(filesystem.superblock.blocks_per_group);
 
     let descriptor = load_block_group_descriptor(filesystem, group_index)?;
 
@@ -381,6 +396,9 @@ quick_error! {
             description("no block group containing the requested amount of blocks")
             display("no block group containing {} free contiguous blocks", size)
         }
+        ChecksumMismatch {
+            description("some of the block group descriptors had (possibly) corrupted data")
+        }
     }
 }
 pub fn allocate_blocks<D: fal::DeviceMut>(filesystem: &Filesystem<D>, len: u32) -> Result<Range<u64>, AllocateBlockError> {
@@ -406,12 +424,16 @@ pub fn allocate_blocks<D: fal::DeviceMut>(filesystem: &Filesystem<D>, len: u32) 
     'block_loop: for rel_baddr in 0..bgdt_block_count {
         read_block_to_raw(filesystem, bgdt_first_block + u64::from(rel_baddr), &mut block_bytes)?;
         for rel_index in 0..descs_per_block {
+            let abs_index = rel_baddr * descs_per_block + rel_index;
             let rel_offset = rel_index * size as u32;
+
             let descriptor_bytes =
                 &mut block_bytes[rel_offset as usize..rel_offset as usize + size as usize];
-            let descriptor = BlockGroupDescriptor::parse(descriptor_bytes, &filesystem.superblock)?;
+
+            let mut descriptor = BlockGroupDescriptor::parse(descriptor_bytes, &filesystem.superblock, abs_index)?;
+
             if descriptor.unalloc_block_count() >= len {
-                log::trace!("block group {} had {} free blocks", rel_baddr * descs_per_block + rel_index, descriptor.unalloc_block_count());
+                log::trace!("block group {} had {} free blocks", abs_index, descriptor.unalloc_block_count());
 
                 // FIXME: Can bitmaps span multiple blocks?
 
@@ -422,6 +444,11 @@ pub fn allocate_blocks<D: fal::DeviceMut>(filesystem: &Filesystem<D>, len: u32) 
                         continue
                     }
                 };
+                if bitmap.checksum(&filesystem.superblock) != descriptor.block_bm_checksum() {
+                    // TODO: Should the allocation really fail in this case?
+                    return Err(AllocateBlockError::ChecksumMismatch);
+                }
+
                 let first_unused_rel_baddr = match bitmap.find_first_rel() {
                     Some(f) => f,
                     None => {
@@ -429,6 +456,7 @@ pub fn allocate_blocks<D: fal::DeviceMut>(filesystem: &Filesystem<D>, len: u32) 
                         continue
                     }
                 };
+
                 // TODO
                 let available_blocks_after = bitmap.free_blocks_after_start_rel(first_unused_rel_baddr, 0xFFFF_FFFF);
 
@@ -436,10 +464,12 @@ pub fn allocate_blocks<D: fal::DeviceMut>(filesystem: &Filesystem<D>, len: u32) 
 
                     bitmap.reserve_rel(first_unused_rel_baddr..first_unused_rel_baddr + len);
 
+                    let new_checksum = bitmap.checksum(&filesystem.superblock);
+                    descriptor.set_block_bm_checksum(new_checksum);
+
                     let bm_start_baddr = descriptor.block_usage_bm_start_baddr();
                     // FIXME: the zero
                     let bm_block_index = (block_group_offset(&filesystem.superblock, 0) / 8) / u64::from(filesystem.superblock.block_size());
-                    dbg!(bm_block_index);
 
                     write_block_raw(
                         filesystem,
@@ -453,11 +483,14 @@ pub fn allocate_blocks<D: fal::DeviceMut>(filesystem: &Filesystem<D>, len: u32) 
 
                     log::trace!("Found a region {}..{} ({}..{} absolute)", first_unused_rel_baddr, first_unused_rel_baddr + len, abs_block_range.start, abs_block_range.end);
 
+                    BlockGroupDescriptor::serialize(&descriptor, filesystem.superblock.checksum_seed().unwrap(), abs_index, descriptor_bytes)?;
+                    write_block_raw(filesystem, bgdt_first_block + u64::from(rel_baddr), &block_bytes)?;
+
                     #[cfg(debug_assertions)]
                     {
                         for block in abs_block_range.clone() {
                             if !block_exists(block, filesystem).unwrap() {
-                                log::error!("{} didn't exist", block);
+                                log::error!("block {} didn't exist, after it was allocated", block);
                             }
                         }
                     }
