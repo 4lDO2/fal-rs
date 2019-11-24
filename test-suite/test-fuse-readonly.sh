@@ -79,7 +79,7 @@ sha1sum "$dir_struct_file" "$mountpoint/a/random.bin" "$mountpoint/random2.bin" 
 
 umount "$mountpoint"
 
-cargo run --bin fal-frontend-fuse -- --fs-type="$fs_type" mount "$disk" "$mountpoint" &
+cargo run --bin fal-frontend-fuse -- --fs-type="$fs_type" mount "$disk" "$mountpoint" & fs_daemon_pid=$!
 sleep 1
 
 find "$mountpoint" | sort > "$dir_struct_file"
@@ -87,5 +87,5 @@ cp "$dir_struct_file" "/tmp/y.txt"
 sha1sum -c "$hashes_file"
 
 umount "$mountpoint"
-wait
+wait $fs_daemon_pid
 exit $?
