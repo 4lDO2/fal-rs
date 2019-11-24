@@ -1,6 +1,6 @@
 stages:
   - build
-  - test
+    #  - test
 
 before_script:
   - rustup update
