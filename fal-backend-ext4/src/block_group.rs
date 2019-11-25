@@ -1,5 +1,10 @@
 use crate::{calculate_crc32c, read_block, read_block_to_raw, write_block_raw, superblock, superblock::Superblock, Filesystem};
-use std::{convert::{TryFrom, TryInto}, io, ops::Range};
+use std::{
+    convert::{TryFrom, TryInto},
+    io,
+    ops::Range,
+    sync::atomic,
+};
 
 use bitflags::bitflags;
 use quick_error::quick_error;
@@ -436,7 +441,7 @@ impl<'a> DescriptorHandle<'a> {
     fn write(&mut self) {
     }
 }
-pub fn iter_through_bgdescs<T, D: fal::DeviceMut, F: FnMut(DescriptorHandle) -> Result<Option<T>, AllocateBlockError>>(filesystem: &Filesystem<D>, mut function: F) -> Result<Option<T>, AllocateBlockError> {
+fn iter_through_bgdescs<T, D: fal::DeviceMut, F: FnMut(DescriptorHandle) -> Result<Option<T>, AllocateBlockError>>(filesystem: &Filesystem<D>, mut function: F) -> Result<Option<T>, AllocateBlockError> {
     let block_group_count = filesystem.superblock.block_count() / u64::from(filesystem.superblock.blocks_per_group);
     let mut block_bytes = vec! [0u8; filesystem.superblock.block_size() as usize];
 
@@ -554,24 +559,24 @@ fn allocate_blocks_or_inodes<D: fal::DeviceMut>(filesystem: &Filesystem<D>, thin
                 match thing_to_allocate {
                     ThingToAllocate::Blocks => {
                         handle.desc.set_block_bm_checksum(new_checksum);
+                        filesystem.info.free_blocks.fetch_sub(u64::from(len), atomic::Ordering::Acquire);
                         handle.desc.set_unalloc_block_count(handle.desc.unalloc_block_count() - len)
                     }
                     ThingToAllocate::Inodes => {
                         handle.desc.set_inode_bm_checksum(new_checksum);
+                        filesystem.info.free_inodes.fetch_sub(len, atomic::Ordering::Acquire);
                         handle.desc.set_unalloc_inode_count(handle.desc.unalloc_inode_count() - len)
                     }
                 }
 
-                let bm_start_baddr = match thing_to_allocate {
+                let bm_baddr = match thing_to_allocate {
                     ThingToAllocate::Blocks => handle.desc.block_usage_bm_start_baddr(),
                     ThingToAllocate::Inodes => handle.desc.inode_usage_bm_start_baddr(),
                 };
-                // FIXME: the zero
-                let bm_block_index = (block_group_offset(&filesystem.superblock, 0) / 8) / u64::from(filesystem.superblock.block_size());
 
                 write_block_raw(
                     filesystem,
-                    bm_start_baddr + bm_block_index,
+                    bm_baddr,
                     &bitmap_block_bytes,
                 )?;
 

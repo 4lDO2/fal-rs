@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 arrayvec = "0.5"
 bitflags = "1.2"
-bytemuck = "0.1"
+bytemuck = "1.0"
 crc = "1"
 log = "0.4"
 quick-error = "1.2"

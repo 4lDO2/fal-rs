@@ -4,7 +4,10 @@ use std::{
     ffi::{OsStr, OsString},
     io::{self, SeekFrom},
     os::unix::ffi::OsStrExt,
-    sync::Mutex,
+    sync::{
+        atomic::{self, AtomicU32, AtomicU64},
+        Mutex,
+    },
     time::SystemTime,
 };
 
@@ -72,6 +75,7 @@ fn write_block_raw<D: fal::DeviceMut>(
     block_address: u64,
     buffer: &[u8],
 ) -> io::Result<()> {
+    filesystem.info.kbs_written.fetch_add(buffer.len() as u64, atomic::Ordering::Acquire);
     let mut guard = filesystem.device.lock().unwrap();
     guard.seek(SeekFrom::Start(
         block_address as u64 * u64::from(filesystem.superblock.block_size()),
@@ -113,10 +117,17 @@ fn os_str_to_bytes(string: &OsStr) -> Vec<u8> {
 pub struct Filesystem<D> {
     pub superblock: Superblock,
     pub device: Mutex<D>,
-    pub fhs: HashMap<u64, FileHandle>,
-    pub last_fh: u64,
+    pub(crate) fhs: HashMap<u64, FileHandle>,
+    pub(crate) last_fh: u64,
     pub general_options: fal::Options,
-    pub journal: Option<Journal>,
+    pub(crate) journal: Option<Journal>,
+    pub(crate) info: FsInfo,
+}
+
+pub(crate) struct FsInfo {
+    pub(crate) free_blocks: AtomicU64,
+    pub(crate) free_inodes: AtomicU32,
+    pub(crate) kbs_written: AtomicU64,
 }
 
 #[derive(Debug, PartialEq)]
@@ -141,6 +152,11 @@ impl<D: fal::DeviceMut> Filesystem<D> {
         self.last_fh += 1;
 
         Ok(fh.fh)
+    }
+    fn update_superblock(&mut self) {
+        self.superblock.set_free_block_count(self.info.free_blocks.load(atomic::Ordering::Release));
+        self.superblock.set_free_inode_count(self.info.free_inodes.load(atomic::Ordering::Release));
+        self.superblock.set_kbs_written(self.info.kbs_written.load(atomic::Ordering::Release));
     }
 }
 
@@ -238,12 +254,17 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
         // TODO: Check for feature flags here.
 
         let mut filesystem = Self {
-            superblock,
             device: Mutex::new(device),
             fhs: HashMap::new(),
             last_fh: 0,
             general_options,
             journal: None,
+            info: FsInfo {
+                free_blocks: superblock.free_block_count().into(),
+                free_inodes: superblock.free_inode_count().into(),
+                kbs_written: superblock.kbs_written().unwrap_or(0).into(),
+            },
+            superblock,
         };
         block_group::allocate_blocks(&filesystem, 1024).unwrap();
         block_group::allocate_inodes(&filesystem, 12).unwrap();
@@ -383,6 +404,7 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
 
 impl<D: fal::DeviceMut> fal::FilesystemMut<D> for Filesystem<D> {
     fn unmount(mut self) {
+        self.update_superblock();
         self.superblock
             .store(&mut *self.device.lock().unwrap())
             .unwrap()

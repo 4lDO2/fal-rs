@@ -359,6 +359,29 @@ impl Superblock {
     pub fn inodes_per_group(&self) -> u32 {
         self.inodes_per_group
     }
+    pub fn free_block_count(&self) -> u64 {
+        u64::from(self.unalloc_block_count) | (u64::from(self.extended.as_ref().map(|ext| ext.free_block_count_hi).unwrap_or(0)) << 32)
+    }
+    pub fn free_inode_count(&self) -> u32 {
+        self.unalloc_inode_count
+    }
+    pub fn kbs_written(&self) -> Option<u64> {
+        self.extended.as_ref().map(|ext| ext.kbs_written)
+    }
+    pub fn set_kbs_written(&mut self, value: u64) {
+        if let Some(ref mut ext) = self.extended {
+            ext.kbs_written = value;
+        }
+    }
+    pub fn set_free_block_count(&mut self, value: u64) {
+        self.unalloc_block_count = value as u32;
+        if let Some(ref mut ext) = self.extended {
+            ext.free_block_count_hi = (value >> 32) as u32;
+        }
+    }
+    pub fn set_free_inode_count(&mut self, value: u32) {
+        self.unalloc_inode_count = value;
+    }
 }
 #[derive(Clone, Copy, Debug)]
 pub enum FilesystemState {
