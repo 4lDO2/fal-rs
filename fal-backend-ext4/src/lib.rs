@@ -246,6 +246,7 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
             journal: None,
         };
         block_group::allocate_blocks(&filesystem, 1024).unwrap();
+        block_group::allocate_inodes(&filesystem, 12).unwrap();
         filesystem.journal = match Journal::load(&filesystem) {
             Ok(j) => j,
             Err(err) => {

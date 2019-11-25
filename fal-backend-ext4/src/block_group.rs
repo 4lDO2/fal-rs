@@ -86,6 +86,18 @@ impl BlockGroupDescriptor {
         u32::from(self.base.unalloc_inode_count_lo)
             | self.ext.as_ref().map(|ext| (u32::from(ext.unalloc_inode_count_hi) << 16)).unwrap_or(0)
     }
+    pub fn set_unalloc_block_count(&mut self, count: u32) {
+        self.base.unalloc_block_count_lo = count as u16;
+        if let Some(ref mut ext) = self.ext {
+            ext.unalloc_block_count_hi = (count >> 16) as u16;
+        }
+    }
+    pub fn set_unalloc_inode_count(&mut self, count: u32) {
+        self.base.unalloc_inode_count_lo = count as u16;
+        if let Some(ref mut ext) = self.ext {
+            ext.unalloc_inode_count_hi = (count >> 16) as u16;
+        }
+    }
     pub fn block_bm_checksum(&self) -> u32 {
         u32::from(self.base.block_bm_csum_lo)
             | self.ext.as_ref().map(|ext| (u32::from(ext.block_bm_csum_hi) << 16)).unwrap_or(0)
@@ -94,6 +106,12 @@ impl BlockGroupDescriptor {
         self.base.block_bm_csum_lo = checksum as u16;
         if let Some(ref mut ext) = self.ext {
             ext.block_bm_csum_hi = (checksum >> 16) as u16;
+        }
+    }
+    pub fn set_inode_bm_checksum(&mut self, checksum: u32) {
+        self.base.inode_bm_csum_lo = checksum as u16;
+        if let Some(ref mut ext) = self.ext {
+            ext.inode_bm_csum_hi = (checksum >> 16) as u16;
         }
     }
     pub fn inode_bm_checksum(&self) -> u32 {
@@ -142,16 +160,23 @@ impl BlockGroupDescriptor {
     pub fn flags(&self) -> BlockGroupDescriptorFlags {
         BlockGroupDescriptorFlags::from_bits(self.base.flags).unwrap()
     }
-    pub fn bitmap<'a, 'b, D: fal::Device>(&self, filesystem: &'b Filesystem<D>, block_bytes: &'a mut [u8], baddr: u64) -> Result<Option<Bitmap<'a, 'b>>, BgdError> {
-        let bm_start_baddr = self.block_usage_bm_start_baddr();
+    fn bitmap<'a, 'b, D: fal::Device>(&self, filesystem: &'b Filesystem<D>, start: u64, block_bytes: &'a mut [u8], baddr: u64) -> Result<Option<Bitmap<'a, 'b>>, BgdError> {
         let bm_block_index = (block_group_offset(&filesystem.superblock, baddr) / 8) / u64::from(filesystem.superblock.block_size());
 
         read_block_to_raw(
             filesystem,
-            bm_start_baddr + bm_block_index,
+            start + bm_block_index,
             block_bytes,
         )?;
         Ok(Some(Bitmap { bytes: block_bytes, superblock: &filesystem.superblock }))
+    }
+    pub fn block_bitmap<'a, 'b, D: fal::Device>(&self, filesystem: &'b Filesystem<D>, block_bytes: &'a mut [u8], baddr: u64) -> Result<Option<Bitmap<'a, 'b>>, BgdError> {
+        let bm_start_baddr = self.block_usage_bm_start_baddr();
+        self.bitmap(filesystem, bm_start_baddr, block_bytes, baddr)
+    }
+    pub fn inode_bitmap<'a, 'b, D: fal::Device>(&self, filesystem: &'b Filesystem<D>, block_bytes: &'a mut [u8], baddr: u64) -> Result<Option<Bitmap<'a, 'b>>, BgdError> {
+        let bm_start_baddr = self.inode_usage_bm_start_baddr();
+        self.bitmap(filesystem, bm_start_baddr, block_bytes, baddr)
     }
 }
 
@@ -345,8 +370,8 @@ impl<'a, 'b> Bitmap<'a, 'b> {
             self.set_rel(index, true)
         }
     }
-    pub fn checksum(&self, superblock: &Superblock) -> u32 {
-        calculate_crc32c(superblock.checksum_seed().unwrap(), self.bytes)
+    pub fn checksum(&self, superblock: &Superblock, size: usize) -> u32 {
+        calculate_crc32c(superblock.checksum_seed().unwrap(), &self.bytes[..size])
     }
 }
 pub fn read_block_bitmap<'a, 'b, D: fal::Device>(baddr: u64, filesystem: &'b Filesystem<D>, block_bytes: &'a mut [u8]) -> Result<Option<Bitmap<'a, 'b>>, BgdError> {
@@ -357,7 +382,7 @@ pub fn read_block_bitmap<'a, 'b, D: fal::Device>(baddr: u64, filesystem: &'b Fil
     if descriptor.flags().contains(BlockGroupDescriptorFlags::BLOCK_BITMAP_UNINIT) {
         return Ok(None)
     }
-    descriptor.bitmap(filesystem, block_bytes, baddr)
+    descriptor.block_bitmap(filesystem, block_bytes, baddr)
 }
 pub fn block_exists<D: fal::Device>(baddr: u64, filesystem: &Filesystem<D>) -> Result<bool, BgdError> {
     let mut block_bytes = vec! [0u8; filesystem.superblock.block_size() as usize];
@@ -459,24 +484,52 @@ pub fn iter_through_bgdescs<T, D: fal::DeviceMut, F: FnMut(DescriptorHandle) -> 
 
     Ok(None)
 }
-pub fn allocate_blocks<D: fal::DeviceMut>(filesystem: &Filesystem<D>, len: u32) -> Result<Range<u64>, AllocateBlockError> {
+
+enum ThingToAllocate {
+    Blocks,
+    Inodes,
+}
+
+fn allocate_blocks_or_inodes<D: fal::DeviceMut>(filesystem: &Filesystem<D>, thing_to_allocate: ThingToAllocate, len: u32) -> Result<Range<u64>, AllocateBlockError> {
     let mut bitmap_block_bytes = vec! [0u8; filesystem.superblock.block_size() as usize];
 
     // Find the first block group with a free block count of at least len.
-    match iter_through_bgdescs(filesystem, |mut handle| -> Result<Option<Range<u64>>, AllocateBlockError> {
-        if handle.desc.unalloc_block_count() >= len {
-            log::trace!("block group {} had {} free blocks", handle.abs_index, handle.desc.unalloc_block_count());
+    match iter_through_bgdescs(filesystem, |handle| -> Result<Option<Range<u64>>, AllocateBlockError> {
+        let unalloc_count = match thing_to_allocate {
+            ThingToAllocate::Blocks => handle.desc.unalloc_block_count(),
+            ThingToAllocate::Inodes => handle.desc.unalloc_inode_count(),
+        };
+        let word = match thing_to_allocate {
+            ThingToAllocate::Blocks => "block",
+            ThingToAllocate::Inodes => "inode",
+        };
+
+        if unalloc_count >= len {
+            log::trace!("block group {bg} had {free} free {word}s", bg=handle.abs_index, free=handle.desc.unalloc_block_count(), word=word);
 
             // FIXME: Can bitmaps span multiple blocks?
 
-            let mut bitmap = match handle.desc.bitmap(filesystem, &mut bitmap_block_bytes, 0)? {
+            let mut bitmap = match {
+                match thing_to_allocate {
+                    ThingToAllocate::Blocks => handle.desc.block_bitmap(filesystem, &mut bitmap_block_bytes, 0)?,
+                    ThingToAllocate::Inodes => handle.desc.inode_bitmap(filesystem, &mut bitmap_block_bytes, 0)?,
+                }
+            } {
                 Some(bm) => bm,
                 None => {
-                    log::trace!("no bitmap found");
+                    log::trace!("no {word} bitmap found", word=word);
                     return Ok(None);
                 }
             };
-            if bitmap.checksum(&filesystem.superblock) != handle.desc.block_bm_checksum() {
+            let current_checksum = match thing_to_allocate {
+                ThingToAllocate::Blocks => handle.desc.block_bm_checksum(),
+                ThingToAllocate::Inodes => handle.desc.inode_bm_checksum(),
+            };
+            let bitmap_size = match thing_to_allocate {
+                ThingToAllocate::Blocks => filesystem.superblock.clusters_per_group(),
+                ThingToAllocate::Inodes => filesystem.superblock.inodes_per_group(),
+            } as usize / 8;
+            if bitmap.checksum(&filesystem.superblock, bitmap_size) != current_checksum {
                 // TODO: Should the allocation really fail in this case?
                 return Err(AllocateBlockError::ChecksumMismatch);
             }
@@ -484,7 +537,7 @@ pub fn allocate_blocks<D: fal::DeviceMut>(filesystem: &Filesystem<D>, len: u32) 
             let first_unused_rel_baddr = match bitmap.find_first_rel() {
                 Some(f) => f,
                 None => {
-                    log::error!("no free block was found, even though the unused block count said the opposite.");
+                    log::error!("no free {word} was found, even though the unused {word} count said the opposite.", word=word);
                     return Ok(None);
                 }
             };
@@ -496,10 +549,23 @@ pub fn allocate_blocks<D: fal::DeviceMut>(filesystem: &Filesystem<D>, len: u32) 
 
                 bitmap.reserve_rel(first_unused_rel_baddr..first_unused_rel_baddr + len);
 
-                let new_checksum = bitmap.checksum(&filesystem.superblock);
-                handle.desc.set_block_bm_checksum(new_checksum);
+                let new_checksum = bitmap.checksum(&filesystem.superblock, bitmap_size);
 
-                let bm_start_baddr = handle.desc.block_usage_bm_start_baddr();
+                match thing_to_allocate {
+                    ThingToAllocate::Blocks => {
+                        handle.desc.set_block_bm_checksum(new_checksum);
+                        handle.desc.set_unalloc_block_count(handle.desc.unalloc_block_count() - len)
+                    }
+                    ThingToAllocate::Inodes => {
+                        handle.desc.set_inode_bm_checksum(new_checksum);
+                        handle.desc.set_unalloc_inode_count(handle.desc.unalloc_inode_count() - len)
+                    }
+                }
+
+                let bm_start_baddr = match thing_to_allocate {
+                    ThingToAllocate::Blocks => handle.desc.block_usage_bm_start_baddr(),
+                    ThingToAllocate::Inodes => handle.desc.inode_usage_bm_start_baddr(),
+                };
                 // FIXME: the zero
                 let bm_block_index = (block_group_offset(&filesystem.superblock, 0) / 8) / u64::from(filesystem.superblock.block_size());
 
@@ -512,14 +578,14 @@ pub fn allocate_blocks<D: fal::DeviceMut>(filesystem: &Filesystem<D>, len: u32) 
                 let desc_start_block = u64::from(handle.abs_index) * u64::from(filesystem.superblock.blocks_per_group);
                 let abs_block_range = desc_start_block + u64::from(first_unused_rel_baddr)..u64::from(desc_start_block) + u64::from(first_unused_rel_baddr) + u64::from(len);
 
-                log::trace!("Found a region {}..{} ({}..{} absolute)", first_unused_rel_baddr, first_unused_rel_baddr + len, abs_block_range.start, abs_block_range.end);
+                log::trace!("Found a {word} region {rel_start}..{rel_end} ({abs_start}..{abs_end} absolute)", word=word, rel_start=first_unused_rel_baddr, rel_end=first_unused_rel_baddr + len, abs_start=abs_block_range.start, abs_end=abs_block_range.end);
 
 
                 #[cfg(debug_assertions)]
                 {
                     for block in abs_block_range.clone() {
                         if !block_exists(block, filesystem).unwrap() {
-                            log::error!("block {} didn't exist, after it was allocated", block);
+                            log::error!("{word} {addr} didn't exist, after it was allocated", word=word, addr=block);
                         }
                     }
                 }
@@ -532,4 +598,10 @@ pub fn allocate_blocks<D: fal::DeviceMut>(filesystem: &Filesystem<D>, len: u32) 
         Some(t) => Ok(t),
         None => Err(AllocateBlockError::InsufficientSpace(len)),
     }
+}
+pub fn allocate_blocks<D: fal::DeviceMut>(filesystem: &Filesystem<D>, len: u32) -> Result<Range<u64>, AllocateBlockError> {
+    allocate_blocks_or_inodes(filesystem, ThingToAllocate::Blocks, len)
+}
+pub fn allocate_inodes<D: fal::DeviceMut>(filesystem: &Filesystem<D>, len: u32) -> Result<Range<u64>, AllocateBlockError> {
+    allocate_blocks_or_inodes(filesystem, ThingToAllocate::Inodes, len)
 }

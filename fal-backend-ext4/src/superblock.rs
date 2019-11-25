@@ -25,7 +25,7 @@ pub struct SuperblockBase {
     pub log_block_size: u32,
     pub log_fragment_size: u32,
     pub blocks_per_group: u32,
-    pub fragments_per_group: u32,
+    pub clusters_per_group: u32,
     pub inodes_per_group: u32,
     pub last_mount_time: u32,
     pub last_write_time: u32,
@@ -348,6 +348,16 @@ impl Superblock {
     }
     pub fn os_id(&self) -> OsId {
         OsId::try_parse(self.os_id).unwrap()
+    }
+    pub fn clusters_per_group(&self) -> u32 {
+        if self.ro_compat_features().contains(RoFeatureFlags::BIGALLOC) {
+            self.clusters_per_group
+        } else {
+            self.blocks_per_group
+        }
+    }
+    pub fn inodes_per_group(&self) -> u32 {
+        self.inodes_per_group
     }
 }
 #[derive(Clone, Copy, Debug)]
