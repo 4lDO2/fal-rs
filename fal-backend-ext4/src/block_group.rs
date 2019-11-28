@@ -610,3 +610,9 @@ pub fn allocate_blocks<D: fal::DeviceMut>(filesystem: &Filesystem<D>, len: u32) 
 pub fn allocate_inodes<D: fal::DeviceMut>(filesystem: &Filesystem<D>, len: u32) -> Result<Range<u64>, AllocateBlockError> {
     allocate_blocks_or_inodes(filesystem, ThingToAllocate::Inodes, len)
 }
+pub fn allocate_block<D: fal::DeviceMut>(filesystem: &Filesystem<D>) -> Result<u64, AllocateBlockError> {
+    Ok(allocate_blocks(filesystem, 1)?.start)
+}
+pub fn allocate_inode<D: fal::DeviceMut>(filesystem: &Filesystem<D>) -> Result<u64, AllocateBlockError> {
+    Ok(allocate_inodes(filesystem, 1)?.start)
+}

@@ -1,8 +1,12 @@
-use crate::{calculate_crc32c, inode::Blocks, read_block, Filesystem};
+use std::{
+    cmp::Ordering,
+    convert::TryInto,
+};
 
+use crate::{block_group, calculate_crc32c, inode::Blocks, read_block, Filesystem, write_block};
+
+use quick_error::quick_error;
 use scroll::{Pread, Pwrite};
-
-use std::cmp::Ordering;
 
 /// The magic number identifying extent trees.
 pub const MAGIC: u16 = 0xF30A;
@@ -76,6 +80,20 @@ impl PartialOrd for ExtentLeaf {
 }
 
 impl ExtentLeaf {
+    pub fn new(rel_baddr: u32, len: u16, phys_baddr: u64, initialized: bool) -> Self {
+        assert!(len <= 32768);
+
+        Self {
+            block: rel_baddr,
+            start_lo: phys_baddr as u32,
+            start_hi: (phys_baddr >> 32) as u16,
+            raw_len: if initialized {
+                len
+            } else {
+                len + 32768
+            },
+        }
+    }
     /// The length of the extent, in blocks.
     pub fn len(&self) -> u16 {
         if self.raw_len > 32768 {
@@ -123,7 +141,8 @@ pub struct ExtentTree {
     pub header: ExtentHeader,
     pub body: ExtentTreeBody,
     pub tail: Option<ExtentTail>,
-    pub checksum_seed: u32,
+    checksum_seed: u32,
+    size: usize,
 }
 
 impl ExtentTree {
@@ -132,55 +151,104 @@ impl ExtentTree {
     }
     /// Initialize an extent tree from the blocks field of an inode.
     pub fn from_inode_blocks_field(seed: u32, blocks: &Blocks) -> Result<Self, scroll::Error> {
-        Self::init(seed, &blocks.inner, false)
+        Self::parse(seed, &blocks.inner, false)
     }
     pub fn from_block(seed: u32, bytes: &[u8]) -> Result<Self, scroll::Error> {
-        Self::init(seed, bytes, true)
+        Self::parse(seed, bytes, true)
+    }
+    pub fn to_inode_blocks_field(this: &Self, blocks: &mut Blocks) -> Result<(), scroll::Error> {
+        Self::serialize(this, &mut blocks.inner, false)
+    }
+    pub fn to_block(this: &Self, bytes: &mut [u8]) -> Result<(), scroll::Error> {
+        Self::serialize(this, bytes, true)
     }
 
-    fn init(seed: u32, bytes: &[u8], use_tail: bool) -> Result<Self, scroll::Error> {
+    fn parse(seed: u32, bytes: &[u8], use_tail: bool) -> Result<Self, scroll::Error> {
         let header: ExtentHeader = bytes.pread_with(0, scroll::LE)?;
 
         if header.entry_count > header.max_entry_count {
             return Err(scroll::Error::BadInput { size: 2, msg: "Entry count too high" });
         }
-        if header.max_entry_count as usize * ITEM_SIZE > 60 {
-            return Err(scroll::Error::BadInput { size: 2,
-                msg: "Max entry count makes it overflow the available space of the extent tree",
-            });
+
+        let calculated_max_entry_size = (bytes.len() - HEADER_SIZE - if use_tail {
+            TAIL_SIZE
+        } else {
+            0
+        }) / ITEM_SIZE;
+
+        if header.max_entry_count as usize != calculated_max_entry_size {
+            return Err(scroll::Error::BadInput { size: 2, msg: "Invalid max entry count" });
         }
 
         let body = if header.depth > 0 {
             ExtentTreeBody::Internal(
                 (0..header.entry_count as usize)
                     .map(|i| {
-                        bytes
-                            .pread_with(HEADER_SIZE + i * ITEM_SIZE, scroll::LE)
-                            .unwrap()
+                        bytes.pread_with(HEADER_SIZE + i * ITEM_SIZE, scroll::LE)
                     })
-                    .collect(),
+                    .collect::<Result<Vec<_>, _>>()?,
             )
         } else {
             ExtentTreeBody::Leaf(
                 (0..header.entry_count as usize)
                     .map(|i| {
-                        bytes
-                            .pread_with(HEADER_SIZE + i * ITEM_SIZE, scroll::LE)
-                            .unwrap()
+                        bytes.pread_with(HEADER_SIZE + i * ITEM_SIZE, scroll::LE)
                     })
-                    .collect(),
+                    .collect::<Result<Vec<_>, _>>()?,
             )
         };
 
-        let tail: ExtentTail = bytes
-            .pread_with(bytes.len() - TAIL_SIZE, scroll::LE)
-            .unwrap();
+        let tail: ExtentTail = bytes.pread_with(bytes.len() - TAIL_SIZE, scroll::LE)?;
 
         if use_tail && tail.checksum != Self::calculate_crc32c(seed, bytes) {
-            panic!("extent tail checksum mismatch");
+            return Err(scroll::Error::BadInput { size: 4, msg: "extent block checksum mismatch" });
         }
 
-        Ok(Self { header, body, tail: if use_tail { Some(tail) } else { None }, checksum_seed: seed })
+        Ok(Self { header, body, tail: if use_tail { Some(tail) } else { None }, checksum_seed: seed, size: bytes.len() })
+    }
+    fn serialize(this: &Self, bytes: &mut [u8], use_tail: bool) -> Result<(), scroll::Error> {
+        let mut offset = 0;
+        bytes.gwrite_with(&this.header, &mut offset, scroll::LE)?;
+
+        match this.body {
+            ExtentTreeBody::Internal(ref items) => for item in items {
+                bytes.gwrite_with(item, &mut offset, scroll::LE)?;
+            }
+            ExtentTreeBody::Leaf(ref leaves) => for leaf in leaves {
+                bytes.gwrite_with(leaf, &mut offset, scroll::LE)?;
+            }
+        }
+
+        if use_tail {
+            assert!(this.tail.is_some());
+            bytes.pwrite_with(this.tail.as_ref().unwrap(), bytes.len() - TAIL_SIZE, scroll::LE)?;
+        }
+        Ok(())
+    }
+    fn calculate_max_entry_count(size: usize) -> usize {
+        (size - HEADER_SIZE - TAIL_SIZE) / ITEM_SIZE
+    }
+    pub fn new_subtree(parent: &Self, size: usize) -> Self {
+        let depth = parent.header.depth.checked_sub(1).expect("Creating a subtree from a leaf");
+
+        Self {
+            header: ExtentHeader {
+                magic: MAGIC,
+                depth,
+                entry_count: 0,
+                generation: 0,
+                max_entry_count: Self::calculate_max_entry_count(size).try_into().expect("what extent tree block size (aka block size) are you using?"),
+            },
+            body: if depth == 0 {
+                ExtentTreeBody::Leaf(vec! [])
+            } else {
+                ExtentTreeBody::Internal(vec! [])
+            },
+            checksum_seed: parent.checksum_seed,
+            size,
+            // The checksum only really matters when parsing, since it's updated dynamically.
+            tail: Some(ExtentTail { checksum: 0 }),
+        }
     }
 
     /// Check that all the items in the current node are sorted. This is a fundamental requirement
@@ -227,11 +295,33 @@ impl ExtentTree {
             _ => None,
         }
     }
+    fn leaves_mut(&mut self) -> Option<&mut Vec<ExtentLeaf>> {
+        match self.body {
+            ExtentTreeBody::Leaf(ref mut items) => Some(items),
+            _ => None,
+        }
+    }
     fn internal_node_items(&self) -> Option<&[ExtentInternalNode]> {
         match self.body {
             ExtentTreeBody::Internal(ref items) => Some(items),
             _ => None,
         }
+    }
+    fn internal_node_items_mut(&self) -> Option<&[ExtentInternalNode]> {
+        match self.body {
+            ExtentTreeBody::Internal(ref items) => Some(items),
+            _ => None,
+        }
+    }
+    fn local_items_capacity(&self) -> usize {
+        self.header.max_entry_count as usize
+    }
+    fn local_items_len(&self) -> usize {
+        self.header.entry_count as usize
+    }
+    fn node_is_full(&self) -> bool {
+        assert!(self.local_items_len() <= self.local_items_capacity());
+        self.local_items_len() == self.local_items_capacity()
     }
     pub fn is_leaf(&self) -> bool {
         self.header.depth == 0
@@ -278,4 +368,50 @@ impl ExtentTree {
             child_node.resolve(filesystem, logical_block)
         }
     }
+}
+
+quick_error! {
+    #[derive(Debug)]
+    enum AllocateExtentLeafError {
+        NodeIsFull {}
+        AllocateBlockError(err: block_group::AllocateBlockError) {
+            from()
+            cause(err)
+        }
+        SerializationError(err: scroll::Error) {
+            from()
+            cause(err)
+        }
+    }
+}
+
+fn allocate_extent_leaf<D: fal::DeviceMut>(filesystem: &Filesystem<D>, root: &mut ExtentTree, rel_baddr: u32, len: u16) -> Result<(), AllocateExtentLeafError> {
+    if root.is_leaf() {
+        if root.node_is_full() {
+            return Err(AllocateExtentLeafError::NodeIsFull);
+        }
+        let allocated_range = block_group::allocate_blocks(filesystem, len.into())?;
+
+        assert_eq!(allocated_range.end - allocated_range.start, u64::from(len));
+
+        root.leaves_mut().unwrap().push(ExtentLeaf::new(rel_baddr, len, allocated_range.start, true));
+    } else {
+        if root.node_is_full() {
+            return Err(AllocateExtentLeafError::NodeIsFull);
+        }
+        let allocated_block = block_group::allocate_block(filesystem)?;
+
+        let mut block_bytes = vec! [0u8; filesystem.superblock.block_size() as usize];
+
+        let mut subtree = ExtentTree::new_subtree(&root, filesystem.superblock.block_size() as usize);
+
+        allocate_extent_leaf(filesystem, &mut subtree, rel_baddr, len)?;
+
+        ExtentTree::serialize(&subtree, &mut block_bytes, true)?;
+        write_block(filesystem, allocated_block, &block_bytes);
+    }
+    Ok(())
+}
+pub fn allocate_extent<D: fal::DeviceMut>(filesystem: &Filesystem<D>, root: &mut ExtentTree, rel_baddr: u32, len: u16) {
+    allocate_extent_leaf(filesystem, root, rel_baddr, len).unwrap();
 }

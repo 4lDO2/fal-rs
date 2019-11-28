@@ -270,6 +270,13 @@ impl InodeRaw {
         let hi = self.ext.as_ref().map(|ext| ext.checksum_hi).unwrap_or(0);
         Some(u32::from(lo) | (u32::from(hi) << 16))
     }
+    pub fn set_checksum(&mut self, checksum: u32, os_id: OsId) {
+        if os_id != OsId::Linux { return }
+        fal::write_u16(&mut self.os_specific_2, 8, checksum as u16);
+        if let Some(ref mut ext) = self.ext {
+            ext.checksum_hi = (checksum >> 16) as u16;
+        }
+    }
     pub fn calculate_crc32c(bytes: &[u8], checksum_seed: u32) -> u32 {
         let mut checksum = calculate_crc32c(checksum_seed, &bytes[..0x7C]);
         checksum = calculate_crc32c(checksum, &[0u8; 2]);
@@ -510,7 +517,7 @@ impl Inode {
         let inode_bytes = &mut containing_block
             [inode_index_in_block * inode_size..inode_index_in_block * inode_size + inode_size];
 
-        Self::serialize(this, inode_bytes);
+        Self::serialize(this, &filesystem.superblock, inode_bytes)?;
 
         Ok(write_block(
             filesystem,
@@ -543,8 +550,14 @@ impl Inode {
         }
         Ok(this)
     }
-    pub fn serialize(this: &Inode, buffer: &mut [u8]) -> Result<(), scroll::Error> {
-        InodeRaw::serialize(&this.raw, buffer)
+    pub fn serialize(this: &Inode, superblock: &Superblock, buffer: &mut [u8]) -> Result<(), scroll::Error> {
+        InodeRaw::serialize(&this.raw, buffer)?;
+        let checksum = InodeRaw::calculate_crc32c(buffer, this.checksum_seed);
+        if superblock.os_id() == OsId::Linux {
+            buffer.pwrite_with(checksum as u16, 0x7C, scroll::LE)?;
+        }
+        buffer.pwrite_with((checksum >> 16) as u16, 0x82, scroll::LE)?;
+        Ok(())
     }
     pub fn size(&self) -> u64 {
         self.size

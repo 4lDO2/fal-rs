@@ -266,8 +266,6 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
             },
             superblock,
         };
-        block_group::allocate_blocks(&filesystem, 1024).unwrap();
-        block_group::allocate_inodes(&filesystem, 12).unwrap();
         filesystem.journal = match Journal::load(&filesystem) {
             Ok(j) => j,
             Err(err) => {
@@ -275,6 +273,12 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
                 None
             }
         };
+        let mut root = filesystem.load_inode(2).unwrap();
+        let mut tree = extents::ExtentTree::from_inode_blocks_field(root.checksum_seed, &root.blocks).unwrap();
+        extents::allocate_extent(&filesystem, &mut tree, 1337, 42);
+        use fal::FilesystemMut;
+        extents::ExtentTree::to_inode_blocks_field(&tree, &mut root.blocks).unwrap();
+        filesystem.store_inode(&root).unwrap();
         filesystem
     }
 
