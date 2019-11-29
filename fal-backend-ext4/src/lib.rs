@@ -18,6 +18,7 @@ pub mod block_group;
 pub mod extents;
 pub mod inode;
 pub mod journal;
+pub mod htree;
 pub mod superblock;
 
 pub use inode::Inode;

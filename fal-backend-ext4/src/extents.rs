@@ -1,6 +1,7 @@
 use std::{
     cmp::Ordering,
     convert::TryInto,
+    io,
 };
 
 use crate::{block_group, calculate_crc32c, inode::Blocks, read_block, Filesystem, write_block};
@@ -40,6 +41,14 @@ pub struct ExtentInternalNode {
 }
 
 impl ExtentInternalNode {
+    pub fn new(rel_baddr: u32, leaf: u64) -> Self {
+        Self {
+            block: rel_baddr,
+            leaf_lo: leaf as u32,
+            leaf_hi: (leaf >> 32) as u16,
+            unused: 0,
+        }
+    }
     pub fn logical_block(&self) -> u32 {
         self.block
     }
@@ -221,7 +230,10 @@ impl ExtentTree {
 
         if use_tail {
             assert!(this.tail.is_some());
-            bytes.pwrite_with(this.tail.as_ref().unwrap(), bytes.len() - TAIL_SIZE, scroll::LE)?;
+            let new_tail = ExtentTail {
+                checksum: Self::calculate_crc32c(this.checksum_seed, bytes),
+            };
+            bytes.pwrite_with(&new_tail, bytes.len() - TAIL_SIZE, scroll::LE)?;
         }
         Ok(())
     }
@@ -307,9 +319,9 @@ impl ExtentTree {
             _ => None,
         }
     }
-    fn internal_node_items_mut(&self) -> Option<&[ExtentInternalNode]> {
+    fn internal_node_items_mut(&mut self) -> Option<&mut Vec<ExtentInternalNode>> {
         match self.body {
-            ExtentTreeBody::Internal(ref items) => Some(items),
+            ExtentTreeBody::Internal(ref mut items) => Some(items),
             _ => None,
         }
     }
@@ -374,11 +386,16 @@ quick_error! {
     #[derive(Debug)]
     enum AllocateExtentLeafError {
         NodeIsFull {}
+        AlreadyExists {}
         AllocateBlockError(err: block_group::AllocateBlockError) {
             from()
             cause(err)
         }
         SerializationError(err: scroll::Error) {
+            from()
+            cause(err)
+        }
+        DiskIoError(err: io::Error) {
             from()
             cause(err)
         }
@@ -394,7 +411,20 @@ fn allocate_extent_leaf<D: fal::DeviceMut>(filesystem: &Filesystem<D>, root: &mu
 
         assert_eq!(allocated_range.end - allocated_range.start, u64::from(len));
 
-        root.leaves_mut().unwrap().push(ExtentLeaf::new(rel_baddr, len, allocated_range.start, true));
+        match root.resolve_local_leaf(rel_baddr) {
+            Ok(_) => return Err(AllocateExtentLeafError::AlreadyExists),
+
+            Err(new_index) => {
+                // TODO: Check whether the item at this index (which is either before or after the
+                // current extent) overlaps the extent we're currently allocating.
+
+                // Unlike the usual case where Err leads to return Err, in this case Err(idx) means
+                // that the key (an extent with rel_baddr as start) wasn't found, which is good
+                // since we are allocating it.
+                let new_leaf = ExtentLeaf::new(rel_baddr, len, allocated_range.start, true);
+                root.leaves_mut().unwrap().insert(new_index, new_leaf);
+            }
+        }
     } else {
         if root.node_is_full() {
             return Err(AllocateExtentLeafError::NodeIsFull);
@@ -405,10 +435,23 @@ fn allocate_extent_leaf<D: fal::DeviceMut>(filesystem: &Filesystem<D>, root: &mu
 
         let mut subtree = ExtentTree::new_subtree(&root, filesystem.superblock.block_size() as usize);
 
+        // Create a new subtree containing the single to-be-allocated extent.
         allocate_extent_leaf(filesystem, &mut subtree, rel_baddr, len)?;
-
         ExtentTree::serialize(&subtree, &mut block_bytes, true)?;
-        write_block(filesystem, allocated_block, &block_bytes);
+        write_block(filesystem, allocated_block, &block_bytes)?;
+
+        // Update the root to include the new entry.
+        match root.resolve_local_internal(rel_baddr) {
+            Ok(_) => return Err(AllocateExtentLeafError::AlreadyExists),
+
+            Err(new_index) => {
+                // The same thing as with the leaf insertion happens here; a new internal subtree
+                // pointer entry is simply inserted in a sorted order.
+
+                let new_entry = ExtentInternalNode::new(rel_baddr, allocated_block);
+                root.internal_node_items_mut().unwrap().insert(new_index, new_entry);
+            }
+        }
     }
     Ok(())
 }
