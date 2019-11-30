@@ -8,7 +8,7 @@ use std::{
 use crate::{
     block_group, calculate_crc32c,
     extents::ExtentTree,
-    os_str_to_bytes, os_string_from_bytes, read_block, read_block_to, read_u16, read_u32, read_u8,
+    read_block, read_block_to, read_u16, read_u32, read_u8,
     superblock::{OptionalFeatureFlags, OsId, RequiredFeatureFlags, RoFeatureFlags, Superblock},
     write_block, write_u16, write_u32, write_u8, Filesystem,
 };
@@ -851,6 +851,10 @@ impl Inode {
             finished: false,
         })
     }
+    pub fn lookup_direntry<D: fal::Device>(&self, filesystem: &Filesystem<D>, name: &[u8]) -> Result<Option<(usize, DirEntry)>, InodeIoError> {
+        dbg!(self);
+        Ok(self.dir_entries(filesystem)?.enumerate().find(|(_, entry)| entry.name == name))
+    }
     pub fn dir_entries<'a, D: fal::Device>(
         &'a self,
         filesystem: &'a Filesystem<D>,
@@ -890,7 +894,7 @@ impl Inode {
     pub fn remove_entry<D: fal::DeviceMut>(
         &self,
         filesystem: &mut Filesystem<D>,
-        name: &OsStr,
+        name: &[u8],
     ) -> Result<(), InodeIoError> {
         // Remove the entry by setting the length of the entry with matching name to zero, and
         // append the length of that entry to the previous (if any).
@@ -921,7 +925,7 @@ impl Inode {
         entry.total_entry_size = 0;
         entry.inode = 0;
         entry.type_indicator = Some(InodeType::File);
-        entry.name = OsString::new();
+        entry.name = vec! [];
 
         let mut bytes = [0u8; 8];
         DirEntry::serialize(&entry, &filesystem.superblock, &mut bytes);
@@ -1047,7 +1051,7 @@ impl<'a, D: fal::Device> Iterator for DirIterator<'a, D> {
 pub struct DirEntry {
     pub inode: u32,
     pub type_indicator: Option<InodeType>,
-    pub name: OsString,
+    pub name: Vec<u8>,
     pub total_entry_size: u16,
 }
 
@@ -1070,7 +1074,7 @@ impl DirEntry {
             .copied()
             .position(|byte| byte == 0)
             .unwrap_or_else(|| name_bytes.len())];
-        let name = os_string_from_bytes(name_bytes);
+        let name = name_bytes.to_owned();
 
         Self {
             inode: read_u32(bytes, 0),
@@ -1107,7 +1111,7 @@ impl DirEntry {
     }
     pub fn serialize(this: &Self, superblock: &Superblock, bytes: &mut [u8]) {
         Self::serialize_raw(this, superblock, bytes);
-        bytes[8..8 + this.name.len()].copy_from_slice(&os_str_to_bytes(&this.name));
+        bytes[8..8 + this.name.len()].copy_from_slice(&this.name);
     }
     pub fn ty<D: fal::Device>(&self, filesystem: &Filesystem<D>) -> Result<InodeType, InodeIoError> {
         Ok(match self.type_indicator {

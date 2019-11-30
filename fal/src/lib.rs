@@ -3,7 +3,6 @@ pub extern crate time;
 
 use std::{
     convert::TryFrom,
-    ffi::{OsStr, OsString},
     io::{self, prelude::*},
     mem,
     ops::{Add, Div, Mul, Rem},
@@ -189,7 +188,7 @@ pub struct FsAttributes {
 }
 
 pub struct DirectoryEntry<InodeAddr: Into<u64>> {
-    pub name: OsString,
+    pub name: Vec<u8>,
     pub filetype: FileType,
     pub inode: InodeAddr,
     pub offset: u64,
@@ -314,7 +313,7 @@ where
     // TODO: Support mounting multiple devices as one filesystem, for filesystems that support it.
     /// Mount the filesystem from a device. The path paramter is only used to change the "last
     /// mount path" for filesystems that support it.
-    fn mount(device: D, general_options: Options, fs_specific_options: Self::Options, path: &OsStr) -> Self;
+    fn mount(device: D, general_options: Options, fs_specific_options: Self::Options, path: &[u8]) -> Self;
 
     /// Unmount the filesystem.
     fn unmount(self);
@@ -346,7 +345,7 @@ where
     fn lookup_direntry(
         &mut self,
         parent: Self::InodeAddr,
-        name: &OsStr,
+        name: &[u8],
     ) -> Result<DirectoryEntry<Self::InodeAddr>>;
 
     /// Read a symbolic link.
@@ -386,7 +385,7 @@ where
     /// Remove an entry from a directory. If the hard link count of the inode pointed to by that
     /// entry reaches zero, the inode is deleted and its space is freed. However, if that inode is
     /// still open, it won't be removed until that.
-    fn unlink(&mut self, parent: Self::InodeAddr, name: &OsStr) -> Result<()>;
+    fn unlink(&mut self, parent: Self::InodeAddr, name: &[u8]) -> Result<()>;
 }
 
 #[derive(Debug)]

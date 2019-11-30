@@ -238,7 +238,7 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
     fn root_inode(&self) -> Self::InodeAddr {
         Inode::ROOT_DIR_INODE_ADDR
     }
-    fn mount(device: D, general_options: fal::Options, _apfs_specific_options: (), _path: &OsStr) -> Self {
+    fn mount(device: D, general_options: fal::Options, _apfs_specific_options: (), _path: &[u8]) -> Self {
         Filesystem::mount(device, general_options)
     }
     fn unmount(self) {}
@@ -559,11 +559,13 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
     fn lookup_direntry(
         &mut self,
         parent: Self::InodeAddr,
-        name: &OsStr,
+        name: &[u8],
     ) -> Result<fal::DirectoryEntry<Self::InodeAddr>> {
         let mut device = self.device.lock().unwrap();
 
-        let hashed_key = JDrecHashedKey::new(parent.into(), name.to_string_lossy().into_owned());
+        let name = String::from_utf8_lossy(name).into_owned();
+
+        let hashed_key = JDrecHashedKey::new(parent.into(), name.clone());
         let value = match self.volume().root_tree.get(
             &mut *device,
             &self.container_superblock,
@@ -572,7 +574,7 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         ) {
             Some(i) => i,
             None => {
-                let regular_key = JDrecKey::new(parent.into(), name.to_string_lossy().into_owned());
+                let regular_key = JDrecKey::new(parent.into(), name.clone());
                 match self.volume().root_tree.get(
                     &mut *device,
                     &self.container_superblock,
@@ -591,7 +593,7 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
             offset: 0,
             filetype: value.flags.ty.into(),
             inode: value.file_id,
-            name: name.to_owned(),
+            name: name.into_bytes(),
         })
     }
 
@@ -671,7 +673,7 @@ impl<D: fal::DeviceMut> fal::FilesystemMut<D> for Filesystem<D> {
     fn store_inode(&mut self, _inode: &Inode) -> Result<()> {
         unimplemented!()
     }
-    fn unlink(&mut self, _parent: u64, _entry: &OsStr) -> Result<()> {
+    fn unlink(&mut self, _parent: u64, _entry: &[u8]) -> Result<()> {
         unimplemented!()
     }
 }

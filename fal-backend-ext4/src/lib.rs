@@ -1,9 +1,7 @@
 use std::{
     collections::HashMap,
     convert::TryInto,
-    ffi::{OsStr, OsString},
     io::{self, SeekFrom},
-    os::unix::ffi::OsStrExt,
     sync::{
         atomic::{self, AtomicU32, AtomicU64},
         Mutex,
@@ -91,28 +89,6 @@ fn write_block<D: fal::DeviceMut>(
 ) -> io::Result<()> {
     debug_assert!(block_group::block_exists(block_address, filesystem).unwrap_or(false));
     write_block_raw(filesystem, block_address, buffer)
-}
-
-fn os_string_from_bytes(bytes: &[u8]) -> OsString {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStringExt;
-        OsString::from_vec(Vec::from(bytes))
-    }
-    #[cfg(windows)]
-    {
-        String::from_utf8_lossy(Vec::from(bytes)).into()
-    }
-}
-fn os_str_to_bytes(string: &OsStr) -> Vec<u8> {
-    #[cfg(unix)]
-    {
-        string.as_bytes().into()
-    }
-    #[cfg(windows)]
-    {
-        string.to_string_lossy().as_bytes().into()
-    }
 }
 
 pub struct Filesystem<D> {
@@ -227,7 +203,7 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
         mut device: D,
         general_options: fal::Options,
         _ext_specific_options: (),
-        path: &OsStr,
+        path_bytes: &[u8],
     ) -> Self {
         let mut superblock = Superblock::load(&mut device).unwrap();
 
@@ -239,7 +215,6 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
         superblock.mounts_left_before_fsck -= 1;
 
         if let Some(extended) = superblock.extended.as_mut() {
-            let path_bytes = path.as_bytes();
             extended.last_mount_path[..path_bytes.len()].copy_from_slice(path_bytes);
 
             // NUL
@@ -348,7 +323,7 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
     fn lookup_direntry(
         &mut self,
         parent: u32,
-        name: &OsStr,
+        name: &[u8],
     ) -> fal::Result<fal::DirectoryEntry<u32>> {
         let inode = self.load_inode(parent)?;
 
@@ -356,11 +331,7 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
             return Err(fal::Error::NotDirectory);
         }
 
-        let (offset, entry) = match inode
-            .dir_entries(self).into_fal_result("Filename couldn't be resolved")?
-            .enumerate()
-            .find(|(_, entry)| entry.name == name)
-        {
+        let (offset, entry) = match inode.lookup_direntry(self, name).into_fal_result("Filename couldn't be looked up in directory")? {
             Some(inode) => inode,
             None => return Err(fal::Error::NoEntity),
         };
@@ -420,7 +391,7 @@ impl<D: fal::DeviceMut> fal::FilesystemMut<D> for Filesystem<D> {
         }
         Inode::store(inode, self).into_fal_result("Failed to write inode")
     }
-    fn unlink(&mut self, _parent: u32, _name: &OsStr) -> fal::Result<()> {
+    fn unlink(&mut self, _parent: u32, _name: &[u8]) -> fal::Result<()> {
         unimplemented!()
     }
 }

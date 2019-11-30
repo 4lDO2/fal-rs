@@ -3,6 +3,7 @@ use std::{
     ffi::OsStr,
     fs::File,
     io,
+    os::unix::ffi::OsStrExt,
 };
 
 use fuse::{
@@ -94,7 +95,7 @@ fn fuse_attr<InodeAddr: Into<u64>>(attrs: fal::Attributes<InodeAddr>) -> fuse::F
 impl<Backend: fal::FilesystemMut<File>> FuseFilesystem<Backend> {
     pub fn init(device: File, path: &OsStr, options: fal::Options) -> io::Result<Self> {
         Ok(Self {
-            inner: Some(Backend::mount(device, options, Default::default(), path)),
+            inner: Some(Backend::mount(device, options, Default::default(), path.as_bytes())),
             options,
         })
     }
@@ -160,7 +161,7 @@ impl<Backend: fal::FilesystemMut<File>> fuse::Filesystem for FuseFilesystem<Back
             }
         };
 
-        let entry = match self.inner().lookup_direntry(parent_inode, name) {
+        let entry = match self.inner().lookup_direntry(parent_inode, name.as_bytes()) {
             Ok(entry) => entry,
             Err(err) => {
                 reply.error(err.errno());
@@ -225,7 +226,7 @@ impl<Backend: fal::FilesystemMut<File>> fuse::Filesystem for FuseFilesystem<Back
                     fuse_inode_from_fs_inode(entry.inode),
                     entry.offset as i64 + 1,
                     fuse_filetype(entry.filetype),
-                    entry.name,
+                    OsStr::from_bytes(&entry.name),
                 );
             }
             Ok(None) => (),
@@ -415,7 +416,7 @@ impl<Backend: fal::FilesystemMut<File>> fuse::Filesystem for FuseFilesystem<Back
                 return;
             }
         };
-        match self.inner().unlink(parent, name) {
+        match self.inner().unlink(parent, name.as_bytes()) {
             Ok(()) => reply.ok(),
             Err(err) => reply.error(err.errno()),
         }
