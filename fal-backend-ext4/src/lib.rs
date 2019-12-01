@@ -240,6 +240,22 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
             Err(fal::Error::BadFd)
         }
     }
+    fn write(&mut self, fh: u64, offset: u64, buffer: &[u8]) -> fal::Result<u64> {
+        if self.fhs.get(&fh).is_some() {
+            // There is no need here to check whether the buffer overflows the length, as there
+            // will be allocation in that case.
+            let mut inode = self.fhs[&fh].inode;
+
+            inode.write(self, offset, buffer).into_fal_result("File couldn't be written to")?;
+
+            // The return value is the number of bytes written. Unless this driver actually splits the
+            // writes depending on the buffer size, which I cannot find any real benefit of doing, the
+            // return value will always be the buffer length.
+            Ok(buffer.len() as u64)
+        } else {
+            Err(fal::Error::BadFd)
+        }
+    }
     fn close(&mut self, fh: u64) -> fal::Result<()> {
         // FIXME: Flush before closing.
         match self.fhs.remove(&fh) {

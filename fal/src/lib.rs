@@ -331,6 +331,9 @@ where
     /// Read bytes from a file.
     fn read(&mut self, fh: u64, offset: u64, buffer: &mut [u8]) -> Result<usize>;
 
+    /// Write bytes to a file.
+    fn write(&mut self, fh: u64, offset: u64, buffer: &[u8]) -> Result<u64>;
+
     /// Close an opened file or directory. The filesystem implementation will ensure that unread bytes get
     /// flushed before closing.
     fn close(&mut self, file: u64) -> Result<()>;
@@ -363,7 +366,7 @@ where
     // reference, but an RAII guard. Basically all RAII guards store their owner, and to replace the
     // return type with a guard, an associated type with a lifetime is required. On the other hand,
     // inodes aren't typically that slow to clone. However with generic associated types, this
-    // will likely work.
+    // problem will likely be easily solved.
     //
     // https://github.com/rust-lang/rust/issues/44265
     //

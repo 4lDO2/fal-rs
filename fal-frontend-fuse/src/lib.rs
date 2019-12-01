@@ -7,7 +7,7 @@ use std::{
 };
 
 use fuse::{
-    ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs, Request,
+    ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs, ReplyWrite, Request,
 };
 use time::Timespec;
 
@@ -364,11 +364,33 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
         // This will be the size, but possibly reduced to prevent overflow.
         let bytes_to_read = std::cmp::min(offset + u64::from(size), inode_size) - offset;
 
-        let mut buffer = vec![0u8; bytes_to_read.try_into().unwrap()];
+        let mut buffer = vec![0u8; bytes_to_read as usize];
 
         self.inner().read(fh, offset, &mut buffer).unwrap();
-
         reply.data(&buffer);
+    }
+    fn write(&mut self, _req: &Request, fuse_inode: u64, fh: u64, offset: i64, buffer: &[u8], _flags: u32, reply: ReplyWrite) {
+        let inode: Backend::InodeAddr = match fuse_inode_to_fs_inode(fuse_inode) {
+            Some(inode) => inode,
+            None => {
+                reply.error(libc::EOVERFLOW);
+                return;
+            }
+        };
+        let offset = match u64::try_from(offset) {
+            Ok(offset) => offset,
+            Err(_) => {
+                reply.error(libc::EINVAL);
+                return;
+            }
+        };
+
+        let inode_struct = self.inner().fh_inode(fh);
+
+        assert_eq!(inode.into(), inode_struct.attrs().inode.into());
+
+        let bytes_written = self.inner().write(fh, offset, buffer).unwrap();
+        reply.written(bytes_written as u32);
     }
     fn release(
         &mut self,

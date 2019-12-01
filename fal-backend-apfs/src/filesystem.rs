@@ -678,4 +678,7 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
     fn unlink(&mut self, _parent: u64, _entry: &[u8]) -> Result<()> {
         unimplemented!()
     }
+    fn write(&mut self, _fh: u64, _offset: u64, _buffer: &[u8]) -> Result<u64> {
+        unimplemented!()
+    }
 }

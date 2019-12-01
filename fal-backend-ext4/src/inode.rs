@@ -817,7 +817,7 @@ impl Inode {
         Ok(bytes_read)
     }
     pub fn write<D: fal::DeviceMut>(
-        &self,
+        &mut self,
         filesystem: &mut Filesystem<D>,
         offset: u64,
         mut buffer: &[u8],
@@ -954,7 +954,7 @@ impl Inode {
         block_group::free_inode(inode, filesystem)
     }
     pub fn remove_entry<D: fal::DeviceMut>(
-        &self,
+        &mut self,
         filesystem: &mut Filesystem<D>,
         name: &[u8],
     ) -> Result<(), InodeIoError> {
