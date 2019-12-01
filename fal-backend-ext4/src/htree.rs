@@ -51,5 +51,24 @@ pub struct HtreeTail {
     pub checksum: u32,
 }
 
+#[derive(Debug)]
 pub struct HtreeRootBlock {
+    pub header: HtreeRoot,
+    pub entries: Vec<HtreeEntry>,
+}
+
+impl HtreeRootBlock {
+    pub fn parse(bytes: &[u8]) -> Result<Self, scroll::Error> {
+        let mut offset = 0;
+        let header: HtreeRoot = bytes.gread_with(&mut offset, scroll::LE)?;
+
+        // TODO: Validate count and limit.
+
+        let entries = (1..header.count).map(|_| bytes.gread_with(&mut offset, scroll::LE)).collect::<Result<Vec<_>, _>>()?;
+
+        Ok(Self {
+            header,
+            entries,
+        })
+    }
 }

@@ -852,7 +852,17 @@ impl Inode {
         })
     }
     pub fn lookup_direntry<D: fal::Device>(&self, filesystem: &Filesystem<D>, name: &[u8]) -> Result<Option<(usize, DirEntry)>, InodeIoError> {
-        dbg!(self);
+        if self.flags().contains(InodeFlags::DIR_HASH_IDX) {
+            let mut buffer = vec! [0u8; filesystem.superblock.block_size() as usize];
+            self.read_block_to(0, filesystem, &mut buffer)?;
+
+            let root = crate::htree::HtreeRootBlock::parse(&buffer)?;
+            dbg!(root);
+
+            // BIG TODO: Implement the optional feature DIR_HASH_INDEX (HTREEs). This requires
+            // getting the md4 sum to actually be correct. I'm quite sure that I will have to
+            // implement the customized md4 algorithm used by linux.
+        }
         Ok(self.dir_entries(filesystem)?.enumerate().find(|(_, entry)| entry.name == name))
     }
     pub fn dir_entries<'a, D: fal::Device>(

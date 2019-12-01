@@ -11,6 +11,7 @@ bitflags = "1.2"
 bytemuck = "1.0"
 crc = "1"
 log = "0.4"
+md4 = "0.8"
 quick-error = "1.2"
 scroll = { version = "0.10", features = ["derive"] }
 uuid = "0.7"
