@@ -208,14 +208,12 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
         let mut root = filesystem.load_inode(2).unwrap();
         let mut tree =
             extents::ExtentTree::from_inode_blocks_field(root.checksum_seed, &root.blocks).unwrap();
+        use fal::Filesystem as _;
         extents::allocate_extent(&filesystem, &mut tree, 1337, 42);
-        use fal::FilesystemMut;
         extents::ExtentTree::to_inode_blocks_field(&tree, &mut root.blocks).unwrap();
         filesystem.store_inode(&root).unwrap();
         filesystem
     }
-
-    fn unmount(self) {}
 
     fn load_inode(&mut self, addr: Self::InodeAddr) -> fal::Result<Self::InodeStruct> {
         Inode::load(self, addr).into_fal_result("Inode failed to load")
@@ -354,12 +352,12 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
             max_fname_len: 255,
         }
     }
-}
 
-impl<D: fal::DeviceMut> fal::FilesystemMut<D> for Filesystem<D> {
     fn unmount(mut self) {
-        self.update_superblock();
-        self.superblock.store(&mut *self.disk.inner()).unwrap()
+        if !self.general_options.immutable {
+            self.update_superblock();
+            self.superblock.store(&mut *self.disk.inner()).unwrap()
+        }
     }
     fn store_inode(&mut self, inode: &Inode) -> fal::Result<()> {
         if self.general_options.immutable {

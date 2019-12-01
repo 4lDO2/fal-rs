@@ -293,7 +293,7 @@ impl Default for Options {
 }
 
 /// An abstract filesystem. Typically implemented by the backend.
-pub trait Filesystem<D: Device>
+pub trait Filesystem<D: DeviceMut>
 where
     Self: Sized,
 {
@@ -375,13 +375,6 @@ where
 
     /// Get the statvfs of the filesystem.
     fn filesystem_attrs(&self) -> FsAttributes;
-}
-
-pub trait FilesystemMut<D: DeviceMut>: Filesystem<D>
-where
-    Self: Sized,
-{
-    fn unmount(self) {}
 
     /// Write the inode metadata to disk.
     fn store_inode(&mut self, inode: &Self::InodeStruct) -> Result<()>;

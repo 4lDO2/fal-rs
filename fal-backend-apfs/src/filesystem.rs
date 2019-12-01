@@ -230,7 +230,7 @@ impl Volume {
 }
 
 type Result<T> = fal::Result<T>;
-impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
+impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
     type InodeAddr = u64;
     type InodeStruct = Inode;
     type Options = ();
@@ -672,9 +672,6 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
             total_blocks: device.block_count,
         }
     }
-}
-
-impl<D: fal::DeviceMut> fal::FilesystemMut<D> for Filesystem<D> {
     fn store_inode(&mut self, _inode: &Inode) -> Result<()> {
         unimplemented!()
     }

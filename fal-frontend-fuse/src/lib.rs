@@ -54,7 +54,7 @@ pub fn parse_fs_options(options_str: &'_ str) -> Result<fal::Options, OptionsPar
     Ok(options)
 }
 
-pub struct FuseFilesystem<Backend: fal::FilesystemMut<File>> {
+pub struct FuseFilesystem<Backend: fal::Filesystem<File>> {
     inner: Option<Backend>,
     options: fal::Options,
 }
@@ -92,7 +92,7 @@ fn fuse_attr<InodeAddr: Into<u64>>(attrs: fal::Attributes<InodeAddr>) -> fuse::F
     }
 }
 
-impl<Backend: fal::FilesystemMut<File>> FuseFilesystem<Backend> {
+impl<Backend: fal::Filesystem<File>> FuseFilesystem<Backend> {
     pub fn init(device: File, path: &OsStr, options: fal::Options) -> io::Result<Self> {
         Ok(Self {
             inner: Some(Backend::mount(
@@ -128,12 +128,12 @@ fn fuse_inode_from_fs_inode<InodeAddr: Into<u64> + Copy>(fs_inode: InodeAddr) ->
     }
 }
 
-impl<Backend: fal::FilesystemMut<File>> fuse::Filesystem for FuseFilesystem<Backend> {
+impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend> {
     fn init(&mut self, _req: &Request) -> Result<(), libc::c_int> {
         Ok(())
     }
     fn destroy(&mut self, _req: &Request) {
-        fal::FilesystemMut::unmount(self.inner.take().unwrap())
+        fal::Filesystem::unmount(self.inner.take().unwrap())
     }
 
     fn getattr(&mut self, _req: &Request, fuse_inode: u64, reply: ReplyAttr) {
