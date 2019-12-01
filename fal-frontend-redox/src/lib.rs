@@ -1,5 +1,6 @@
 #[cfg(target_os = "redox")]
 use {
+    fal::{Filesystem, Inode},
     std::{
         convert::{TryFrom, TryInto},
         ffi::{OsStr, OsString},
@@ -8,10 +9,8 @@ use {
         path::{Component, Components, Path},
         sync::{Mutex, MutexGuard},
     },
-    fal::{Filesystem, Inode},
     syscall::SchemeMut,
 };
-
 
 #[derive(Debug)]
 pub struct RedoxFilesystem<Backend> {
@@ -50,7 +49,11 @@ impl<Backend: fal::FilesystemMut<File>> RedoxFilesystem<Backend> {
         let root = self.inner().root_inode();
         self.lookup_dir_raw(path.components(), root)
     }
-    pub fn change_inode<F: FnMut(&mut Backend::InodeStruct)>(&mut self, fh: u64, mut handler: F) -> fal::Result<()> {
+    pub fn change_inode<F: FnMut(&mut Backend::InodeStruct)>(
+        &mut self,
+        fh: u64,
+        mut handler: F,
+    ) -> fal::Result<()> {
         let mut inode = self.inner.fh_inode(fh);
         handler(&mut inode);
         self.inner.store_inode(&inode)

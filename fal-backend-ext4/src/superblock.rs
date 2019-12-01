@@ -246,8 +246,10 @@ impl Superblock {
         let this = Self::parse(&block_bytes)?;
 
         if this.has_metadata_checksums() {
-            if this.extended.as_ref().unwrap().superblock_checksum != Self::calculate_crc32c(&block_bytes) {
-                return Err(LoadSuperblockError::ChecksumMismatch)
+            if this.extended.as_ref().unwrap().superblock_checksum
+                != Self::calculate_crc32c(&block_bytes)
+            {
+                return Err(LoadSuperblockError::ChecksumMismatch);
             }
         }
         Ok(this)
@@ -259,12 +261,11 @@ impl Superblock {
         let base: SuperblockBase = block_bytes.pread_with(0, scroll::LE)?;
         let extended = if base.major_version >= 1 {
             Some(block_bytes.pread_with(84, scroll::LE)?)
-        } else { None };
+        } else {
+            None
+        };
 
-        Ok(Self {
-            base,
-            extended,
-        })
+        Ok(Self { base, extended })
     }
 
     pub fn incompat_features(&self) -> RequiredFeatureFlags {
@@ -286,7 +287,13 @@ impl Superblock {
         1024 << self.log_fragment_size
     }
     pub fn block_count(&self) -> u64 {
-        u64::from(self.block_count) | (u64::from(self.extended.as_ref().map(|ext| ext.block_count_hi).unwrap_or(0)) << 32)
+        u64::from(self.block_count)
+            | (u64::from(
+                self.extended
+                    .as_ref()
+                    .map(|ext| ext.block_count_hi)
+                    .unwrap_or(0),
+            ) << 32)
     }
     pub fn ro_compat_features(&self) -> RoFeatureFlags {
         self.extended
@@ -295,13 +302,21 @@ impl Superblock {
             .unwrap_or_else(RoFeatureFlags::empty)
     }
     pub fn uuid(&self) -> [u8; 16] {
-        self.extended.as_ref().map(|ext| ext.fs_id).unwrap_or([0u8; 16])
+        self.extended
+            .as_ref()
+            .map(|ext| ext.fs_id)
+            .unwrap_or([0u8; 16])
     }
     pub fn checksum_seed(&self) -> Option<u32> {
-        if self.incompat_features().contains(RequiredFeatureFlags::CSUM_SEED) {
+        if self
+            .incompat_features()
+            .contains(RequiredFeatureFlags::CSUM_SEED)
+        {
             self.extended.as_ref().map(|ext| ext.checksum_seed)
         } else {
-            self.extended.as_ref().map(|ext| calculate_crc32c(!0, &ext.fs_id))
+            self.extended
+                .as_ref()
+                .map(|ext| calculate_crc32c(!0, &ext.fs_id))
         }
     }
 
@@ -340,7 +355,8 @@ impl Superblock {
             .unwrap_or(128)
     }
     pub fn has_metadata_checksums(&self) -> bool {
-        self.ro_compat_features().contains(RoFeatureFlags::METADATA_CSUM)
+        self.ro_compat_features()
+            .contains(RoFeatureFlags::METADATA_CSUM)
     }
     pub fn is_64bit(&self) -> bool {
         self.incompat_features()
@@ -360,7 +376,13 @@ impl Superblock {
         self.inodes_per_group
     }
     pub fn free_block_count(&self) -> u64 {
-        u64::from(self.unalloc_block_count) | (u64::from(self.extended.as_ref().map(|ext| ext.free_block_count_hi).unwrap_or(0)) << 32)
+        u64::from(self.unalloc_block_count)
+            | (u64::from(
+                self.extended
+                    .as_ref()
+                    .map(|ext| ext.free_block_count_hi)
+                    .unwrap_or(0),
+            ) << 32)
     }
     pub fn free_inode_count(&self) -> u32 {
         self.unalloc_inode_count

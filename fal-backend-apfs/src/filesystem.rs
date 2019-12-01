@@ -238,7 +238,12 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
     fn root_inode(&self) -> Self::InodeAddr {
         Inode::ROOT_DIR_INODE_ADDR
     }
-    fn mount(device: D, general_options: fal::Options, _apfs_specific_options: (), _path: &[u8]) -> Self {
+    fn mount(
+        device: D,
+        general_options: fal::Options,
+        _apfs_specific_options: (),
+        _path: &[u8],
+    ) -> Self {
         Filesystem::mount(device, general_options)
     }
     fn unmount(self) {}

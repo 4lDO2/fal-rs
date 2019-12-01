@@ -22,7 +22,6 @@ pub struct HtreeRoot {
     pub limit: u16,
     pub count: u16,
     pub block: u32,
-
     // the actual entries come after
 }
 
@@ -35,7 +34,6 @@ pub struct HtreeNode {
     pub max_entry_count: u16,
     pub entry_count: u16,
     pub block: u32,
-
     // the actual entries come after
 }
 
@@ -64,11 +62,10 @@ impl HtreeRootBlock {
 
         // TODO: Validate count and limit.
 
-        let entries = (1..header.count).map(|_| bytes.gread_with(&mut offset, scroll::LE)).collect::<Result<Vec<_>, _>>()?;
+        let entries = (1..header.count)
+            .map(|_| bytes.gread_with(&mut offset, scroll::LE))
+            .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(Self {
-            header,
-            entries,
-        })
+        Ok(Self { header, entries })
     }
 }

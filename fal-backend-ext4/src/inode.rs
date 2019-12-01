@@ -1,16 +1,16 @@
 use std::{
     borrow::Cow,
     convert::{TryFrom, TryInto},
-    ffi::{OsStr, OsString},
     fmt, io, mem,
 };
 
 use crate::{
-    block_group, calculate_crc32c,
+    allocate_block_bytes, block_group, calculate_crc32c,
+    disk::BlockKind,
     extents::ExtentTree,
-    read_block, read_block_to, read_u16, read_u32, read_u8,
+    read_u16, read_u32, read_u8,
     superblock::{OptionalFeatureFlags, OsId, RequiredFeatureFlags, RoFeatureFlags, Superblock},
-    write_block, write_u16, write_u32, write_u8, Filesystem,
+    write_u16, write_u32, write_u8, Filesystem,
 };
 
 use bitflags::bitflags;
@@ -210,9 +210,7 @@ impl InodeRaw {
         Ok(Self {
             base: bytes.pread_with(0, scroll::LE)?,
             ext: if bytes.len() >= EXTENDED_INODE_SIZE as usize {
-                Some(
-                    bytes.pread_with(BASE_INODE_SIZE as usize, scroll::LE)?
-                )
+                Some(bytes.pread_with(BASE_INODE_SIZE as usize, scroll::LE)?)
             } else {
                 None
             },
@@ -265,13 +263,17 @@ impl InodeRaw {
         }
     }
     pub fn checksum(&self, os_id: OsId) -> Option<u32> {
-        if os_id != OsId::Linux { return None }
+        if os_id != OsId::Linux {
+            return None;
+        }
         let lo = fal::read_u16(&self.os_specific_2, 8);
         let hi = self.ext.as_ref().map(|ext| ext.checksum_hi).unwrap_or(0);
         Some(u32::from(lo) | (u32::from(hi) << 16))
     }
     pub fn set_checksum(&mut self, checksum: u32, os_id: OsId) {
-        if os_id != OsId::Linux { return }
+        if os_id != OsId::Linux {
+            return;
+        }
         fal::write_u16(&mut self.os_specific_2, 8, checksum as u16);
         if let Some(ref mut ext) = self.ext {
             ext.checksum_hi = (checksum >> 16) as u16;
@@ -471,14 +473,16 @@ impl Inode {
             usize::try_from(inode_index_in_group % max_inodes_in_block).unwrap();
         let inode_size = usize::from(inode_size);
 
-        let containing_block = read_block(filesystem, containing_block_index)?;
+        let mut containing_block = allocate_block_bytes(&filesystem.superblock);
+        filesystem.disk.read_block(
+            filesystem,
+            BlockKind::Metadata,
+            containing_block_index,
+            &mut containing_block,
+        )?;
         let inode_bytes = &containing_block
             [inode_index_in_block * inode_size..inode_index_in_block * inode_size + inode_size];
-        Ok(Self::parse(
-            &filesystem.superblock,
-            inode_address,
-            inode_bytes,
-        ).unwrap())
+        Ok(Self::parse(&filesystem.superblock, inode_address, inode_bytes).unwrap())
     }
     pub fn store<D: fal::DeviceMut>(
         this: &Self,
@@ -513,23 +517,33 @@ impl Inode {
             usize::try_from(inode_index_in_group % max_inodes_in_block).unwrap();
         let inode_size = usize::from(inode_size);
 
-        let mut containing_block = read_block(filesystem, containing_block_index)?;
+        let mut containing_block = allocate_block_bytes(&filesystem.superblock);
+        filesystem.disk.read_block(
+            filesystem,
+            BlockKind::Metadata,
+            containing_block_index,
+            &mut containing_block,
+        )?;
         let inode_bytes = &mut containing_block
             [inode_index_in_block * inode_size..inode_index_in_block * inode_size + inode_size];
 
         Self::serialize(this, &filesystem.superblock, inode_bytes)?;
 
-        Ok(write_block(
+        filesystem.disk.write_block(
             filesystem,
+            BlockKind::Metadata,
             containing_block_index,
             &containing_block,
-        )?)
+        )?;
+
+        Ok(())
     }
     pub fn parse(superblock: &Superblock, addr: u32, bytes: &[u8]) -> Result<Self, scroll::Error> {
         let raw = InodeRaw::parse(bytes)?;
         let size = raw.size(superblock);
 
-        let mut checksum_seed = calculate_crc32c(superblock.checksum_seed().unwrap(), &addr.to_le_bytes());
+        let mut checksum_seed =
+            calculate_crc32c(superblock.checksum_seed().unwrap(), &addr.to_le_bytes());
         checksum_seed = calculate_crc32c(checksum_seed, &raw.generation_lo.to_le_bytes());
 
         let this = Self {
@@ -542,15 +556,28 @@ impl Inode {
         };
         if let Some(checksum) = this.checksum(superblock.os_id()) {
             if InodeRaw::calculate_crc32c(&bytes, checksum_seed) != checksum {
-                return Err(scroll::Error::BadInput { size: 4, msg: "inode checksum mismatch" })
+                return Err(scroll::Error::BadInput {
+                    size: 4,
+                    msg: "inode checksum mismatch",
+                });
             }
         }
-        if this.flags().contains(InodeFlags::EXTENTS | InodeFlags::INLINE_DATA) {
-            return Err(scroll::Error::BadInput { size: 4, msg: "inode uses both extents and inline data" });
+        if this
+            .flags()
+            .contains(InodeFlags::EXTENTS | InodeFlags::INLINE_DATA)
+        {
+            return Err(scroll::Error::BadInput {
+                size: 4,
+                msg: "inode uses both extents and inline data",
+            });
         }
         Ok(this)
     }
-    pub fn serialize(this: &Inode, superblock: &Superblock, buffer: &mut [u8]) -> Result<(), scroll::Error> {
+    pub fn serialize(
+        this: &Inode,
+        superblock: &Superblock,
+        buffer: &mut [u8],
+    ) -> Result<(), scroll::Error> {
         InodeRaw::serialize(&this.raw, buffer)?;
         let checksum = InodeRaw::calculate_crc32c(buffer, this.checksum_seed);
         if superblock.os_id() == OsId::Linux {
@@ -573,7 +600,14 @@ impl Inode {
         singly_baddr: u32,
         rel_baddr: u32,
     ) -> io::Result<u32> {
-        let singly_indirect_block_bytes = read_block(filesystem, singly_baddr.try_into().unwrap())?;
+        let mut singly_indirect_block_bytes = allocate_block_bytes(&filesystem.superblock);
+        // TODO: Metadata?
+        filesystem.disk.read_block(
+            filesystem,
+            BlockKind::Metadata,
+            u64::from(singly_baddr),
+            &mut singly_indirect_block_bytes,
+        )?;
         let index = rel_baddr as usize - Self::DIRECT_PTR_COUNT;
 
         Ok(read_u32(
@@ -588,7 +622,13 @@ impl Inode {
     ) -> io::Result<u32> {
         let entry_count = Self::entry_count(filesystem.superblock.block_size());
 
-        let doubly_indirect_block_bytes = read_block(filesystem, doubly_baddr.try_into().unwrap())?;
+        let mut doubly_indirect_block_bytes = allocate_block_bytes(&filesystem.superblock);
+        filesystem.disk.read_block(
+            filesystem,
+            BlockKind::Metadata,
+            u64::from(doubly_baddr),
+            &mut doubly_indirect_block_bytes,
+        )?;
         let index = (rel_baddr as usize - Self::DIRECT_PTR_COUNT - entry_count) / entry_count;
 
         let singly = read_u32(&doubly_indirect_block_bytes, index * mem::size_of::<u32>());
@@ -603,7 +643,13 @@ impl Inode {
     ) -> io::Result<u32> {
         let entry_count = Self::entry_count(filesystem.superblock.block_size());
 
-        let triply_indirect_block_bytes = read_block(filesystem, triply_baddr.try_into().unwrap())?;
+        let mut triply_indirect_block_bytes = allocate_block_bytes(&filesystem.superblock);
+        filesystem.disk.read_block(
+            filesystem,
+            BlockKind::Metadata,
+            u64::from(triply_baddr),
+            &mut triply_indirect_block_bytes,
+        )?;
         let index =
             (rel_baddr as usize - Self::DIRECT_PTR_COUNT - entry_count - entry_count * entry_count)
                 / (entry_count * entry_count);
@@ -649,7 +695,7 @@ impl Inode {
             panic!("Read exceeding maximum ext2/3 file size.");
         }))
     }
-    pub fn read_block_to<D: fal::Device>(
+    pub fn read_block<D: fal::Device>(
         &self,
         rel_baddr: u32,
         filesystem: &Filesystem<D>,
@@ -659,13 +705,15 @@ impl Inode {
             return Err(fal::Error::Overflow.into());
         }
         let abs_baddr = self.absolute_baddr(filesystem, rel_baddr)?;
-        Ok(read_block_to(
+        filesystem.disk.read_block(
             filesystem,
+            BlockKind::Data,
             abs_baddr.try_into().unwrap(),
             buffer,
-        )?)
+        )?;
+        Ok(())
     }
-    pub fn write_content_block<D: fal::DeviceMut>(
+    pub fn write_block<D: fal::DeviceMut>(
         &self,
         rel_baddr: u32,
         filesystem: &Filesystem<D>,
@@ -675,11 +723,13 @@ impl Inode {
             return Err(fal::Error::Overflow.into());
         }
         let abs_baddr = self.absolute_baddr(filesystem, rel_baddr)?;
-        Ok(write_block(
+        filesystem.disk.write_block(
             filesystem,
+            BlockKind::Data,
             abs_baddr.try_into().unwrap(),
             buffer,
-        )?)
+        )?;
+        Ok(())
     }
     pub fn read<D: fal::Device>(
         &self,
@@ -692,7 +742,7 @@ impl Inode {
                 panic!("Inode flag check bypassed")
             }
             if self.size() > 60 {
-                return Err(InodeIoError::InodeTooLargeForInline(self.size()))
+                return Err(InodeIoError::InodeTooLargeForInline(self.size()));
             }
             if offset >= self.size() {
                 return Ok(0);
@@ -714,7 +764,7 @@ impl Inode {
                 .into_boxed_slice();
 
         if off_from_rel_block != 0 {
-            self.read_block_to(
+            self.read_block(
                 rel_baddr_start.try_into().unwrap(),
                 filesystem,
                 &mut block_bytes,
@@ -748,7 +798,7 @@ impl Inode {
         let mut current_rel_baddr = u32::try_from(rel_baddr_start).unwrap();
 
         while buffer.len() >= usize::try_from(filesystem.superblock.block_size()).unwrap() {
-            self.read_block_to(current_rel_baddr, filesystem, &mut block_bytes)?;
+            self.read_block(current_rel_baddr, filesystem, &mut block_bytes)?;
 
             buffer[..usize::try_from(filesystem.superblock.block_size()).unwrap()]
                 .copy_from_slice(&block_bytes);
@@ -760,7 +810,7 @@ impl Inode {
         }
 
         if !buffer.is_empty() {
-            self.read_block_to(current_rel_baddr, filesystem, &mut block_bytes)?;
+            self.read_block(current_rel_baddr, filesystem, &mut block_bytes)?;
             let buffer_len = buffer.len();
             buffer.copy_from_slice(&block_bytes[..buffer_len]);
             bytes_read += buffer_len;
@@ -777,11 +827,12 @@ impl Inode {
         let off_from_rel_block = offset % u64::from(filesystem.superblock.block_size());
         let rel_baddr_start = offset / u64::from(filesystem.superblock.block_size());
 
-        let mut block_bytes = vec![0u8; usize::try_from(filesystem.superblock.block_size()).unwrap()]
-            .into_boxed_slice();
+        let mut block_bytes =
+            vec![0u8; usize::try_from(filesystem.superblock.block_size()).unwrap()]
+                .into_boxed_slice();
 
         if off_from_rel_block != 0 {
-            self.read_block_to(
+            self.read_block(
                 rel_baddr_start.try_into().unwrap(),
                 filesystem,
                 &mut block_bytes,
@@ -796,7 +847,7 @@ impl Inode {
             block_bytes[off_from_rel_block_usize..off_from_rel_block_usize + end]
                 .copy_from_slice(&buffer[..end]);
 
-            self.write_content_block(
+            self.write_block(
                 rel_baddr_start.try_into().unwrap(),
                 filesystem,
                 &block_bytes,
@@ -816,22 +867,20 @@ impl Inode {
         let mut current_rel_baddr = u32::try_from(rel_baddr_start).unwrap();
 
         while buffer.len() >= usize::try_from(filesystem.superblock.block_size()).unwrap() {
-            self.read_block_to(current_rel_baddr, filesystem, &mut block_bytes)?;
-
             block_bytes.copy_from_slice(
                 &buffer[..usize::try_from(filesystem.superblock.block_size()).unwrap()],
             );
 
-            self.write_content_block(current_rel_baddr, filesystem, &block_bytes)?;
+            self.write_block(current_rel_baddr, filesystem, &block_bytes)?;
 
             buffer = &buffer[usize::try_from(filesystem.superblock.block_size()).unwrap()..];
             current_rel_baddr += 1;
         }
 
         if !buffer.is_empty() {
-            self.read_block_to(current_rel_baddr, filesystem, &mut block_bytes)?;
+            self.read_block(current_rel_baddr, filesystem, &mut block_bytes)?;
             block_bytes[..buffer.len()].copy_from_slice(&buffer);
-            self.write_content_block(current_rel_baddr, filesystem, &block_bytes)?;
+            self.write_block(current_rel_baddr, filesystem, &block_bytes)?;
         }
 
         Ok(())
@@ -841,7 +890,7 @@ impl Inode {
         filesystem: &'a Filesystem<D>,
     ) -> Result<RawDirIterator<'a, D>, InodeIoError> {
         if self.ty() != InodeType::Dir {
-            return Err(fal::Error::NotDirectory.into())
+            return Err(fal::Error::NotDirectory.into());
         }
         Ok(RawDirIterator {
             filesystem,
@@ -851,10 +900,14 @@ impl Inode {
             finished: false,
         })
     }
-    pub fn lookup_direntry<D: fal::Device>(&self, filesystem: &Filesystem<D>, name: &[u8]) -> Result<Option<(usize, DirEntry)>, InodeIoError> {
+    pub fn lookup_direntry<D: fal::Device>(
+        &self,
+        filesystem: &Filesystem<D>,
+        name: &[u8],
+    ) -> Result<Option<(usize, DirEntry)>, InodeIoError> {
         if self.flags().contains(InodeFlags::DIR_HASH_IDX) {
-            let mut buffer = vec! [0u8; filesystem.superblock.block_size() as usize];
-            self.read_block_to(0, filesystem, &mut buffer)?;
+            let mut buffer = vec![0u8; filesystem.superblock.block_size() as usize];
+            self.read_block(0, filesystem, &mut buffer)?;
 
             let root = crate::htree::HtreeRootBlock::parse(&buffer)?;
             dbg!(root);
@@ -863,7 +916,10 @@ impl Inode {
             // getting the md4 sum to actually be correct. I'm quite sure that I will have to
             // implement the customized md4 algorithm used by linux.
         }
-        Ok(self.dir_entries(filesystem)?.enumerate().find(|(_, entry)| entry.name == name))
+        Ok(self
+            .dir_entries(filesystem)?
+            .enumerate()
+            .find(|(_, entry)| entry.name == name))
     }
     pub fn dir_entries<'a, D: fal::Device>(
         &'a self,
@@ -935,7 +991,7 @@ impl Inode {
         entry.total_entry_size = 0;
         entry.inode = 0;
         entry.type_indicator = Some(InodeType::File);
-        entry.name = vec! [];
+        entry.name = vec![];
 
         let mut bytes = [0u8; 8];
         DirEntry::serialize(&entry, &filesystem.superblock, &mut bytes);
@@ -1088,14 +1144,12 @@ impl DirEntry {
 
         Self {
             inode: read_u32(bytes, 0),
-            type_indicator:
-                if superblock
-                    .compat_features()
-                    .contains(OptionalFeatureFlags::INODE_EXTENDED_ATTRS)
-                {
-                    InodeType::from_direntry_ty_indicator(read_u8(bytes, 7))
-                }
-            else {
+            type_indicator: if superblock
+                .compat_features()
+                .contains(OptionalFeatureFlags::INODE_EXTENDED_ATTRS)
+            {
+                InodeType::from_direntry_ty_indicator(read_u8(bytes, 7))
+            } else {
                 None
             },
             name,
@@ -1107,7 +1161,9 @@ impl DirEntry {
         write_u16(bytes, 4, this.total_entry_size);
         write_u8(bytes, 6, this.name.len() as u8);
 
-        let use_ty_indicator = superblock.incompat_features().contains(RequiredFeatureFlags::DIR_TYPE);
+        let use_ty_indicator = superblock
+            .incompat_features()
+            .contains(RequiredFeatureFlags::DIR_TYPE);
 
         if use_ty_indicator {
             write_u8(
@@ -1123,7 +1179,10 @@ impl DirEntry {
         Self::serialize_raw(this, superblock, bytes);
         bytes[8..8 + this.name.len()].copy_from_slice(&this.name);
     }
-    pub fn ty<D: fal::Device>(&self, filesystem: &Filesystem<D>) -> Result<InodeType, InodeIoError> {
+    pub fn ty<D: fal::Device>(
+        &self,
+        filesystem: &Filesystem<D>,
+    ) -> Result<InodeType, InodeIoError> {
         Ok(match self.type_indicator {
             Some(ty) => ty,
             None => Inode::load(filesystem, self.inode)?.ty(),

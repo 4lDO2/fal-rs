@@ -1,11 +1,6 @@
 use std::{
     collections::HashMap,
-    convert::TryInto,
-    io::{self, SeekFrom},
-    sync::{
-        atomic::{self, AtomicU32, AtomicU64},
-        Mutex,
-    },
+    sync::atomic::{self, AtomicU32, AtomicU64},
     time::SystemTime,
 };
 
@@ -13,26 +8,34 @@ use crc::crc32;
 use fal::{time::Timespec, Filesystem as _};
 
 pub mod block_group;
+pub mod disk;
 pub mod extents;
+pub mod htree;
 pub mod inode;
 pub mod journal;
-pub mod htree;
 pub mod superblock;
 
 pub use inode::Inode;
 pub use journal::Journal;
 pub use superblock::Superblock;
 
+use disk::Disk;
 use inode::InodeIoError;
+
+pub fn allocate_block_bytes(superblock: &Superblock) -> Box<[u8]> {
+    vec![0u8; superblock.block_size() as usize].into_boxed_slice()
+}
 
 trait ConvertToFalError<T> {
     fn into_fal_result(self, warning_start: &'static str) -> fal::Result<T>;
 }
 impl<T> ConvertToFalError<T> for Result<T, InodeIoError> {
     fn into_fal_result(self, warning_start: &'static str) -> fal::Result<T> {
-        self.map_err(|err| err.into_fal_error_or_with(|err| {
-            log::warn!("{}, because of an internal error: {}", warning_start, err)
-        }))
+        self.map_err(|err| {
+            err.into_fal_error_or_with(|err| {
+                log::warn!("{}, because of an internal error: {}", warning_start, err)
+            })
+        })
     }
 }
 
@@ -41,59 +44,9 @@ pub use fal::{
     write_uuid,
 };
 
-fn read_block_to<D: fal::Device>(
-    filesystem: &Filesystem<D>,
-    block_address: u64,
-    buffer: &mut [u8],
-) -> io::Result<()> {
-    debug_assert!(block_group::block_exists(block_address, filesystem).unwrap_or(false));
-    read_block_to_raw(filesystem, block_address, buffer)
-}
-fn read_block_to_raw<D: fal::Device>(
-    filesystem: &Filesystem<D>,
-    block_address: u64,
-    buffer: &mut [u8],
-) -> io::Result<()> {
-    let mut guard = filesystem.device.lock().unwrap();
-    guard.seek(SeekFrom::Start(
-        block_address * u64::from(filesystem.superblock.block_size()),
-    ))?;
-    guard.read_exact(buffer)?;
-    Ok(())
-}
-fn read_block<D: fal::Device>(
-    filesystem: &Filesystem<D>,
-    block_address: u64,
-) -> io::Result<Box<[u8]>> {
-    let mut vector = vec![0; filesystem.superblock.block_size().try_into().unwrap()];
-    read_block_to(filesystem, block_address, &mut vector)?;
-    Ok(vector.into_boxed_slice())
-}
-fn write_block_raw<D: fal::DeviceMut>(
-    filesystem: &Filesystem<D>,
-    block_address: u64,
-    buffer: &[u8],
-) -> io::Result<()> {
-    filesystem.info.kbs_written.fetch_add(buffer.len() as u64, atomic::Ordering::Acquire);
-    let mut guard = filesystem.device.lock().unwrap();
-    guard.seek(SeekFrom::Start(
-        block_address as u64 * u64::from(filesystem.superblock.block_size()),
-    ))?;
-    guard.write_all(buffer)?;
-    Ok(())
-}
-fn write_block<D: fal::DeviceMut>(
-    filesystem: &Filesystem<D>,
-    block_address: u64,
-    buffer: &[u8],
-) -> io::Result<()> {
-    debug_assert!(block_group::block_exists(block_address, filesystem).unwrap_or(false));
-    write_block_raw(filesystem, block_address, buffer)
-}
-
 pub struct Filesystem<D> {
     pub superblock: Superblock,
-    pub device: Mutex<D>,
+    pub disk: Disk<D>,
     pub(crate) fhs: HashMap<u64, FileHandle>,
     pub(crate) last_fh: u64,
     pub general_options: fal::Options,
@@ -131,9 +84,12 @@ impl<D: fal::DeviceMut> Filesystem<D> {
         Ok(fh.fh)
     }
     fn update_superblock(&mut self) {
-        self.superblock.set_free_block_count(self.info.free_blocks.load(atomic::Ordering::Release));
-        self.superblock.set_free_inode_count(self.info.free_inodes.load(atomic::Ordering::Release));
-        self.superblock.set_kbs_written(self.info.kbs_written.load(atomic::Ordering::Release));
+        self.superblock
+            .set_free_block_count(self.info.free_blocks.load(atomic::Ordering::Release));
+        self.superblock
+            .set_free_inode_count(self.info.free_inodes.load(atomic::Ordering::Release));
+        self.superblock
+            .set_kbs_written(self.info.kbs_written.load(atomic::Ordering::Release));
     }
 }
 
@@ -230,7 +186,7 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
         // TODO: Check for feature flags here.
 
         let mut filesystem = Self {
-            device: Mutex::new(device),
+            disk: Disk::new(device),
             fhs: HashMap::new(),
             last_fh: 0,
             general_options,
@@ -250,7 +206,8 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
             }
         };
         let mut root = filesystem.load_inode(2).unwrap();
-        let mut tree = extents::ExtentTree::from_inode_blocks_field(root.checksum_seed, &root.blocks).unwrap();
+        let mut tree =
+            extents::ExtentTree::from_inode_blocks_field(root.checksum_seed, &root.blocks).unwrap();
         extents::allocate_extent(&filesystem, &mut tree, 1337, 42);
         use fal::FilesystemMut;
         extents::ExtentTree::to_inode_blocks_field(&tree, &mut root.blocks).unwrap();
@@ -270,7 +227,9 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
         if self.fhs.get(&fh).is_some() {
             let inode: inode::Inode = self.fhs[&fh].inode;
 
-            let bytes_read = inode.read(self, offset, buffer).into_fal_result("File couldn't be read")?;
+            let bytes_read = inode
+                .read(self, offset, buffer)
+                .into_fal_result("File couldn't be read")?;
 
             self.fhs.get_mut(&fh).unwrap().offset += bytes_read as u64;
 
@@ -304,13 +263,19 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
         }
 
         Ok(
-            match handle.inode.dir_entries(self).into_fal_result("Directory couldn't be read")?
+            match handle
+                .inode
+                .dir_entries(self)
+                .into_fal_result("Directory couldn't be read")?
                 .enumerate()
                 .nth(self.fhs[&fh].offset as usize + offset as usize)
             {
                 Some((offset, entry)) => Some({
                     fal::DirectoryEntry {
-                        filetype: entry.ty(self).into_fal_result("File type couldn't be detected")?.into(),
+                        filetype: entry
+                            .ty(self)
+                            .into_fal_result("File type couldn't be detected")?
+                            .into(),
                         name: entry.name,
                         inode: entry.inode,
                         offset: offset as u64,
@@ -331,13 +296,19 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
             return Err(fal::Error::NotDirectory);
         }
 
-        let (offset, entry) = match inode.lookup_direntry(self, name).into_fal_result("Filename couldn't be looked up in directory")? {
+        let (offset, entry) = match inode
+            .lookup_direntry(self, name)
+            .into_fal_result("Filename couldn't be looked up in directory")?
+        {
             Some(inode) => inode,
             None => return Err(fal::Error::NoEntity),
         };
 
         Ok(fal::DirectoryEntry {
-            filetype: entry.ty(self).into_fal_result("File type couldn't be detected")?.into(),
+            filetype: entry
+                .ty(self)
+                .into_fal_result("File type couldn't be detected")?
+                .into(),
             name: entry.name,
             inode: entry.inode,
             offset: offset as u64,
@@ -350,8 +321,11 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
             return Err(fal::Error::Invalid);
         }
 
-        Ok(inode.symlink_target(self).into_fal_result("Failed to resolve symlink")?
-            .into_owned().into_boxed_slice())
+        Ok(inode
+            .symlink_target(self)
+            .into_fal_result("Failed to resolve symlink")?
+            .into_owned()
+            .into_boxed_slice())
     }
 
     fn fh_offset(&self, fh: u64) -> u64 {
@@ -381,9 +355,7 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
 impl<D: fal::DeviceMut> fal::FilesystemMut<D> for Filesystem<D> {
     fn unmount(mut self) {
         self.update_superblock();
-        self.superblock
-            .store(&mut *self.device.lock().unwrap())
-            .unwrap()
+        self.superblock.store(&mut *self.disk.inner()).unwrap()
     }
     fn store_inode(&mut self, inode: &Inode) -> fal::Result<()> {
         if self.general_options.immutable {

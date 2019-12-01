@@ -95,7 +95,12 @@ fn fuse_attr<InodeAddr: Into<u64>>(attrs: fal::Attributes<InodeAddr>) -> fuse::F
 impl<Backend: fal::FilesystemMut<File>> FuseFilesystem<Backend> {
     pub fn init(device: File, path: &OsStr, options: fal::Options) -> io::Result<Self> {
         Ok(Self {
-            inner: Some(Backend::mount(device, options, Default::default(), path.as_bytes())),
+            inner: Some(Backend::mount(
+                device,
+                options,
+                Default::default(),
+                path.as_bytes(),
+            )),
             options,
         })
     }

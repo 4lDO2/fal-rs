@@ -1,5 +1,6 @@
 #[cfg(target_os = "redox")]
 use {
+    fal_frontend_redox::RedoxFilesystem,
     std::{
         ffi::OsStr,
         fs::{File, OpenOptions},
@@ -7,7 +8,6 @@ use {
         mem,
     },
     syscall::{data::Packet, SchemeMut},
-    fal_frontend_redox::RedoxFilesystem,
 };
 
 #[cfg(target_os = "redox")]

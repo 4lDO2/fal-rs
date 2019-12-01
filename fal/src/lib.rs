@@ -3,7 +3,7 @@ pub extern crate time;
 
 use std::{
     convert::TryFrom,
-    io::{self, prelude::*},
+    io::prelude::*,
     mem,
     ops::{Add, Div, Mul, Rem},
 };
@@ -257,7 +257,6 @@ pub enum AccessTime {
 
     /// Update the access times of inodes when they are changed or modified.
     Relatime,
-
     // TODO: strictatime, lazyatime?
 }
 
@@ -313,7 +312,12 @@ where
     // TODO: Support mounting multiple devices as one filesystem, for filesystems that support it.
     /// Mount the filesystem from a device. The path paramter is only used to change the "last
     /// mount path" for filesystems that support it.
-    fn mount(device: D, general_options: Options, fs_specific_options: Self::Options, path: &[u8]) -> Self;
+    fn mount(
+        device: D,
+        general_options: Options,
+        fs_specific_options: Self::Options,
+        path: &[u8],
+    ) -> Self;
 
     /// Unmount the filesystem.
     fn unmount(self);

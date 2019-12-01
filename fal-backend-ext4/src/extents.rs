@@ -1,10 +1,8 @@
-use std::{
-    cmp::Ordering,
-    convert::TryInto,
-    io,
-};
+use std::{cmp::Ordering, convert::TryInto, io};
 
-use crate::{block_group, calculate_crc32c, inode::Blocks, read_block, Filesystem, write_block};
+use crate::{
+    allocate_block_bytes, block_group, calculate_crc32c, disk::BlockKind, inode::Blocks, Filesystem,
+};
 
 use quick_error::quick_error;
 use scroll::{Pread, Pwrite};
@@ -96,11 +94,7 @@ impl ExtentLeaf {
             block: rel_baddr,
             start_lo: phys_baddr as u32,
             start_hi: (phys_baddr >> 32) as u16,
-            raw_len: if initialized {
-                len
-            } else {
-                len + 32768
-            },
+            raw_len: if initialized { len } else { len + 32768 },
         }
     }
     /// The length of the extent, in blocks.
@@ -176,33 +170,32 @@ impl ExtentTree {
         let header: ExtentHeader = bytes.pread_with(0, scroll::LE)?;
 
         if header.entry_count > header.max_entry_count {
-            return Err(scroll::Error::BadInput { size: 2, msg: "Entry count too high" });
+            return Err(scroll::Error::BadInput {
+                size: 2,
+                msg: "Entry count too high",
+            });
         }
 
-        let calculated_max_entry_size = (bytes.len() - HEADER_SIZE - if use_tail {
-            TAIL_SIZE
-        } else {
-            0
-        }) / ITEM_SIZE;
+        let calculated_max_entry_size =
+            (bytes.len() - HEADER_SIZE - if use_tail { TAIL_SIZE } else { 0 }) / ITEM_SIZE;
 
         if header.max_entry_count as usize != calculated_max_entry_size {
-            return Err(scroll::Error::BadInput { size: 2, msg: "Invalid max entry count" });
+            return Err(scroll::Error::BadInput {
+                size: 2,
+                msg: "Invalid max entry count",
+            });
         }
 
         let body = if header.depth > 0 {
             ExtentTreeBody::Internal(
                 (0..header.entry_count as usize)
-                    .map(|i| {
-                        bytes.pread_with(HEADER_SIZE + i * ITEM_SIZE, scroll::LE)
-                    })
+                    .map(|i| bytes.pread_with(HEADER_SIZE + i * ITEM_SIZE, scroll::LE))
                     .collect::<Result<Vec<_>, _>>()?,
             )
         } else {
             ExtentTreeBody::Leaf(
                 (0..header.entry_count as usize)
-                    .map(|i| {
-                        bytes.pread_with(HEADER_SIZE + i * ITEM_SIZE, scroll::LE)
-                    })
+                    .map(|i| bytes.pread_with(HEADER_SIZE + i * ITEM_SIZE, scroll::LE))
                     .collect::<Result<Vec<_>, _>>()?,
             )
         };
@@ -210,21 +203,34 @@ impl ExtentTree {
         let tail: ExtentTail = bytes.pread_with(bytes.len() - TAIL_SIZE, scroll::LE)?;
 
         if use_tail && tail.checksum != Self::calculate_crc32c(seed, bytes) {
-            return Err(scroll::Error::BadInput { size: 4, msg: "extent block checksum mismatch" });
+            return Err(scroll::Error::BadInput {
+                size: 4,
+                msg: "extent block checksum mismatch",
+            });
         }
 
-        Ok(Self { header, body, tail: if use_tail { Some(tail) } else { None }, checksum_seed: seed, size: bytes.len() })
+        Ok(Self {
+            header,
+            body,
+            tail: if use_tail { Some(tail) } else { None },
+            checksum_seed: seed,
+            size: bytes.len(),
+        })
     }
     fn serialize(this: &Self, bytes: &mut [u8], use_tail: bool) -> Result<(), scroll::Error> {
         let mut offset = 0;
         bytes.gwrite_with(&this.header, &mut offset, scroll::LE)?;
 
         match this.body {
-            ExtentTreeBody::Internal(ref items) => for item in items {
-                bytes.gwrite_with(item, &mut offset, scroll::LE)?;
+            ExtentTreeBody::Internal(ref items) => {
+                for item in items {
+                    bytes.gwrite_with(item, &mut offset, scroll::LE)?;
+                }
             }
-            ExtentTreeBody::Leaf(ref leaves) => for leaf in leaves {
-                bytes.gwrite_with(leaf, &mut offset, scroll::LE)?;
+            ExtentTreeBody::Leaf(ref leaves) => {
+                for leaf in leaves {
+                    bytes.gwrite_with(leaf, &mut offset, scroll::LE)?;
+                }
             }
         }
 
@@ -241,7 +247,11 @@ impl ExtentTree {
         (size - HEADER_SIZE - TAIL_SIZE) / ITEM_SIZE
     }
     pub fn new_subtree(parent: &Self, size: usize) -> Self {
-        let depth = parent.header.depth.checked_sub(1).expect("Creating a subtree from a leaf");
+        let depth = parent
+            .header
+            .depth
+            .checked_sub(1)
+            .expect("Creating a subtree from a leaf");
 
         Self {
             header: ExtentHeader {
@@ -249,12 +259,14 @@ impl ExtentTree {
                 depth,
                 entry_count: 0,
                 generation: 0,
-                max_entry_count: Self::calculate_max_entry_count(size).try_into().expect("what extent tree block size (aka block size) are you using?"),
+                max_entry_count: Self::calculate_max_entry_count(size)
+                    .try_into()
+                    .expect("what extent tree block size (aka block size) are you using?"),
             },
             body: if depth == 0 {
-                ExtentTreeBody::Leaf(vec! [])
+                ExtentTreeBody::Leaf(vec![])
             } else {
-                ExtentTreeBody::Internal(vec! [])
+                ExtentTreeBody::Internal(vec![])
             },
             checksum_seed: parent.checksum_seed,
             size,
@@ -375,7 +387,16 @@ impl ExtentTree {
             let item = self.internal_node_items().unwrap()[closest_lower_or_eq_idx];
 
             // Load the subtree and search it.
-            let child_node_block = read_block(filesystem, item.physical_leaf_block()).unwrap();
+            let mut child_node_block = allocate_block_bytes(&filesystem.superblock);
+            filesystem
+                .disk
+                .read_block(
+                    filesystem,
+                    BlockKind::Metadata,
+                    item.physical_leaf_block(),
+                    &mut child_node_block,
+                )
+                .unwrap();
             let child_node = Self::from_block(self.checksum_seed, &child_node_block).unwrap();
             child_node.resolve(filesystem, logical_block)
         }
@@ -402,7 +423,12 @@ quick_error! {
     }
 }
 
-fn allocate_extent_leaf<D: fal::DeviceMut>(filesystem: &Filesystem<D>, root: &mut ExtentTree, rel_baddr: u32, len: u16) -> Result<(), AllocateExtentLeafError> {
+fn allocate_extent_leaf<D: fal::DeviceMut>(
+    filesystem: &Filesystem<D>,
+    root: &mut ExtentTree,
+    rel_baddr: u32,
+    len: u16,
+) -> Result<(), AllocateExtentLeafError> {
     if root.is_leaf() {
         if root.node_is_full() {
             return Err(AllocateExtentLeafError::NodeIsFull);
@@ -431,14 +457,20 @@ fn allocate_extent_leaf<D: fal::DeviceMut>(filesystem: &Filesystem<D>, root: &mu
         }
         let allocated_block = block_group::allocate_block(filesystem)?;
 
-        let mut block_bytes = vec! [0u8; filesystem.superblock.block_size() as usize];
+        let mut block_bytes = allocate_block_bytes(&filesystem.superblock);
 
-        let mut subtree = ExtentTree::new_subtree(&root, filesystem.superblock.block_size() as usize);
+        let mut subtree =
+            ExtentTree::new_subtree(&root, filesystem.superblock.block_size() as usize);
 
         // Create a new subtree containing the single to-be-allocated extent.
         allocate_extent_leaf(filesystem, &mut subtree, rel_baddr, len)?;
         ExtentTree::serialize(&subtree, &mut block_bytes, true)?;
-        write_block(filesystem, allocated_block, &block_bytes)?;
+        filesystem.disk.write_block(
+            filesystem,
+            BlockKind::Metadata,
+            allocated_block,
+            &block_bytes,
+        )?;
 
         // Update the root to include the new entry.
         match root.resolve_local_internal(rel_baddr) {
@@ -449,12 +481,19 @@ fn allocate_extent_leaf<D: fal::DeviceMut>(filesystem: &Filesystem<D>, root: &mu
                 // pointer entry is simply inserted in a sorted order.
 
                 let new_entry = ExtentInternalNode::new(rel_baddr, allocated_block);
-                root.internal_node_items_mut().unwrap().insert(new_index, new_entry);
+                root.internal_node_items_mut()
+                    .unwrap()
+                    .insert(new_index, new_entry);
             }
         }
     }
     Ok(())
 }
-pub fn allocate_extent<D: fal::DeviceMut>(filesystem: &Filesystem<D>, root: &mut ExtentTree, rel_baddr: u32, len: u16) {
+pub fn allocate_extent<D: fal::DeviceMut>(
+    filesystem: &Filesystem<D>,
+    root: &mut ExtentTree,
+    rel_baddr: u32,
+    len: u16,
+) {
     allocate_extent_leaf(filesystem, root, rel_baddr, len).unwrap();
 }
