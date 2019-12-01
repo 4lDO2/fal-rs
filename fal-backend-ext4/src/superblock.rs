@@ -245,12 +245,11 @@ impl Superblock {
 
         let this = Self::parse(&block_bytes)?;
 
-        if this.has_metadata_checksums() {
-            if this.extended.as_ref().unwrap().superblock_checksum
+        if this.has_metadata_checksums()
+            && this.extended.as_ref().unwrap().superblock_checksum
                 != Self::calculate_crc32c(&block_bytes)
-            {
-                return Err(LoadSuperblockError::ChecksumMismatch);
-            }
+        {
+            return Err(LoadSuperblockError::ChecksumMismatch);
         }
         Ok(this)
     }

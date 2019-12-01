@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::{calculate_crc32c, superblock::Superblock, Filesystem, Inode};
 
-pub const JOURNAL_HEADER_MAGIC: u32 = 0xC03B3998;
+pub const JOURNAL_HEADER_MAGIC: u32 = 0xC03B_3998;
 
 #[derive(Clone, Copy, Debug, Pread, Pwrite)]
 pub struct JournalHeader {
@@ -22,7 +22,7 @@ pub struct JournalHeader {
 
 impl JournalHeader {
     pub fn is_valid(&self) -> bool {
-        return self.magic == JOURNAL_HEADER_MAGIC && self.block_ty >= 1 && self.block_ty <= 5;
+        self.magic == JOURNAL_HEADER_MAGIC && self.block_ty >= 1 && self.block_ty <= 5
     }
 }
 
@@ -183,7 +183,7 @@ impl JournalSuperblock {
                 JournalIncompatFeatureFlags::from_bits(ext.incompat_features)
                     .unwrap_or_else(JournalIncompatFeatureFlags::empty)
             })
-            .unwrap_or(JournalIncompatFeatureFlags::empty())
+            .unwrap_or_else(JournalIncompatFeatureFlags::empty)
     }
     pub fn uuid(&self, ext4_superblock: &Superblock) -> [u8; 16] {
         if let Some(ref ext) = self.ext {

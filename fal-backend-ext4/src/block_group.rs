@@ -305,16 +305,15 @@ pub fn load_block_group_descriptor<D: fal::Device>(
 
     let (descriptor_bytes, _) = get_block_group_descriptor(filesystem, index, &mut block_bytes)?;
     let desc = BlockGroupDescriptor::parse(descriptor_bytes, &filesystem.superblock, index as u32)?;
-    if filesystem.superblock.has_metadata_checksums() {
-        if desc.base.csum
+    if filesystem.superblock.has_metadata_checksums()
+        && desc.base.csum
             != BlockGroupDescriptor::calculate_crc32c(
                 filesystem.superblock.checksum_seed().unwrap(),
                 index as u32,
                 descriptor_bytes,
             ) as u16
-        {
-            return Err(BgdError::ChecksumMismatch);
-        }
+    {
+        return Err(BgdError::ChecksumMismatch);
     }
     Ok(desc)
 }
@@ -590,7 +589,7 @@ fn iter_through_bgdescs<
 
     let descs_per_block = filesystem.superblock.block_size() / size as u32;
 
-    'block_loop: for rel_baddr in 0..bgdt_block_count {
+    for rel_baddr in 0..bgdt_block_count {
         filesystem.disk.read_block_raw(
             filesystem,
             BlockKind::Metadata,
@@ -761,9 +760,7 @@ fn allocate_blocks_or_inodes<D: fal::DeviceMut>(
                     let desc_start_block = u64::from(handle.abs_index)
                         * u64::from(filesystem.superblock.blocks_per_group);
                     let abs_block_range = desc_start_block + u64::from(first_unused_rel_baddr)
-                        ..u64::from(desc_start_block)
-                            + u64::from(first_unused_rel_baddr)
-                            + u64::from(len);
+                        ..desc_start_block + u64::from(first_unused_rel_baddr) + u64::from(len);
 
                     log::trace!("Found a {word} region {rel_start}..{rel_end} ({abs_start}..{abs_end} absolute)", word=word, rel_start=first_unused_rel_baddr, rel_end=first_unused_rel_baddr + len, abs_start=abs_block_range.start, abs_end=abs_block_range.end);
 
