@@ -708,7 +708,7 @@ impl Inode {
         filesystem.disk.read_block(
             filesystem,
             BlockKind::Data,
-            abs_baddr.try_into().unwrap(),
+            u64::from(abs_baddr),
             buffer,
         )?;
         Ok(())
@@ -726,7 +726,7 @@ impl Inode {
         filesystem.disk.write_block(
             filesystem,
             BlockKind::Data,
-            abs_baddr.try_into().unwrap(),
+            u64::from(abs_baddr),
             buffer,
         )?;
         Ok(())
@@ -759,9 +759,7 @@ impl Inode {
         let off_from_rel_block = offset % u64::from(filesystem.superblock.block_size());
         let rel_baddr_start = offset / u64::from(filesystem.superblock.block_size());
 
-        let mut block_bytes =
-            (vec![0u8; usize::try_from(filesystem.superblock.block_size()).unwrap()])
-                .into_boxed_slice();
+        let mut block_bytes = allocate_block_bytes(&filesystem.superblock);
 
         if off_from_rel_block != 0 {
             self.read_block(
@@ -827,9 +825,7 @@ impl Inode {
         let off_from_rel_block = offset % u64::from(filesystem.superblock.block_size());
         let rel_baddr_start = offset / u64::from(filesystem.superblock.block_size());
 
-        let mut block_bytes =
-            vec![0u8; usize::try_from(filesystem.superblock.block_size()).unwrap()]
-                .into_boxed_slice();
+        let mut block_bytes = allocate_block_bytes(&filesystem.superblock);
 
         if off_from_rel_block != 0 {
             self.read_block(

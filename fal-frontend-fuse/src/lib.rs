@@ -361,7 +361,7 @@ impl<Backend: fal::FilesystemMut<File>> fuse::Filesystem for FuseFilesystem<Back
 
         let inode_size = inode_struct.attrs().size;
 
-        // This will effectively be the size, but possibly reduced to prevent overflow.
+        // This will be the size, but possibly reduced to prevent overflow.
         let bytes_to_read = std::cmp::min(offset + u64::from(size), inode_size) - offset;
 
         let mut buffer = vec![0u8; bytes_to_read.try_into().unwrap()];

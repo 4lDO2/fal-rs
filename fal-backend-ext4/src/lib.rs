@@ -227,6 +227,10 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
         if self.fhs.get(&fh).is_some() {
             let inode: inode::Inode = self.fhs[&fh].inode;
 
+            // Check that the buffer doesn't overflow the inode size.
+            let bytes_to_read = std::cmp::min(offset + buffer.len() as u64, inode.size()) - offset;
+            let buffer = &mut buffer[..bytes_to_read as usize];
+
             let bytes_read = inode
                 .read(self, offset, buffer)
                 .into_fal_result("File couldn't be read")?;
