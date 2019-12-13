@@ -208,8 +208,7 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
         let mut root = filesystem.load_inode(2).unwrap();
         let mut tree =
             extents::ExtentTree::from_inode_blocks_field(root.checksum_seed, &root.blocks).unwrap();
-        use fal::Filesystem as _;
-        extents::allocate_extent(&filesystem, &mut tree, 1337, 42);
+        extents::allocate_extent_blocks(&filesystem, &mut tree, 1337, 42).unwrap();
         extents::ExtentTree::to_inode_blocks_field(&tree, &mut root.blocks).unwrap();
         filesystem.store_inode(&root).unwrap();
         filesystem

@@ -7,7 +7,7 @@ use std::{
 use crate::{
     allocate_block_bytes, block_group, calculate_crc32c,
     disk::BlockKind,
-    extents::ExtentTree,
+    extents::{self, AllocateExtentLeafError, ExtentTree},
     read_u16, read_u32, read_u8,
     superblock::{OptionalFeatureFlags, OsId, RequiredFeatureFlags, RoFeatureFlags, Superblock},
     write_u16, write_u32, write_u8, Filesystem,
@@ -55,6 +55,11 @@ quick_error! {
         InodeTooLargeForInline(size: u64) {
             description("inode size too large for being inline")
             display("inode size too large for being inline ({} > 60)", size)
+        }
+        AllocateExtentBlocksError(err: extents::AllocateExtentBlocksError) {
+            description("failed to allocate additional extents-based blocks")
+            from()
+            cause(err)
         }
     }
 }
@@ -116,6 +121,9 @@ impl Blocks {
     }
     pub fn extent_tree(&self, seed: u32) -> ExtentTree {
         ExtentTree::from_inode_blocks_field(seed, self).unwrap()
+    }
+    pub fn set_extent_tree(&mut self, tree: &ExtentTree) {
+        ExtentTree::to_inode_blocks_field(tree, self).unwrap()
     }
 }
 
@@ -486,7 +494,7 @@ impl Inode {
     }
     pub fn store<D: fal::DeviceMut>(
         this: &Self,
-        filesystem: &mut Filesystem<D>,
+        filesystem: &Filesystem<D>,
     ) -> Result<(), InodeIoError> {
         let inode_address = this.addr;
 
@@ -816,6 +824,26 @@ impl Inode {
 
         Ok(bytes_read)
     }
+    pub fn allocate_blocks<D: fal::DeviceMut>(&mut self, filesystem: &Filesystem<D>, baddr: u32, len: u32) -> Result<(), InodeIoError> {
+        if self.flags().contains(InodeFlags::INLINE_DATA) {
+            self.flags().remove(InodeFlags::INLINE_DATA);
+
+            if filesystem.superblock.incompat_features().contains(RequiredFeatureFlags::EXTENTS) {
+                self.flags().insert(InodeFlags::EXTENTS);
+            }
+            self.allocate_blocks(filesystem, baddr, len);
+        } else if self.flags().contains(InodeFlags::EXTENTS) {
+            let mut root = self.blocks.extent_tree(self.checksum_seed);
+            extents::allocate_extent_blocks(filesystem, &mut root, baddr, len)?;
+            self.blocks.set_extent_tree(&root);
+        } else {
+            unimplemented!("allocating blocks for an inode which uses the conventional (ext2/3) block resolution")
+        }
+
+        Self::store(self, filesystem)?;
+
+        Ok(())
+    }
     pub fn write<D: fal::DeviceMut>(
         &mut self,
         filesystem: &mut Filesystem<D>,
@@ -823,13 +851,13 @@ impl Inode {
         mut buffer: &[u8],
     ) -> Result<(), InodeIoError> {
         let off_from_rel_block = offset % u64::from(filesystem.superblock.block_size());
-        let rel_baddr_start = offset / u64::from(filesystem.superblock.block_size());
+        let rel_baddr_start = u32::try_from(offset / u64::from(filesystem.superblock.block_size())).or(Err(fal::Error::FileTooBig))?;
 
         let mut block_bytes = allocate_block_bytes(&filesystem.superblock);
 
         if off_from_rel_block != 0 {
             self.read_block(
-                rel_baddr_start.try_into().unwrap(),
+                rel_baddr_start,
                 filesystem,
                 &mut block_bytes,
             )?;
@@ -844,7 +872,7 @@ impl Inode {
                 .copy_from_slice(&buffer[..end]);
 
             self.write_block(
-                rel_baddr_start.try_into().unwrap(),
+                rel_baddr_start,
                 filesystem,
                 &block_bytes,
             )?;

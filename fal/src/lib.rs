@@ -201,6 +201,7 @@ pub enum Error {
     Overflow,
     Invalid,
     IsDirectory,
+    FileTooBig,
     NotDirectory,
     AccessDenied,
     ReadonlyFs,
@@ -219,6 +220,7 @@ impl Error {
             Self::NotDirectory => libc::ENOTDIR,
             Self::AccessDenied => libc::EACCES,
             Self::ReadonlyFs => libc::EROFS,
+            Self::FileTooBig => libc::EFBIG,
             Self::Io => libc::EIO,
         }
     }
@@ -238,6 +240,7 @@ impl std::fmt::Display for Error {
             Error::NotDirectory => write!(formatter, "not directory"),
             Error::AccessDenied => write!(formatter, "access denied"),
             Error::ReadonlyFs => write!(formatter, "read-only filesystem"),
+            Error::FileTooBig => write!(formatter, "file too big"),
             Error::Other(n) => write!(formatter, "other ({})", n),
         }
     }

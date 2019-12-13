@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, convert::TryInto, io};
+use std::{cmp::Ordering, convert::TryInto, error::Error as _, io, ops::Range};
 
 use crate::{
     allocate_block_bytes, block_group, calculate_crc32c, disk::BlockKind, inode::Blocks, Filesystem,
@@ -75,6 +75,8 @@ pub struct ExtentLeaf {
     pub start_lo: u32,
 }
 
+const MAX_EXTENT_LEN: u16 = 32768;
+
 impl Ord for ExtentLeaf {
     fn cmp(&self, other: &Self) -> Ordering {
         Ord::cmp(&self.block, &other.block)
@@ -104,6 +106,13 @@ impl ExtentLeaf {
         } else {
             self.raw_len
         }
+    }
+    pub fn rel_range(&self) -> Range<u32> {
+        self.block..self.block + u32::from(self.len())
+    }
+    pub fn overlaps(&self, range: Range<u32>) -> bool {
+        let self_range = self.rel_range();
+        range.contains(&self_range.start) || range.contains(&(self_range.end - 1)) || self_range.contains(&range.start) || self_range.contains(&(range.end - 1))
     }
     pub fn is_empty(&self) -> bool {
         self.len() == 0
@@ -405,7 +414,7 @@ impl ExtentTree {
 
 quick_error! {
     #[derive(Debug)]
-    enum AllocateExtentLeafError {
+    pub enum AllocateExtentLeafError {
         NodeIsFull {}
         AlreadyExists {}
         AllocateBlockError(err: block_group::AllocateBlockError) {
@@ -419,6 +428,10 @@ quick_error! {
         DiskIoError(err: io::Error) {
             from()
             cause(err)
+        }
+        Overlaps(r1: Range<u32>, r2: Range<u32>) {
+            description("the base relative block address overlapped an existing extent when allocating")
+            display(this) -> ("{}, {:?} overlaps {:?}", this.description(), r1, r2)
         }
     }
 }
@@ -441,8 +454,12 @@ fn allocate_extent_leaf<D: fal::DeviceMut>(
             Ok(_) => return Err(AllocateExtentLeafError::AlreadyExists),
 
             Err(new_index) => {
-                // TODO: Check whether the item at this index (which is either before or after the
-                // current extent) overlaps the extent we're currently allocating.
+                let previous_extent = &root.leaves().unwrap()[new_index - 1];
+                let range = rel_baddr..rel_baddr + u32::from(len);
+
+                if new_index > 0 && previous_extent.overlaps(range.clone()) {
+                    return Err(AllocateExtentLeafError::Overlaps(previous_extent.rel_range(), range));
+                }
 
                 // Unlike the usual case where Err leads to return Err, in this case Err(idx) means
                 // that the key (an extent with rel_baddr as start) wasn't found, which is good
@@ -489,11 +506,50 @@ fn allocate_extent_leaf<D: fal::DeviceMut>(
     }
     Ok(())
 }
-pub fn allocate_extent<D: fal::DeviceMut>(
+
+quick_error! {
+    #[derive(Debug)]
+    pub enum AllocateExtentBlocksError {
+        AllocLeafError(err: AllocateExtentLeafError) {
+            from()
+            description("the allocation of a new extent leaf or the extension of an existing leaf failed")
+            cause(err)
+        }
+        TooLarge {
+            description("the maximum depth of all extent trees prevents the extent tree from allocating additional extents")
+        }
+    }
+}
+
+pub fn allocate_extent_blocks<D: fal::DeviceMut>(
     filesystem: &Filesystem<D>,
     root: &mut ExtentTree,
     rel_baddr: u32,
-    len: u16,
-) {
-    allocate_extent_leaf(filesystem, root, rel_baddr, len).unwrap();
+    block_count: u32,
+) -> Result<(), AllocateExtentBlocksError> {
+    let blocks_per_extent = u32::from(MAX_EXTENT_LEN);
+    for current_start_block in (0..block_count).step_by(blocks_per_extent as usize) {
+        let offset = (current_start_block as u32 % blocks_per_extent) as u16;
+        allocate_extent_leaf(filesystem, root, rel_baddr, offset)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn overlaps() {
+        use super::ExtentLeaf;
+
+        let a = ExtentLeaf::new(0, 1000, 0, true); // from 0-1000
+        assert!(a.overlaps(32..96));
+        assert!(a.overlaps(0..1));
+        assert!(a.overlaps(999..1001));
+        assert!(!a.overlaps(1001..2000));
+
+        let b = ExtentLeaf::new(2000, 1000, 13370, true);
+        assert!(b.overlaps(1500..2500));
+        assert!(!b.overlaps(1000..1999));
+        assert!(!b.overlaps(3000..7000));
+    }
 }
