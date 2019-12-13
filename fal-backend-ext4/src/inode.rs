@@ -104,8 +104,18 @@ impl std::hash::Hash for Blocks {
 }
 
 impl Blocks {
-    pub fn block_ptrs(&self) -> &[u32] {
-        bytemuck::cast_slice::<u8, u32>(&self.inner[..])
+    pub fn block_ptrs(&self) -> Cow<'_, [u32]> {
+        #[cfg(little_endian)]
+        return Cow::Borrowed(bytemuck::cast_slice::<u8, u32>(&self.inner[..]));
+
+        #[cfg(not(little_endian))]
+        {
+            let mut vector = vec! [0u32; 15];
+            for (n, element) in vector.iter_mut().enumerate() {
+                *element = fal::read_u32(&self.inner, n * 4);
+            }
+            Cow::Owned(vector)
+        }
     }
     pub fn direct_ptrs(&self) -> &[u32] {
         &self.block_ptrs()[..12]
@@ -311,6 +321,12 @@ impl InodeRaw {
             } else {
                 0
             } << 32
+    }
+    pub fn set_size(&mut self, superblock: &Superblock, new_size: u64) {
+        self.base.size_lo = new_size as u32;
+        if superblock.ro_compat_features().contains(RoFeatureFlags::EXTENDED_FILE_SIZE) {
+            self.base.size_hi_or_dir_acl = (new_size >> 32) as u32;
+        }
     }
     pub fn generation(&self) -> u64 {
         u64::from(self.base.generation_lo)
@@ -826,12 +842,13 @@ impl Inode {
     }
     pub fn allocate_blocks<D: fal::DeviceMut>(&mut self, filesystem: &Filesystem<D>, baddr: u32, len: u32) -> Result<(), InodeIoError> {
         if self.flags().contains(InodeFlags::INLINE_DATA) {
+            unimplemented!("inline data may be stored in extended attributes");
             self.flags().remove(InodeFlags::INLINE_DATA);
 
             if filesystem.superblock.incompat_features().contains(RequiredFeatureFlags::EXTENTS) {
                 self.flags().insert(InodeFlags::EXTENTS);
             }
-            self.allocate_blocks(filesystem, baddr, len);
+            self.allocate_blocks(filesystem, baddr, len)?;
         } else if self.flags().contains(InodeFlags::EXTENTS) {
             let mut root = self.blocks.extent_tree(self.checksum_seed);
             extents::allocate_extent_blocks(filesystem, &mut root, baddr, len)?;
@@ -849,7 +866,7 @@ impl Inode {
         filesystem: &mut Filesystem<D>,
         offset: u64,
         mut buffer: &[u8],
-    ) -> Result<(), InodeIoError> {
+    ) -> Result<u64, InodeIoError> {
         let off_from_rel_block = offset % u64::from(filesystem.superblock.block_size());
         let rel_baddr_start = u32::try_from(offset / u64::from(filesystem.superblock.block_size())).or(Err(fal::Error::FileTooBig))?;
 
@@ -865,8 +882,7 @@ impl Inode {
             let off_from_rel_block_usize = usize::try_from(off_from_rel_block).unwrap();
             let end = std::cmp::min(
                 buffer.len(),
-                usize::try_from(filesystem.superblock.block_size()).unwrap()
-                    - off_from_rel_block_usize,
+                filesystem.superblock.block_size() as usize - off_from_rel_block_usize,
             );
             block_bytes[off_from_rel_block_usize..off_from_rel_block_usize + end]
                 .copy_from_slice(&buffer[..end]);
@@ -877,18 +893,25 @@ impl Inode {
                 &block_bytes,
             )?;
 
-            if u64::try_from(buffer.len()).unwrap() >= off_from_rel_block {
-                return self.write(
+            let bytes_written = end as u64 - off_from_rel_block as u64;
+
+            // Even though the size is set in this case, no allocation is required until the main write
+            // loop is entered.
+            self.set_size(&filesystem.superblock, self.size() + bytes_written);
+
+            return Ok(if buffer.len() as u64 >= off_from_rel_block {
+                bytes_written + self.write(
                     filesystem,
                     fal::round_up(offset, u64::from(filesystem.superblock.block_size())),
                     &buffer[end..],
-                );
+                )?
             } else {
-                return Ok(());
-            }
+                bytes_written
+            });
         }
 
         let mut current_rel_baddr = u32::try_from(rel_baddr_start).unwrap();
+        let mut bytes_written = 0;
 
         while buffer.len() >= usize::try_from(filesystem.superblock.block_size()).unwrap() {
             block_bytes.copy_from_slice(
