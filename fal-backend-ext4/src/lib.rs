@@ -111,7 +111,7 @@ impl fal::Inode for Inode {
             creation_time: self.cr_time().unwrap_or(Timespec { sec: 0, nsec: 0 }),
             modification_time: self.m_time(),
             filetype: self.ty().into(),
-            block_count: self.size_in_blocks(),
+            block_count: self.block_count,
             flags: self.flags,
             group_id: self.gid.into(),
             hardlink_count: self.hardlink_count.into(),

@@ -117,8 +117,15 @@ impl Blocks {
             Cow::Owned(vector)
         }
     }
-    pub fn direct_ptrs(&self) -> &[u32] {
-        &self.block_ptrs()[..12]
+    pub fn direct_ptrs(&self) -> Cow<'_, [u32]> {
+        // This is way too ugly.
+        match self.block_ptrs() {
+            Cow::Borrowed(b) => Cow::Borrowed(&b[..12]),
+            Cow::Owned(mut o) => {
+                o.truncate(12);
+                Cow::Owned(o)
+            }
+        }
     }
     pub fn singly_indirect_ptr(&self) -> u32 {
         self.block_ptrs()[12]
@@ -241,6 +248,37 @@ impl InodeRaw {
             bytes.pwrite_with(ext, EXTENDED_INODE_SIZE as usize, scroll::LE)?;
         }
         Ok(())
+    }
+    pub fn block_count_hi(&self) -> u16 {
+        fal::read_u16(&self.os_specific_2, 0)
+    }
+    pub fn set_block_count_hi(&mut self, value: u16) {
+        fal::write_u16(&mut self.os_specific_2, 0, value)
+    }
+    pub fn set_size_in_blocks(&mut self, superblock: &Superblock, size_in_blocks: u64) {
+        let raw_number_of_blocks = if self.flags().contains(InodeFlags::HUGE_FILE) {
+            size_in_blocks
+        } else {
+            size_in_blocks * u64::from(superblock.block_size() / 512)
+        };
+
+        self.block_count_lo = raw_number_of_blocks as u32;
+        if superblock.ro_compat_features().contains(RoFeatureFlags::HUGE_FILE) {
+            self.set_block_count_hi((raw_number_of_blocks >> 32) as u16)
+        }
+    }
+    pub fn size_in_blocks(&self, superblock: &Superblock) -> u64 {
+        let number_of_blocks = u64::from(self.block_count_lo) + if !superblock.ro_compat_features().contains(RoFeatureFlags::HUGE_FILE) {
+            u64::from(self.block_count_hi())
+        } else {
+            0
+        } << 32;
+
+        if self.flags().contains(InodeFlags::HUGE_FILE) {
+            number_of_blocks
+        } else {
+            number_of_blocks / u64::from(superblock.block_size() / 512)
+        }
     }
     pub fn ty(&self) -> InodeType {
         InodeType::from_type_and_perm(self.base.mode).0.unwrap()
@@ -376,11 +414,12 @@ impl InodeRaw {
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct Inode {
-    pub block_size: u32,
-    pub size: u64,
+    pub(crate) block_size: u32,
+    pub(crate) block_count: u64,
+    pub(crate) size: u64,
     pub addr: u32,
-    pub checksum_seed: u32,
-    pub os: OsId,
+    pub(crate) checksum_seed: u32,
+    pub(crate) os: OsId,
     pub raw: InodeRaw,
 }
 
@@ -572,6 +611,7 @@ impl Inode {
 
         let this = Self {
             block_size: superblock.block_size(),
+            block_count: raw.size_in_blocks(superblock),
             addr,
             raw,
             size,
@@ -612,9 +652,6 @@ impl Inode {
     }
     pub fn size(&self) -> u64 {
         self.size
-    }
-    pub fn size_in_blocks(&self) -> u64 {
-        fal::div_round_up(self.size(), self.block_size.into())
     }
     fn entry_count(block_size: u32) -> usize {
         block_size as usize / mem::size_of::<u32>()
@@ -688,7 +725,7 @@ impl Inode {
         &self,
         filesystem: &Filesystem<D>,
         rel_baddr: u32,
-    ) -> io::Result<u64> {
+    ) -> Result<u64, InodeIoError> {
         if self.flags().contains(InodeFlags::EXTENTS) {
             // TODO: Cache this tree.
             let tree = self.blocks.extent_tree(self.checksum_seed);
@@ -698,6 +735,10 @@ impl Inode {
 
             let offset_from_extent_start = rel_baddr - leaf.logical_block();
             return Ok(leaf.physical_start_block() + u64::from(offset_from_extent_start));
+        }
+
+        if u64::from(rel_baddr) >= self.size_in_blocks(&filesystem.superblock) {
+            return Err(fal::Error::Invalid.into());
         }
 
         let entry_count = Self::entry_count(filesystem.superblock.block_size()) as u32;
@@ -716,7 +757,7 @@ impl Inode {
         } else if rel_baddr < triply_indir_size {
             Self::read_triply(filesystem, self.blocks.triply_indirect_ptr(), rel_baddr)?
         } else {
-            panic!("Read exceeding maximum ext2/3 file size.");
+            return Err(fal::Error::Overflow.into());
         }))
     }
     pub fn read_block<D: fal::Device>(
@@ -725,7 +766,7 @@ impl Inode {
         filesystem: &Filesystem<D>,
         buffer: &mut [u8],
     ) -> Result<(), InodeIoError> {
-        if u64::from(rel_baddr) >= self.size_in_blocks() {
+        if u64::from(rel_baddr) >= self.size_in_blocks(&filesystem.superblock) {
             return Err(fal::Error::Overflow.into());
         }
         let abs_baddr = self.absolute_baddr(filesystem, rel_baddr)?;
@@ -743,7 +784,7 @@ impl Inode {
         filesystem: &Filesystem<D>,
         buffer: &[u8],
     ) -> Result<(), InodeIoError> {
-        if u64::from(rel_baddr) >= self.size_in_blocks() {
+        if u64::from(rel_baddr) >= self.size_in_blocks(&filesystem.superblock) {
             return Err(fal::Error::Overflow.into());
         }
         let abs_baddr = self.absolute_baddr(filesystem, rel_baddr)?;
@@ -897,7 +938,8 @@ impl Inode {
 
             // Even though the size is set in this case, no allocation is required until the main write
             // loop is entered.
-            self.set_size(&filesystem.superblock, self.size() + bytes_written);
+            let new_size = self.size() + bytes_written;
+            self.set_size(&filesystem.superblock, new_size);
 
             return Ok(if buffer.len() as u64 >= off_from_rel_block {
                 bytes_written + self.write(
@@ -930,7 +972,7 @@ impl Inode {
             self.write_block(current_rel_baddr, filesystem, &block_bytes)?;
         }
 
-        Ok(())
+        Ok(bytes_written)
     }
     fn raw_dir_entries<'a, D: fal::Device>(
         &'a self,
