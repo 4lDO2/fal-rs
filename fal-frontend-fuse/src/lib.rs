@@ -7,7 +7,7 @@ use std::{
 };
 
 use fuse::{
-    ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs, ReplyWrite, Request,
+    ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr, Request,
 };
 use time::Timespec;
 
@@ -91,6 +91,18 @@ fn fuse_attr<InodeAddr: Into<u64>>(attrs: fal::Attributes<InodeAddr>) -> fuse::F
         uid: attrs.user_id,
     }
 }
+
+macro_rules! handle_fal_error(
+    ($result:expr, $reply:expr) => {{
+        match $result {
+            Ok(t) => t,
+            Err(error) => {
+                $reply.error(error.errno());
+                return;
+            }
+        }
+    };}
+);
 
 impl<Backend: fal::Filesystem<File>> FuseFilesystem<Backend> {
     pub fn init(device: File, path: &OsStr, options: fal::Options) -> io::Result<Self> {
@@ -447,5 +459,61 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
             Ok(()) => reply.ok(),
             Err(err) => reply.error(err.errno()),
         }
+    }
+    fn getxattr(&mut self, _req: &Request, fuse_inode: u64, name: &OsStr, size: u32, reply: ReplyXattr) {
+        let inode = match fuse_inode_to_fs_inode(fuse_inode) {
+            Some(inode) => inode,
+            None => {
+                reply.error(libc::EOVERFLOW);
+                return;
+            }
+        };
+        let inode = handle_fal_error!(self.inner().load_inode(inode), reply);
+        let value = handle_fal_error!(self.inner().get_xattr(&inode, name.as_bytes()), reply);
+
+        // This size thing is strange since a buffer is returned (at least an &[u8]).
+        if size == 0 {
+            reply.size(value.len() as u32);
+            return;
+        } else if size < value.len() as u32 {
+            reply.error(libc::ERANGE);
+            return;
+        }
+
+        reply.data(&value);
+    }
+    fn listxattr(&mut self, _req: &Request, fuse_inode: u64, size: u32, reply: ReplyXattr) {
+        let inode = match fuse_inode_to_fs_inode(fuse_inode) {
+            Some(inode) => inode,
+            None => {
+                reply.error(libc::EOVERFLOW);
+                return;
+            }
+        };
+
+        let inode = handle_fal_error!(self.inner().load_inode(inode), reply);
+        let key_names = handle_fal_error!(self.inner().list_xattrs(&inode), reply);
+
+        // The size of the attribute list, which is all of the xattr key names joined by NUL.
+        let list_size: usize = key_names.iter().map(|vec| vec.len()).sum::<usize>() + key_names.len();
+
+        assert!(list_size <= std::u32::MAX as usize);
+
+        if size == 0 {
+            reply.size(list_size as u32);
+            return;
+        } else if size < list_size as u32 {
+            reply.error(libc::ERANGE);
+            return;
+        }
+
+        let mut list = Vec::with_capacity(list_size);
+        for key_name in &key_names {
+            list.extend(key_name);
+            list.push(0);
+        }
+        assert_eq!(list.len(), list_size);
+
+        reply.data(&list);
     }
 }
