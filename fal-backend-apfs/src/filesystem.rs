@@ -681,4 +681,12 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
     fn write(&mut self, _fh: u64, _offset: u64, _buffer: &[u8]) -> Result<u64> {
         unimplemented!()
     }
+    fn get_xattr(&mut self, _inode: &Inode, _name: &[u8]) -> Result<Vec<u8>> {
+        // TODO: This shouldn't be too hard to implement since the xattrs are already stored in th
+        // tree, and used internally (for symlinks).
+        unimplemented!("getting extended attributes")
+    }
+    fn list_xattrs(&mut self, _inode: &Inode) -> Result<Vec<Vec<u8>>> {
+        unimplemented!("listing extended attributes")
+    }
 }

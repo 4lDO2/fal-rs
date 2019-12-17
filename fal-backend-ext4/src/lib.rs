@@ -23,6 +23,7 @@ pub use superblock::Superblock;
 
 use disk::Disk;
 use inode::InodeIoError;
+use xattr::XattrEntry;
 
 pub fn allocate_block_bytes(superblock: &Superblock) -> Box<[u8]> {
     vec![0u8; superblock.block_size() as usize].into_boxed_slice()
@@ -387,6 +388,19 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
     }
     fn unlink(&mut self, _parent: u32, _name: &[u8]) -> fal::Result<()> {
         unimplemented!()
+    }
+    fn get_xattr(&mut self, inode: &Inode, name: &[u8]) -> fal::Result<Vec<u8>> {
+        match inode.xattrs {
+            Some(ref x) => x.entries.iter().find(|(k, _)| k.name == name).ok_or(fal::Error::NoEntity).map(|(_, v)| v.clone()),
+            None => Err(fal::Error::NoEntity),
+        }
+    }
+    fn list_xattrs(&mut self, inode: &Inode) -> fal::Result<Vec<Vec<u8>>> {
+        // TODO: Support block-based xattrs as well.
+        match inode.xattrs {
+            Some(ref x) => Ok(x.entries.iter().map(|(entry, _)| &entry.name).cloned().collect()),
+            None => Ok(vec! []),
+        }
     }
 }
 

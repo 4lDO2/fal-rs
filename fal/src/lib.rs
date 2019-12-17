@@ -366,10 +366,11 @@ where
 
     // XXX: Rust's type system doesn't support associated types with lifetimes. If a backend wants
     // to use a concurrent hashmap for storing the file handles, then there won't be a direct
-    // reference, but an RAII guard. Basically all RAII guards store their owner, and to replace the
-    // return type with a guard, an associated type with a lifetime is required. On the other hand,
-    // inodes aren't typically that slow to clone. However with generic associated types, this
-    // problem will likely be easily solved.
+    // reference, but an RAII guard. Basically all RAII guards store their owner as a reference,
+    // and to replace the return type with a guard, an associated type with a lifetime is required.
+    // On the other hand, inodes aren't typically that slow to clone. However with generic associated
+    // types, this problem will likely be easily solved, as Self::InodeStruct can have an
+    // untethered lifetime.
     //
     // https://github.com/rust-lang/rust/issues/44265
     //
@@ -389,6 +390,13 @@ where
     /// entry reaches zero, the inode is deleted and its space is freed. However, if that inode is
     /// still open, it won't be removed until that.
     fn unlink(&mut self, parent: Self::InodeAddr, name: &[u8]) -> Result<()>;
+
+    /// Get a named extended attribute from an inode.
+    fn get_xattr(&mut self, inode: &Self::InodeStruct, name: &[u8]) -> Result<Vec<u8>>;
+
+    /// List the extended attribute names (keys) from an inode.
+    // TODO: Perhaps this double vector should be a null-separated u8 vector instead.
+    fn list_xattrs(&mut self, inode: &Self::InodeStruct) -> Result<Vec<Vec<u8>>>;
 }
 
 #[derive(Debug)]
