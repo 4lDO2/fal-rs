@@ -1,5 +1,5 @@
 use std::{
-    io::{self, SeekFrom},
+    io::{self, prelude::*, SeekFrom},
     sync::{atomic, Mutex, MutexGuard},
 };
 
@@ -29,16 +29,11 @@ pub enum BlockKind {
 /// The underlying disk of an ext2/3/4 filesystem.
 pub struct Disk<T> {
     inner: Mutex<T>,
+    size: u64,
     // TODO: Cache
 }
 
 impl<T> Disk<T> {
-    /// Wrap a `Read` + `Write` + `Seek` device for optimal caching and journaling.
-    pub fn new(inner: T) -> Self {
-        Self {
-            inner: Mutex::new(inner),
-        }
-    }
     pub fn inner(&self) -> MutexGuard<'_, T> {
         self.inner.lock().unwrap()
     }
@@ -47,6 +42,16 @@ impl<T> Disk<T> {
     }
 }
 impl<T: fal::Device> Disk<T> {
+    /// Wrap a `Read` + `Write` + `Seek` device for optimal caching and journaling.
+    pub fn new(mut inner: T) -> Result<Self, io::Error> {
+        let size = inner.seek(SeekFrom::End(0))?;
+
+        Ok(Self {
+            inner: Mutex::new(inner),
+            size,
+        })
+    }
+
     /// Read a block, which is checked for existence in the block group descriptor tables for debug
     /// builds.
     pub fn read_block(
@@ -56,6 +61,7 @@ impl<T: fal::Device> Disk<T> {
         block_address: u64,
         buffer: &mut [u8],
     ) -> io::Result<()> {
+        debug_assert!(block_address * u64::from(filesystem.superblock.block_size()) < self.size);
         debug_assert!(block_group::block_exists(block_address, filesystem).unwrap_or(false));
         self.read_block_raw(filesystem, kind, block_address, buffer)
     }
@@ -64,7 +70,7 @@ impl<T: fal::Device> Disk<T> {
     pub fn read_block_raw(
         &self,
         filesystem: &Filesystem<T>,
-        kind: BlockKind,
+        _kind: BlockKind,
         block_address: u64,
         buffer: &mut [u8],
     ) -> io::Result<()> {
@@ -81,7 +87,7 @@ impl<T: fal::DeviceMut> Disk<T> {
     pub fn write_block_raw(
         &self,
         filesystem: &Filesystem<T>,
-        kind: BlockKind,
+        _kind: BlockKind,
         block_address: u64,
         buffer: &[u8],
     ) -> io::Result<()> {

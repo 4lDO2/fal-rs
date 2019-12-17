@@ -7,10 +7,11 @@ use std::{
 use crate::{
     allocate_block_bytes, block_group, calculate_crc32c,
     disk::BlockKind,
-    extents::{self, AllocateExtentLeafError, ExtentTree},
+    extents::{self, ExtentTree},
     read_u16, read_u32, read_u8,
     superblock::{OptionalFeatureFlags, OsId, RequiredFeatureFlags, RoFeatureFlags, Superblock},
     write_u16, write_u32, write_u8, Filesystem,
+    xattr::{InlineXattrs, LoadXattrsError},
 };
 
 use bitflags::bitflags;
@@ -60,6 +61,12 @@ quick_error! {
             description("failed to allocate additional extents-based blocks")
             from()
             cause(err)
+        }
+        LoadXattrsError(err: LoadXattrsError) {
+            from()
+            cause(err)
+            description("failed to load xattrs")
+            display("failed to load xattrs: {}", err)
         }
     }
 }
@@ -118,7 +125,8 @@ impl Blocks {
         }
     }
     pub fn direct_ptrs(&self) -> Cow<'_, [u32]> {
-        // This is way too ugly.
+        // This is way too ugly. TODO: Replace the Blocks struct with an enum to avoid having to
+        // allocate every time on big-endian platforms.
         match self.block_ptrs() {
             Cow::Borrowed(b) => Cow::Borrowed(&b[..12]),
             Cow::Owned(mut o) => {
@@ -318,6 +326,15 @@ impl InodeRaw {
             panic!("Only Linux filesystems support 32-bit GIDs")
         }
     }
+    pub fn xattr_block(&self, os: OsId) -> u64 {
+        u64::from(self.file_acl_lo) | if os == OsId::Linux { (u64::from(fal::read_u16(&self.os_specific_2, 2)) << 32) } else { 0 }
+    }
+    pub fn set_xattr_block(&mut self, os: OsId, block: u64) {
+        self.file_acl_lo = block as u32;
+        if os == OsId::Linux {
+            fal::write_u16(&mut self.os_specific_2, 2, (block >> 32) as u16);
+        }
+    }
     pub fn checksum(&self, os_id: OsId) -> Option<u32> {
         if os_id != OsId::Linux {
             return None;
@@ -412,7 +429,7 @@ impl InodeRaw {
     }
 }
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Inode {
     pub(crate) block_size: u32,
     pub(crate) block_count: u64,
@@ -421,6 +438,7 @@ pub struct Inode {
     pub(crate) checksum_seed: u32,
     pub(crate) os: OsId,
     pub raw: InodeRaw,
+    pub xattrs: Option<InlineXattrs>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -509,8 +527,8 @@ impl Inode {
         filesystem: &Filesystem<R>,
         inode_address: u32,
     ) -> Result<Self, InodeIoError> {
-        if inode_address == 0 {
-            return Err(fal::Error::Invalid.into());
+        if inode_address == 0 || inode_address >= filesystem.superblock.inode_count {
+            return Err(fal::Error::Invalid.into())
         }
 
         if !block_group::inode_exists(inode_address, filesystem)? {
@@ -545,7 +563,13 @@ impl Inode {
         )?;
         let inode_bytes = &containing_block
             [inode_index_in_block * inode_size..inode_index_in_block * inode_size + inode_size];
-        Ok(Self::parse(&filesystem.superblock, inode_address, inode_bytes).unwrap())
+        
+        let mut this = Self::parse(&filesystem.superblock, inode_address, inode_bytes).unwrap();
+
+        let xattrs = InlineXattrs::load(filesystem, &this.raw, inode_bytes)?;
+        this.xattrs = xattrs;
+
+        Ok(this)
     }
     pub fn store<D: fal::DeviceMut>(
         this: &Self,
@@ -617,6 +641,7 @@ impl Inode {
             size,
             checksum_seed,
             os: superblock.os_id(),
+            xattrs: None,
         };
         if let Some(checksum) = this.checksum(superblock.os_id()) {
             if InodeRaw::calculate_crc32c(&bytes, checksum_seed) != checksum {
@@ -635,6 +660,8 @@ impl Inode {
                 msg: "inode uses both extents and inline data",
             });
         }
+
+
         Ok(this)
     }
     pub fn serialize(
@@ -655,6 +682,9 @@ impl Inode {
     }
     fn entry_count(block_size: u32) -> usize {
         block_size as usize / mem::size_of::<u32>()
+    }
+    pub fn xattr_block(&self) -> u64 {
+        InodeRaw::xattr_block(self, self.os)
     }
     fn read_singly<D: fal::Device>(
         filesystem: &Filesystem<D>,
@@ -904,7 +934,7 @@ impl Inode {
     }
     pub fn write<D: fal::DeviceMut>(
         &mut self,
-        filesystem: &mut Filesystem<D>,
+        filesystem: &Filesystem<D>,
         offset: u64,
         mut buffer: &[u8],
     ) -> Result<u64, InodeIoError> {
@@ -999,7 +1029,7 @@ impl Inode {
             self.read_block(0, filesystem, &mut buffer)?;
 
             let root = crate::htree::HtreeRootBlock::parse(&buffer)?;
-            dbg!(root);
+            //dbg!(root);
 
             // BIG TODO: Implement the optional feature DIR_HASH_INDEX (HTREEs). This requires
             // getting the md4 sum to actually be correct. I'm quite sure that I will have to

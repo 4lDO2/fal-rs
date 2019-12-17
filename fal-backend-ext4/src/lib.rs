@@ -4,6 +4,7 @@ use std::{
     time::SystemTime,
 };
 
+use chashmap::CHashMap;
 use crc::crc32;
 use fal::{time::Timespec, Filesystem as _};
 
@@ -14,6 +15,7 @@ pub mod htree;
 pub mod inode;
 pub mod journal;
 pub mod superblock;
+pub mod xattr;
 
 pub use inode::Inode;
 pub use journal::Journal;
@@ -47,7 +49,7 @@ pub use fal::{
 pub struct Filesystem<D> {
     pub superblock: Superblock,
     pub disk: Disk<D>,
-    pub(crate) fhs: HashMap<u64, FileHandle>,
+    pub(crate) fhs: CHashMap<u64, FileHandle>,
     pub(crate) last_fh: u64,
     pub general_options: fal::Options,
     pub(crate) journal: Option<Journal>,
@@ -78,10 +80,12 @@ impl<D: fal::DeviceMut> Filesystem<D> {
             return Err(fal::Error::NotDirectory);
         }
 
+        let num = fh.fh;
+
         self.fhs.insert(self.last_fh, fh);
         self.last_fh += 1;
 
-        Ok(fh.fh)
+        Ok(num)
     }
     fn update_superblock(&mut self) {
         self.superblock
@@ -138,7 +142,7 @@ impl fal::Inode for Inode {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileHandle {
     fh: u64,
     offset: u64,
@@ -186,8 +190,8 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
         // TODO: Check for feature flags here.
 
         let mut filesystem = Self {
-            disk: Disk::new(device),
-            fhs: HashMap::new(),
+            disk: Disk::new(device).unwrap(),
+            fhs: CHashMap::new(),
             last_fh: 0,
             general_options,
             journal: None,
@@ -222,7 +226,7 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
     }
     fn read(&mut self, fh: u64, offset: u64, buffer: &mut [u8]) -> fal::Result<usize> {
         if self.fhs.get(&fh).is_some() {
-            let inode: inode::Inode = self.fhs[&fh].inode;
+            let inode: &inode::Inode = &self.fhs.get(&fh).unwrap().inode;
 
             // Check that the buffer doesn't overflow the inode size.
             let bytes_to_read = std::cmp::min(offset + buffer.len() as u64, inode.size()) - offset;
@@ -243,9 +247,10 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
         if self.fhs.get(&fh).is_some() {
             // There is no need here to check whether the buffer overflows the length, as there
             // will be allocation in that case.
-            let mut inode = self.fhs[&fh].inode;
+            let mut inode_guard = self.fhs.get_mut(&fh).unwrap();
 
-            inode.write(self, offset, buffer).into_fal_result("File couldn't be written to")?;
+            inode_guard.inode.write(self, offset, buffer).into_fal_result("File couldn't be written to")?;
+            Inode::store(&inode_guard.inode, self).into_fal_result("Inode couldn't be stored when writing to file")?;
 
             // The return value is the number of bytes written. Unless this driver actually splits the
             // writes depending on the buffer size, which I cannot find any real benefit of doing, the
@@ -285,7 +290,7 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
                 .dir_entries(self)
                 .into_fal_result("Directory couldn't be read")?
                 .enumerate()
-                .nth(self.fhs[&fh].offset as usize + offset as usize)
+                .nth(self.fhs.get(&fh).unwrap().offset as usize + offset as usize)
             {
                 Some((offset, entry)) => Some({
                     fal::DirectoryEntry {
@@ -346,10 +351,10 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
     }
 
     fn fh_offset(&self, fh: u64) -> u64 {
-        self.fhs[&fh].offset
+        self.fhs.get(&fh).unwrap().offset
     }
     fn fh_inode(&self, fh: u64) -> Inode {
-        self.fhs[&fh].inode
+        self.fhs.get(&fh).unwrap().inode.clone()
     }
 
     fn set_fh_offset(&mut self, fh: u64, offset: u64) {
