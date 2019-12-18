@@ -1,6 +1,7 @@
 use std::{
     borrow::Cow,
     convert::{TryFrom, TryInto},
+    error::Error as _,
     fmt, io, mem,
 };
 
@@ -61,6 +62,7 @@ quick_error! {
             description("failed to allocate additional extents-based blocks")
             from()
             cause(err)
+            display(this) -> ("{}: {}", this.description(), this.source().unwrap())
         }
         LoadXattrsError(err: LoadXattrsError) {
             from()
@@ -147,7 +149,7 @@ impl Blocks {
     pub fn extent_tree(&self, seed: u32) -> ExtentTree {
         ExtentTree::from_inode_blocks_field(seed, self).unwrap()
     }
-    pub fn set_extent_tree(&mut self, tree: &ExtentTree) {
+    pub fn set_extent_tree(&mut self, tree: &mut ExtentTree) {
         ExtentTree::to_inode_blocks_field(tree, self).unwrap()
     }
 }
@@ -276,11 +278,11 @@ impl InodeRaw {
         }
     }
     pub fn size_in_blocks(&self, superblock: &Superblock) -> u64 {
-        let number_of_blocks = u64::from(self.block_count_lo) + if !superblock.ro_compat_features().contains(RoFeatureFlags::HUGE_FILE) {
+        let number_of_blocks = u64::from(self.block_count_lo) | (if !superblock.ro_compat_features().contains(RoFeatureFlags::HUGE_FILE) {
             u64::from(self.block_count_hi())
         } else {
             0
-        } << 32;
+        } << 32);
 
         if self.flags().contains(InodeFlags::HUGE_FILE) {
             number_of_blocks
@@ -680,6 +682,9 @@ impl Inode {
     pub fn size(&self) -> u64 {
         self.size
     }
+    pub fn set_size(&mut self, size: u64) {
+        self.size = size;
+    }
     fn entry_count(block_size: u32) -> usize {
         block_size as usize / mem::size_of::<u32>()
     }
@@ -953,7 +958,11 @@ impl Inode {
         } else if self.flags().contains(InodeFlags::EXTENTS) {
             let mut root = self.blocks.extent_tree(self.checksum_seed);
             extents::allocate_extent_blocks(filesystem, &mut root, baddr, len)?;
-            self.blocks.set_extent_tree(&root);
+            self.blocks.set_extent_tree(&mut root);
+
+            let new_block_count = self.block_count() + u64::from(len);
+            self.set_block_count(new_block_count);
+            self.set_size_in_blocks(&filesystem.superblock, new_block_count);
         } else {
             unimplemented!("allocating blocks for an inode which uses the conventional (ext2/3) block resolution")
         }
@@ -968,12 +977,19 @@ impl Inode {
         offset: u64,
         mut buffer: &[u8],
     ) -> Result<u64, InodeIoError> {
+        if self.flags().contains(InodeFlags::INLINE_DATA) {
+            unimplemented!("writing to inline inodes");
+        }
+
         let off_from_rel_block = offset % u64::from(filesystem.superblock.block_size());
         let rel_baddr_start = u32::try_from(offset / u64::from(filesystem.superblock.block_size())).or(Err(fal::Error::FileTooBig))?;
 
         let mut block_bytes = allocate_block_bytes(&filesystem.superblock);
 
         if off_from_rel_block != 0 {
+
+            assert_ne!(self.size_in_blocks(&filesystem.superblock), 0, "writing from a nonzero offset to an empty file");
+
             self.read_block(
                 rel_baddr_start,
                 filesystem,
@@ -999,7 +1015,8 @@ impl Inode {
             // Even though the size is set in this case, no allocation is required until the main write
             // loop is entered.
             let new_size = self.size() + bytes_written;
-            self.set_size(&filesystem.superblock, new_size);
+            self.set_size(new_size);
+            InodeRaw::set_size(self, &filesystem.superblock, new_size);
 
             return Ok(if buffer.len() as u64 >= off_from_rel_block {
                 bytes_written + self.write(
@@ -1012,27 +1029,60 @@ impl Inode {
             });
         }
 
-        let mut current_rel_baddr = u32::try_from(rel_baddr_start).unwrap();
-        let mut bytes_written = 0;
+        let mut current_rel_baddr = rel_baddr_start;
+        let mut bytes_written = 0u64;
 
-        while buffer.len() >= usize::try_from(filesystem.superblock.block_size()).unwrap() {
+        while buffer.len() >= filesystem.superblock.block_size() as usize {
             block_bytes.copy_from_slice(
-                &buffer[..usize::try_from(filesystem.superblock.block_size()).unwrap()],
+                &buffer[..filesystem.superblock.block_size() as usize],
             );
+
+            if !self.block_is_allocated(&filesystem.superblock, current_rel_baddr) {
+                self.allocate_blocks(filesystem, current_rel_baddr, 1)?;
+            }
+
+            let current_offset = u64::from(current_rel_baddr) * u64::from(filesystem.superblock.block_size());
+            let offset_after_block = current_offset + u64::from(filesystem.superblock.block_size());
+
+            if offset_after_block >= self.size() {
+                self.set_size(offset_after_block);
+                InodeRaw::set_size(self, &filesystem.superblock, offset_after_block);
+            }
 
             self.write_block(current_rel_baddr, filesystem, &block_bytes)?;
 
-            buffer = &buffer[usize::try_from(filesystem.superblock.block_size()).unwrap()..];
+            buffer = &buffer[filesystem.superblock.block_size() as usize..];
             current_rel_baddr += 1;
+            bytes_written += u64::from(filesystem.superblock.block_size());
         }
 
         if !buffer.is_empty() {
-            self.read_block(current_rel_baddr, filesystem, &mut block_bytes)?;
+            if self.block_is_allocated(&filesystem.superblock, current_rel_baddr) {
+                self.read_block(current_rel_baddr, filesystem, &mut block_bytes)?;
+            } else {
+                self.allocate_blocks(filesystem, current_rel_baddr, 1)?;
+            }
+
             block_bytes[..buffer.len()].copy_from_slice(&buffer);
             self.write_block(current_rel_baddr, filesystem, &block_bytes)?;
+
+            bytes_written += buffer.len() as u64;
+
+            let size = self.size() + buffer.len() as u64;
+            self.set_size(size);
+            InodeRaw::set_size(self, &filesystem.superblock, size);
         }
 
         Ok(bytes_written)
+    }
+    fn block_is_allocated(&self, superblock: &Superblock, rel_baddr: u32) -> bool {
+        u64::from(rel_baddr) < self.size_in_blocks(superblock)
+    }
+    fn set_block_count(&mut self, block_count: u64) {
+        self.block_count = block_count;
+    }
+    fn block_count(&self) -> u64 {
+        self.block_count
     }
     fn raw_dir_entries<'a, D: fal::Device>(
         &'a self,

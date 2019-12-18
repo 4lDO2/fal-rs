@@ -146,6 +146,15 @@ pub enum ExtentTreeBody {
     Leaf(Vec<ExtentLeaf>),
 }
 
+impl ExtentTreeBody {
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Internal(ref int) => int.len(),
+            Self::Leaf(ref leaf) => leaf.len(),
+        }
+    }
+}
+
 /// An extent tree, used for resolving virtual block addresses derived from file offsets, to
 /// physical blocks containing the actual data.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -168,10 +177,10 @@ impl ExtentTree {
     pub fn from_block(seed: u32, bytes: &[u8]) -> Result<Self, scroll::Error> {
         Self::parse(seed, bytes, true)
     }
-    pub fn to_inode_blocks_field(this: &Self, blocks: &mut Blocks) -> Result<(), scroll::Error> {
+    pub fn to_inode_blocks_field(this: &mut Self, blocks: &mut Blocks) -> Result<(), scroll::Error> {
         Self::serialize(this, &mut blocks.inner, false)
     }
-    pub fn to_block(this: &Self, bytes: &mut [u8]) -> Result<(), scroll::Error> {
+    pub fn to_block(this: &mut Self, bytes: &mut [u8]) -> Result<(), scroll::Error> {
         Self::serialize(this, bytes, true)
     }
 
@@ -226,7 +235,9 @@ impl ExtentTree {
             size: bytes.len(),
         })
     }
-    fn serialize(this: &Self, bytes: &mut [u8], use_tail: bool) -> Result<(), scroll::Error> {
+    fn serialize(this: &mut Self, bytes: &mut [u8], use_tail: bool) -> Result<(), scroll::Error> {
+        this.header.entry_count = this.body.len().try_into().expect("Too many entries");
+
         let mut offset = 0;
         bytes.gwrite_with(&this.header, &mut offset, scroll::LE)?;
 
@@ -322,37 +333,37 @@ impl ExtentTree {
             .expect("Calling resolve_local_leaf on an internal node");
         items.binary_search_by_key(&logical_block, |item| item.block)
     }
-    fn leaves(&self) -> Option<&[ExtentLeaf]> {
+    pub(crate) fn leaves(&self) -> Option<&[ExtentLeaf]> {
         match self.body {
             ExtentTreeBody::Leaf(ref items) => Some(items),
             _ => None,
         }
     }
-    fn leaves_mut(&mut self) -> Option<&mut Vec<ExtentLeaf>> {
+    pub(crate) fn leaves_mut(&mut self) -> Option<&mut Vec<ExtentLeaf>> {
         match self.body {
             ExtentTreeBody::Leaf(ref mut items) => Some(items),
             _ => None,
         }
     }
-    fn internal_node_items(&self) -> Option<&[ExtentInternalNode]> {
+    pub(crate) fn internal_node_items(&self) -> Option<&[ExtentInternalNode]> {
         match self.body {
             ExtentTreeBody::Internal(ref items) => Some(items),
             _ => None,
         }
     }
-    fn internal_node_items_mut(&mut self) -> Option<&mut Vec<ExtentInternalNode>> {
+    pub(crate) fn internal_node_items_mut(&mut self) -> Option<&mut Vec<ExtentInternalNode>> {
         match self.body {
             ExtentTreeBody::Internal(ref mut items) => Some(items),
             _ => None,
         }
     }
-    fn local_items_capacity(&self) -> usize {
+    pub(crate) fn local_items_capacity(&self) -> usize {
         self.header.max_entry_count as usize
     }
-    fn local_items_len(&self) -> usize {
+    pub(crate) fn local_items_len(&self) -> usize {
         self.header.entry_count as usize
     }
-    fn node_is_full(&self) -> bool {
+    pub(crate) fn node_is_full(&self) -> bool {
         assert!(self.local_items_len() <= self.local_items_capacity());
         self.local_items_len() == self.local_items_capacity()
     }
@@ -415,8 +426,12 @@ impl ExtentTree {
 quick_error! {
     #[derive(Debug)]
     pub enum AllocateExtentLeafError {
-        NodeIsFull {}
-        AlreadyExists {}
+        NodeIsFull {
+            description("node is full")
+        }
+        AlreadyExists {
+            description("extent already exists")
+        }
         AllocateBlockError(err: block_group::AllocateBlockError) {
             from()
             cause(err)
@@ -454,11 +469,14 @@ fn allocate_extent_leaf<D: fal::DeviceMut>(
             Ok(_) => return Err(AllocateExtentLeafError::AlreadyExists),
 
             Err(new_index) => {
-                let previous_extent = &root.leaves().unwrap()[new_index - 1];
+                let leaves = root.leaves().unwrap();
+                let previous_extent = leaves.get(if new_index == 0 { 1 } else { new_index } - 1);
                 let range = rel_baddr..rel_baddr + u32::from(len);
 
-                if new_index > 0 && previous_extent.overlaps(range.clone()) {
-                    return Err(AllocateExtentLeafError::Overlaps(previous_extent.rel_range(), range));
+                if let Some(previous_extent) = previous_extent {
+                    if new_index > 0 && previous_extent.overlaps(range.clone()) {
+                        return Err(AllocateExtentLeafError::Overlaps(previous_extent.rel_range(), range));
+                    }
                 }
 
                 // Unlike the usual case where Err leads to return Err, in this case Err(idx) means
@@ -481,7 +499,7 @@ fn allocate_extent_leaf<D: fal::DeviceMut>(
 
         // Create a new subtree containing the single to-be-allocated extent.
         allocate_extent_leaf(filesystem, &mut subtree, rel_baddr, len)?;
-        ExtentTree::serialize(&subtree, &mut block_bytes, true)?;
+        ExtentTree::serialize(&mut subtree, &mut block_bytes, true)?;
         filesystem.disk.write_block(
             filesystem,
             BlockKind::Metadata,
@@ -514,6 +532,7 @@ quick_error! {
             from()
             description("the allocation of a new extent leaf or the extension of an existing leaf failed")
             cause(err)
+            display(this) -> ("{}: {}", this.description(), this.source().unwrap())
         }
         TooLarge {
             description("the maximum depth of all extent trees prevents the extent tree from allocating additional extents")
@@ -528,10 +547,17 @@ pub fn allocate_extent_blocks<D: fal::DeviceMut>(
     block_count: u32,
 ) -> Result<(), AllocateExtentBlocksError> {
     let blocks_per_extent = u32::from(MAX_EXTENT_LEN);
-    for current_start_block in (0..block_count).step_by(blocks_per_extent as usize) {
-        let offset = (current_start_block as u32 % blocks_per_extent) as u16;
-        allocate_extent_leaf(filesystem, root, rel_baddr, offset)?;
+
+    // BIG TODO: If AllocExtentLeafError::NodeIsFull is returned, a new tree (in the inode blocks
+    // field) shall be created, and the existing tree shall be turned into a block-based subtree.
+
+    let mut current_rel_block = 0;
+
+    while current_rel_block + blocks_per_extent < block_count {
+        allocate_extent_leaf(filesystem, root, rel_baddr + current_rel_block, blocks_per_extent as u16)?;
+        current_rel_block += blocks_per_extent;
     }
+    allocate_extent_leaf(filesystem, root, rel_baddr + current_rel_block, (block_count - current_rel_block * blocks_per_extent) as u16)?;
     Ok(())
 }
 

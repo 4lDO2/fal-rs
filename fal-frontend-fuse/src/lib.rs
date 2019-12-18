@@ -402,7 +402,7 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
 
         assert_eq!(inode.into(), inode_struct.attrs().inode.into());
 
-        let bytes_written = self.inner().write(fh, offset, buffer).unwrap();
+        let bytes_written = handle_fal_error!(self.inner().write(fh, offset, buffer), reply);
         reply.written(bytes_written as u32);
     }
     fn release(
@@ -415,7 +415,7 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
         _flush: bool,
         reply: ReplyEmpty,
     ) {
-        self.inner().close(fh).unwrap();
+        handle_fal_error!(self.inner().close(fh), reply);
         reply.ok();
     }
     fn readlink(&mut self, _req: &Request, fuse_inode: u64, reply: ReplyData) {
@@ -426,13 +426,7 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
                 return;
             }
         };
-        let data = match self.inner().readlink(inode) {
-            Ok(data) => data,
-            Err(err) => {
-                reply.error(err.errno());
-                return;
-            }
-        };
+        let data = handle_fal_error!(self.inner().readlink(inode), reply);
         reply.data(&data);
     }
     fn statfs(&mut self, _req: &Request, _inode: u64, reply: ReplyStatfs) {
