@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     sync::atomic::{self, AtomicU32, AtomicU64},
     time::SystemTime,
 };
@@ -23,7 +22,6 @@ pub use superblock::Superblock;
 
 use disk::Disk;
 use inode::InodeIoError;
-use xattr::XattrEntry;
 
 pub fn allocate_block_bytes(superblock: &Superblock) -> Box<[u8]> {
     vec![0u8; superblock.block_size() as usize].into_boxed_slice()
@@ -210,12 +208,19 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
                 None
             }
         };
-        let mut root = filesystem.load_inode(2).unwrap();
+
+        log::debug!("Superblock incompatible feature flags: {:?}", filesystem.superblock.incompat_features());
+        log::debug!("Superblock compatible feature flags: {:?}", filesystem.superblock.compat_features());
+        log::debug!("Superblock r/o compatible feature flags: {:?}", filesystem.superblock.ro_compat_features());
+
+        /*let mut root = filesystem.load_inode(2).unwrap();
         let mut tree =
             extents::ExtentTree::from_inode_blocks_field(root.checksum_seed, &root.blocks).unwrap();
         extents::allocate_extent_blocks(&filesystem, &mut tree, 1337, 42).unwrap();
         extents::ExtentTree::to_inode_blocks_field(&tree, &mut root.blocks).unwrap();
         filesystem.store_inode(&root).unwrap();
+        */
+
         filesystem
     }
 
@@ -227,15 +232,17 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
     }
     fn read(&mut self, fh: u64, offset: u64, buffer: &mut [u8]) -> fal::Result<usize> {
         if self.fhs.get(&fh).is_some() {
-            let inode: &inode::Inode = &self.fhs.get(&fh).unwrap().inode;
+            let bytes_read = {
+                let inode: &inode::Inode = &self.fhs.get(&fh).unwrap().inode;
 
-            // Check that the buffer doesn't overflow the inode size.
-            let bytes_to_read = std::cmp::min(offset + buffer.len() as u64, inode.size()) - offset;
-            let buffer = &mut buffer[..bytes_to_read as usize];
+                // Check that the buffer doesn't overflow the inode size.
+                let bytes_to_read = std::cmp::min(offset + buffer.len() as u64, inode.size()) - offset;
+                let buffer = &mut buffer[..bytes_to_read as usize];
 
-            let bytes_read = inode
-                .read(self, offset, buffer)
-                .into_fal_result("File couldn't be read")?;
+                inode
+                    .read(self, offset, buffer)
+                    .into_fal_result("File couldn't be read")?
+            };
 
             self.fhs.get_mut(&fh).unwrap().offset += bytes_read as u64;
 

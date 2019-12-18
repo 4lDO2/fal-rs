@@ -89,6 +89,9 @@ impl XattrEntry {
         }
         name
     }
+    pub fn is_system_data(&self) -> bool {
+        &self.name == b"data" && self.prefix() == Some(XattrNamePrefix::System)
+    }
 }
 impl<'a> scroll::ctx::TryFromCtx<'a, scroll::Endian> for XattrEntry {
     type Error = scroll::Error;

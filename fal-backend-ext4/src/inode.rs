@@ -99,7 +99,7 @@ impl Eq for Blocks {}
 impl fmt::Debug for Blocks {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         for byte in &self.inner[..] {
-            write!(f, "{:x}", byte)?;
+            write!(f, "{:02x}", byte)?;
         }
         Ok(())
     }
@@ -836,17 +836,47 @@ impl Inode {
             if self.flags().contains(InodeFlags::EXTENTS) {
                 panic!("Inode flag check bypassed")
             }
-            if self.size() > 60 {
-                return Err(InodeIoError::InodeTooLargeForInline(self.size()));
-            }
             if offset >= self.size() {
                 return Ok(0);
             }
 
-            let readable_file_data = &self.blocks.inner[offset as usize..self.size() as usize];
+            let mut bytes_read = 0;
+
+            // begin by reading from the blocks field
+            if offset < 60 {
+                let size_inside_blocks = std::cmp::min(self.size() as usize, 60);
+                let readable_file_data = &self.blocks.inner[offset as usize..size_inside_blocks];
+                let bytes_to_read = std::cmp::min(buffer.len(), readable_file_data.len());
+                buffer[..bytes_to_read].copy_from_slice(&readable_file_data[..bytes_to_read]);
+                bytes_read += bytes_to_read;
+
+                if offset as usize + buffer.len() <= 60 {
+                    return Ok(bytes_read);
+                }
+                buffer = &mut buffer[bytes_read..];
+            }
+
+            // then read from the xattrs
+            let data_xattr = match self.xattrs {
+                Some(ref xattrs) => xattrs,
+
+                // There weren't any xattrs to read from.
+                None => return Err(fal::Error::Overflow.into()),
+            };
+            let data = match data_xattr.entries.iter().find(|(k, _)| k.is_system_data()) {
+                Some((_, v)) => v,
+                // The system.data xattr was missing, and thus further reading would overflow.
+                None => return Err(fal::Error::Overflow.into()),
+            };
+
+            let offset = std::cmp::max(offset, 60) - 60;
+            let size_inside_xattr = std::cmp::min((self.size() - 60) as usize, data.len());
+            let readable_file_data = &data[offset as usize..size_inside_xattr];
             let bytes_to_read = std::cmp::min(buffer.len(), readable_file_data.len());
             buffer[..bytes_to_read].copy_from_slice(&readable_file_data[..bytes_to_read]);
-            return Ok(bytes_to_read);
+            bytes_read += bytes_to_read;
+
+            return Ok(bytes_read);
         }
 
         let mut bytes_read = 0;
@@ -1014,7 +1044,7 @@ impl Inode {
         Ok(RawDirIterator {
             filesystem,
             inode_struct: self,
-            current_entry_offset: 0,
+            current_entry_offset: if self.flags().contains(InodeFlags::INLINE_DATA) { 4 } else { 0 },
             entry_bytes: vec![0; 6],
             finished: false,
         })
@@ -1191,11 +1221,11 @@ impl<'a, D: fal::Device> Iterator for RawDirIterator<'a, D> {
                 self.finished = true;
                 return None;
             }
-            let length = DirEntry::length(&self.entry_bytes[0..6])
+            let length = DirEntry::length(&self.entry_bytes[..6])
                 .try_into()
                 .unwrap();
 
-            if length == 0 {
+            if length == 0 || DirEntry::inode(&self.entry_bytes[..4]) == 0 {
                 self.finished = true;
                 return None;
             }
@@ -1241,6 +1271,9 @@ pub struct DirEntry {
 }
 
 impl DirEntry {
+    pub fn inode(bytes: &[u8]) -> u32 {
+        read_u32(bytes, 0)
+    }
     pub fn length(bytes: &[u8]) -> u16 {
         assert_eq!(bytes.len(), mem::size_of::<u32>() + mem::size_of::<u16>());
         if read_u32(bytes, 0) != 0 {
@@ -1252,7 +1285,7 @@ impl DirEntry {
     pub fn parse(superblock: &Superblock, bytes: &[u8]) -> Self {
         let total_entry_size = read_u16(bytes, 4);
 
-        let name_length = total_entry_size - 8;
+        let name_length = read_u8(bytes, 6);
         let name_bytes = &bytes[8..8 + usize::try_from(name_length).unwrap()];
         let name_bytes = &name_bytes[..name_bytes
             .iter()
