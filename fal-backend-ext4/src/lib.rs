@@ -390,15 +390,16 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
         unimplemented!()
     }
     fn get_xattr(&mut self, inode: &Inode, name: &[u8]) -> fal::Result<Vec<u8>> {
+        // TODO: Support block-based xattrs as well.
         match inode.xattrs {
-            Some(ref x) => x.entries.iter().find(|(k, _)| k.name == name).ok_or(fal::Error::NoEntity).map(|(_, v)| v.clone()),
+            Some(ref x) => x.entries.iter().find(|(k, _)| k.name() == name).ok_or(fal::Error::NoEntity).map(|(_, v)| v.clone()),
             None => Err(fal::Error::NoEntity),
         }
     }
     fn list_xattrs(&mut self, inode: &Inode) -> fal::Result<Vec<Vec<u8>>> {
         // TODO: Support block-based xattrs as well.
         match inode.xattrs {
-            Some(ref x) => Ok(x.entries.iter().map(|(entry, _)| &entry.name).cloned().collect()),
+            Some(ref x) => Ok(x.entries.iter().map(|(entry, _)| entry.name()).collect()),
             None => Ok(vec! []),
         }
     }

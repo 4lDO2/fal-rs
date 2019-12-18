@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use arrayvec::ArrayVec;
 use quick_error::quick_error;
 use scroll::{Pread, Pwrite};
 
@@ -31,6 +32,63 @@ pub struct XattrEntry {
     pub value_size: u32,
     pub hash: u32,
     pub name: Vec<u8>,
+}
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum XattrNamePrefix {
+    User = 1,
+    SystemPosixAclAccess = 2,
+    SystemPosixAclDefault = 3,
+    Trusted = 4,
+    Security = 6,
+    System = 7,
+    SystemRichAcl = 8,
+}
+
+#[derive(Debug)]
+struct InvalidPrefix(u8);
+
+impl XattrNamePrefix {
+    fn from_raw(raw: u8) -> Result<Option<Self>, InvalidPrefix> {
+        Ok(match raw {
+            0 => None,
+            1 => Some(Self::User),
+            2 => Some(Self::SystemPosixAclAccess),
+            3 => Some(Self::SystemPosixAclDefault),
+            4 => Some(Self::Trusted),
+            6 => Some(Self::Security),
+            7 => Some(Self::System),
+            8 => Some(Self::SystemRichAcl),
+            other => return Err(InvalidPrefix(other)),
+        })
+    }
+    fn as_str(&self) -> &[u8] {
+        match self {
+            Self::User => b"user",
+            Self::SystemPosixAclAccess => b"system.posix_acl_access",
+            Self::SystemPosixAclDefault => b"system.posix_acl_default",
+            Self::Trusted => b"trusted",
+            Self::Security => b"security",
+            Self::System => b"system",
+            Self::SystemRichAcl => b"system.rich_acl",
+        }
+    }
+}
+
+impl XattrEntry {
+    pub fn prefix(&self) -> Option<XattrNamePrefix> {
+        XattrNamePrefix::from_raw(self.name_index).expect("Validation passthrough when checking the xattr name prefix")
+    }
+    pub fn name(&self) -> Vec<u8> {
+        let mut name = self.name.clone();
+
+        if let Some(prefix) = self.prefix() {
+            let prefix = prefix.as_str();
+
+            // Prepend prefix and then a dot to the name.
+            name.splice(0..0, ArrayVec::from([prefix, &[b'.']]).into_iter().flatten().copied());
+        }
+        name
+    }
 }
 impl<'a> scroll::ctx::TryFromCtx<'a, scroll::Endian> for XattrEntry {
     type Error = scroll::Error;
