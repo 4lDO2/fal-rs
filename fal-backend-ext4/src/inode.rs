@@ -11,8 +11,9 @@ use crate::{
     extents::{self, ExtentTree},
     read_u16, read_u32, read_u8,
     superblock::{OptionalFeatureFlags, OsId, RequiredFeatureFlags, RoFeatureFlags, Superblock},
-    write_u16, write_u32, write_u8, Filesystem,
+    write_u16, write_u32, write_u8,
     xattr::{InlineXattrs, LoadXattrsError},
+    Filesystem,
 };
 
 use bitflags::bitflags;
@@ -62,7 +63,7 @@ quick_error! {
             description("failed to allocate additional extents-based blocks")
             from()
             cause(err)
-            display(this) -> ("{}: {}", this.description(), this.source().unwrap())
+            display(this) -> ("{}: {}", this.description(), this.cause().unwrap())
         }
         LoadXattrsError(err: LoadXattrsError) {
             from()
@@ -119,7 +120,7 @@ impl Blocks {
 
         #[cfg(not(little_endian))]
         {
-            let mut vector = vec! [0u32; 15];
+            let mut vector = vec![0u32; 15];
             for (n, element) in vector.iter_mut().enumerate() {
                 *element = fal::read_u32(&self.inner, n * 4);
             }
@@ -273,16 +274,23 @@ impl InodeRaw {
         };
 
         self.block_count_lo = raw_number_of_blocks as u32;
-        if superblock.ro_compat_features().contains(RoFeatureFlags::HUGE_FILE) {
+        if superblock
+            .ro_compat_features()
+            .contains(RoFeatureFlags::HUGE_FILE)
+        {
             self.set_block_count_hi((raw_number_of_blocks >> 32) as u16)
         }
     }
     pub fn size_in_blocks(&self, superblock: &Superblock) -> u64 {
-        let number_of_blocks = u64::from(self.block_count_lo) | (if !superblock.ro_compat_features().contains(RoFeatureFlags::HUGE_FILE) {
-            u64::from(self.block_count_hi())
-        } else {
-            0
-        } << 32);
+        let number_of_blocks = u64::from(self.block_count_lo)
+            | (if !superblock
+                .ro_compat_features()
+                .contains(RoFeatureFlags::HUGE_FILE)
+            {
+                u64::from(self.block_count_hi())
+            } else {
+                0
+            } << 32);
 
         if self.flags().contains(InodeFlags::HUGE_FILE) {
             number_of_blocks
@@ -329,7 +337,12 @@ impl InodeRaw {
         }
     }
     pub fn xattr_block(&self, os: OsId) -> u64 {
-        u64::from(self.file_acl_lo) | if os == OsId::Linux { (u64::from(fal::read_u16(&self.os_specific_2, 2)) << 32) } else { 0 }
+        u64::from(self.file_acl_lo)
+            | if os == OsId::Linux {
+                (u64::from(fal::read_u16(&self.os_specific_2, 2)) << 32)
+            } else {
+                0
+            }
     }
     pub fn set_xattr_block(&mut self, os: OsId, block: u64) {
         self.file_acl_lo = block as u32;
@@ -381,7 +394,10 @@ impl InodeRaw {
     }
     pub fn set_size(&mut self, superblock: &Superblock, new_size: u64) {
         self.base.size_lo = new_size as u32;
-        if superblock.ro_compat_features().contains(RoFeatureFlags::EXTENDED_FILE_SIZE) {
+        if superblock
+            .ro_compat_features()
+            .contains(RoFeatureFlags::EXTENDED_FILE_SIZE)
+        {
             self.base.size_hi_or_dir_acl = (new_size >> 32) as u32;
         }
     }
@@ -530,7 +546,7 @@ impl Inode {
         inode_address: u32,
     ) -> Result<Self, InodeIoError> {
         if inode_address == 0 || inode_address >= filesystem.superblock.inode_count {
-            return Err(fal::Error::Invalid.into())
+            return Err(fal::Error::Invalid.into());
         }
 
         if !block_group::inode_exists(inode_address, filesystem)? {
@@ -565,7 +581,7 @@ impl Inode {
         )?;
         let inode_bytes = &containing_block
             [inode_index_in_block * inode_size..inode_index_in_block * inode_size + inode_size];
-        
+
         let mut this = Self::parse(&filesystem.superblock, inode_address, inode_bytes).unwrap();
 
         let xattrs = InlineXattrs::load(filesystem, &this.raw, inode_bytes)?;
@@ -662,7 +678,6 @@ impl Inode {
                 msg: "inode uses both extents and inline data",
             });
         }
-
 
         Ok(this)
     }
@@ -805,12 +820,9 @@ impl Inode {
             return Err(fal::Error::Overflow.into());
         }
         let abs_baddr = self.absolute_baddr(filesystem, rel_baddr)?;
-        filesystem.disk.read_block(
-            filesystem,
-            BlockKind::Data,
-            u64::from(abs_baddr),
-            buffer,
-        )?;
+        filesystem
+            .disk
+            .read_block(filesystem, BlockKind::Data, abs_baddr, buffer)?;
         Ok(())
     }
     pub fn write_block<D: fal::DeviceMut>(
@@ -823,12 +835,9 @@ impl Inode {
             return Err(fal::Error::Overflow.into());
         }
         let abs_baddr = self.absolute_baddr(filesystem, rel_baddr)?;
-        filesystem.disk.write_block(
-            filesystem,
-            BlockKind::Data,
-            u64::from(abs_baddr),
-            buffer,
-        )?;
+        filesystem
+            .disk
+            .write_block(filesystem, BlockKind::Data, abs_baddr, buffer)?;
         Ok(())
     }
     pub fn read<D: fal::Device>(
@@ -946,12 +955,21 @@ impl Inode {
 
         Ok(bytes_read)
     }
-    pub fn allocate_blocks<D: fal::DeviceMut>(&mut self, filesystem: &Filesystem<D>, baddr: u32, len: u32) -> Result<(), InodeIoError> {
+    pub fn allocate_blocks<D: fal::DeviceMut>(
+        &mut self,
+        filesystem: &Filesystem<D>,
+        baddr: u32,
+        len: u32,
+    ) -> Result<(), InodeIoError> {
         if self.flags().contains(InodeFlags::INLINE_DATA) {
             unimplemented!("inline data may be stored in extended attributes");
             self.flags().remove(InodeFlags::INLINE_DATA);
 
-            if filesystem.superblock.incompat_features().contains(RequiredFeatureFlags::EXTENTS) {
+            if filesystem
+                .superblock
+                .incompat_features()
+                .contains(RequiredFeatureFlags::EXTENTS)
+            {
                 self.flags().insert(InodeFlags::EXTENTS);
             }
             self.allocate_blocks(filesystem, baddr, len)?;
@@ -982,19 +1000,19 @@ impl Inode {
         }
 
         let off_from_rel_block = offset % u64::from(filesystem.superblock.block_size());
-        let rel_baddr_start = u32::try_from(offset / u64::from(filesystem.superblock.block_size())).or(Err(fal::Error::FileTooBig))?;
+        let rel_baddr_start = u32::try_from(offset / u64::from(filesystem.superblock.block_size()))
+            .or(Err(fal::Error::FileTooBig))?;
 
         let mut block_bytes = allocate_block_bytes(&filesystem.superblock);
 
         if off_from_rel_block != 0 {
+            assert_ne!(
+                self.size_in_blocks(&filesystem.superblock),
+                0,
+                "writing from a nonzero offset to an empty file"
+            );
 
-            assert_ne!(self.size_in_blocks(&filesystem.superblock), 0, "writing from a nonzero offset to an empty file");
-
-            self.read_block(
-                rel_baddr_start,
-                filesystem,
-                &mut block_bytes,
-            )?;
+            self.read_block(rel_baddr_start, filesystem, &mut block_bytes)?;
 
             let off_from_rel_block_usize = usize::try_from(off_from_rel_block).unwrap();
             let end = std::cmp::min(
@@ -1004,11 +1022,7 @@ impl Inode {
             block_bytes[off_from_rel_block_usize..off_from_rel_block_usize + end]
                 .copy_from_slice(&buffer[..end]);
 
-            self.write_block(
-                rel_baddr_start,
-                filesystem,
-                &block_bytes,
-            )?;
+            self.write_block(rel_baddr_start, filesystem, &block_bytes)?;
 
             let bytes_written = end as u64 - off_from_rel_block as u64;
 
@@ -1019,11 +1033,12 @@ impl Inode {
             InodeRaw::set_size(self, &filesystem.superblock, new_size);
 
             return Ok(if buffer.len() as u64 >= off_from_rel_block {
-                bytes_written + self.write(
-                    filesystem,
-                    fal::round_up(offset, u64::from(filesystem.superblock.block_size())),
-                    &buffer[end..],
-                )?
+                bytes_written
+                    + self.write(
+                        filesystem,
+                        fal::round_up(offset, u64::from(filesystem.superblock.block_size())),
+                        &buffer[end..],
+                    )?
             } else {
                 bytes_written
             });
@@ -1033,15 +1048,14 @@ impl Inode {
         let mut bytes_written = 0u64;
 
         while buffer.len() >= filesystem.superblock.block_size() as usize {
-            block_bytes.copy_from_slice(
-                &buffer[..filesystem.superblock.block_size() as usize],
-            );
+            block_bytes.copy_from_slice(&buffer[..filesystem.superblock.block_size() as usize]);
 
             if !self.block_is_allocated(&filesystem.superblock, current_rel_baddr) {
                 self.allocate_blocks(filesystem, current_rel_baddr, 1)?;
             }
 
-            let current_offset = u64::from(current_rel_baddr) * u64::from(filesystem.superblock.block_size());
+            let current_offset =
+                u64::from(current_rel_baddr) * u64::from(filesystem.superblock.block_size());
             let offset_after_block = current_offset + u64::from(filesystem.superblock.block_size());
 
             if offset_after_block >= self.size() {
@@ -1094,7 +1108,11 @@ impl Inode {
         Ok(RawDirIterator {
             filesystem,
             inode_struct: self,
-            current_entry_offset: if self.flags().contains(InodeFlags::INLINE_DATA) { 4 } else { 0 },
+            current_entry_offset: if self.flags().contains(InodeFlags::INLINE_DATA) {
+                4
+            } else {
+                0
+            },
             entry_bytes: vec![0; 6],
             finished: false,
         })
@@ -1271,9 +1289,7 @@ impl<'a, D: fal::Device> Iterator for RawDirIterator<'a, D> {
                 self.finished = true;
                 return None;
             }
-            let length = DirEntry::length(&self.entry_bytes[..6])
-                .try_into()
-                .unwrap();
+            let length = DirEntry::length(&self.entry_bytes[..6]).try_into().unwrap();
 
             if length == 0 || DirEntry::inode(&self.entry_bytes[..4]) == 0 {
                 self.finished = true;

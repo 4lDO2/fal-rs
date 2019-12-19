@@ -7,7 +7,8 @@ use std::{
 };
 
 use fuse::{
-    ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr, Request,
+    ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs,
+    ReplyWrite, ReplyXattr, Request,
 };
 use time::Timespec;
 
@@ -376,13 +377,22 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
         // This will be the size, but possibly reduced to prevent overflow.
         let bytes_to_read = std::cmp::min(offset + u64::from(size), inode_size) - offset;
 
-        let mut buffer = vec! [0u8; bytes_to_read as usize];
+        let mut buffer = vec![0u8; bytes_to_read as usize];
 
         let bytes_read = handle_fal_error!(self.inner().read(fh, offset, &mut buffer), reply);
         assert_eq!(bytes_read, buffer.len());
         reply.data(&buffer);
     }
-    fn write(&mut self, _req: &Request, fuse_inode: u64, fh: u64, offset: i64, buffer: &[u8], _flags: u32, reply: ReplyWrite) {
+    fn write(
+        &mut self,
+        _req: &Request,
+        fuse_inode: u64,
+        fh: u64,
+        offset: i64,
+        buffer: &[u8],
+        _flags: u32,
+        reply: ReplyWrite,
+    ) {
         let inode: Backend::InodeAddr = match fuse_inode_to_fs_inode(fuse_inode) {
             Some(inode) => inode,
             None => {
@@ -455,7 +465,14 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
             Err(err) => reply.error(err.errno()),
         }
     }
-    fn getxattr(&mut self, _req: &Request, fuse_inode: u64, name: &OsStr, size: u32, reply: ReplyXattr) {
+    fn getxattr(
+        &mut self,
+        _req: &Request,
+        fuse_inode: u64,
+        name: &OsStr,
+        size: u32,
+        reply: ReplyXattr,
+    ) {
         let inode = match fuse_inode_to_fs_inode(fuse_inode) {
             Some(inode) => inode,
             None => {
@@ -490,7 +507,8 @@ impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend
         let key_names = handle_fal_error!(self.inner().list_xattrs(&inode), reply);
 
         // The size of the attribute list, which is all of the xattr key names joined by NUL.
-        let list_size: usize = key_names.iter().map(|vec| vec.len()).sum::<usize>() + key_names.len();
+        let list_size: usize =
+            key_names.iter().map(|vec| vec.len()).sum::<usize>() + key_names.len();
 
         assert!(list_size <= std::u32::MAX as usize);
 

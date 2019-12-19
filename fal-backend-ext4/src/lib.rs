@@ -209,9 +209,18 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
             }
         };
 
-        log::debug!("Superblock incompatible feature flags: {:?}", filesystem.superblock.incompat_features());
-        log::debug!("Superblock compatible feature flags: {:?}", filesystem.superblock.compat_features());
-        log::debug!("Superblock r/o compatible feature flags: {:?}", filesystem.superblock.ro_compat_features());
+        log::debug!(
+            "Superblock incompatible feature flags: {:?}",
+            filesystem.superblock.incompat_features()
+        );
+        log::debug!(
+            "Superblock compatible feature flags: {:?}",
+            filesystem.superblock.compat_features()
+        );
+        log::debug!(
+            "Superblock r/o compatible feature flags: {:?}",
+            filesystem.superblock.ro_compat_features()
+        );
 
         /*let mut root = filesystem.load_inode(2).unwrap();
         let mut tree =
@@ -236,7 +245,8 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
                 let inode: &inode::Inode = &self.fhs.get(&fh).unwrap().inode;
 
                 // Check that the buffer doesn't overflow the inode size.
-                let bytes_to_read = std::cmp::min(offset + buffer.len() as u64, inode.size()) - offset;
+                let bytes_to_read =
+                    std::cmp::min(offset + buffer.len() as u64, inode.size()) - offset;
                 let buffer = &mut buffer[..bytes_to_read as usize];
 
                 inode
@@ -257,8 +267,12 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
             // will be allocation in that case.
             let mut inode_guard = self.fhs.get_mut(&fh).unwrap();
 
-            inode_guard.inode.write(self, offset, buffer).into_fal_result("File couldn't be written to")?;
-            Inode::store(&inode_guard.inode, self).into_fal_result("Inode couldn't be stored when writing to file")?;
+            inode_guard
+                .inode
+                .write(self, offset, buffer)
+                .into_fal_result("File couldn't be written to")?;
+            Inode::store(&inode_guard.inode, self)
+                .into_fal_result("Inode couldn't be stored when writing to file")?;
 
             // The return value is the number of bytes written. Unless this driver actually splits the
             // writes depending on the buffer size, which I cannot find any real benefit of doing, the
@@ -399,15 +413,20 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
     fn get_xattr(&mut self, inode: &Inode, name: &[u8]) -> fal::Result<Vec<u8>> {
         // TODO: Support block-based xattrs as well.
         match inode.xattrs {
-            Some(ref x) => x.entries.iter().find(|(k, _)| k.name() == name).ok_or(fal::Error::NoEntity).map(|(_, v)| v.clone()),
-            None => Err(fal::Error::NoEntity),
+            Some(ref x) => x
+                .entries
+                .iter()
+                .find(|(k, _)| k.name() == name)
+                .ok_or(fal::Error::NoData)
+                .map(|(_, v)| v.clone()),
+            None => Err(fal::Error::NoData),
         }
     }
     fn list_xattrs(&mut self, inode: &Inode) -> fal::Result<Vec<Vec<u8>>> {
         // TODO: Support block-based xattrs as well.
         match inode.xattrs {
             Some(ref x) => Ok(x.entries.iter().map(|(entry, _)| entry.name()).collect()),
-            None => Ok(vec! []),
+            None => Ok(vec![]),
         }
     }
 }

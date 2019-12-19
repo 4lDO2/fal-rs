@@ -4,7 +4,11 @@ use arrayvec::ArrayVec;
 use quick_error::quick_error;
 use scroll::{Pread, Pwrite};
 
-use crate::{Filesystem, inode::{BASE_INODE_SIZE, Inode, InodeIoError, InodeRaw}, superblock::RequiredFeatureFlags};
+use crate::{
+    inode::{Inode, InodeIoError, InodeRaw, BASE_INODE_SIZE},
+    superblock::RequiredFeatureFlags,
+    Filesystem,
+};
 
 pub const MAGIC: u32 = 0xEA02_0000;
 pub const INLINE_HEADER_SIZE: usize = 4;
@@ -76,7 +80,8 @@ impl XattrNamePrefix {
 
 impl XattrEntry {
     pub fn prefix(&self) -> Option<XattrNamePrefix> {
-        XattrNamePrefix::from_raw(self.name_index).expect("Validation passthrough when checking the xattr name prefix")
+        XattrNamePrefix::from_raw(self.name_index)
+            .expect("Validation passthrough when checking the xattr name prefix")
     }
     pub fn name(&self) -> Vec<u8> {
         let mut name = self.name.clone();
@@ -85,7 +90,13 @@ impl XattrEntry {
             let prefix = prefix.as_str();
 
             // Prepend prefix and then a dot to the name.
-            name.splice(0..0, ArrayVec::from([prefix, &[b'.']]).into_iter().flatten().copied());
+            name.splice(
+                0..0,
+                ArrayVec::from([prefix, &[b'.']])
+                    .into_iter()
+                    .flatten()
+                    .copied(),
+            );
         }
         name
     }
@@ -113,15 +124,18 @@ impl<'a> scroll::ctx::TryFromCtx<'a, scroll::Endian> for XattrEntry {
 
         let name = from[offset..len].to_owned();
 
-        Ok((Self {
-            name_length,
-            name_index,
-            value_offset,
-            value_inode,
-            value_size,
-            hash,
-            name,
-        }, len))
+        Ok((
+            Self {
+                name_length,
+                name_index,
+                value_offset,
+                value_inode,
+                value_size,
+                hash,
+                name,
+            },
+            len,
+        ))
     }
 }
 impl scroll::ctx::TryIntoCtx<scroll::Endian> for XattrEntry {
@@ -181,8 +195,13 @@ impl From<InodeIoError> for LoadXattrsError {
 }
 
 impl InlineXattrs {
-    pub fn load<D: fal::Device>(filesystem: &Filesystem<D>, inode: &InodeRaw, inode_bytes: &[u8]) -> Result<Option<Self>, LoadXattrsError> {
-        let inode_size = BASE_INODE_SIZE as u16 + inode.ext.as_ref().map(|ext| ext.extra_isize).unwrap_or(0);
+    pub fn load<D: fal::Device>(
+        filesystem: &Filesystem<D>,
+        inode: &InodeRaw,
+        inode_bytes: &[u8],
+    ) -> Result<Option<Self>, LoadXattrsError> {
+        let inode_size =
+            BASE_INODE_SIZE as u16 + inode.ext.as_ref().map(|ext| ext.extra_isize).unwrap_or(0);
         let space_for_xattrs = filesystem.superblock.inode_size() - inode_size;
 
         if space_for_xattrs < 4 {
@@ -208,19 +227,25 @@ impl InlineXattrs {
 
             if entry.name_length == 0 {
                 // This makes little sense, but I'm not sure about an alternative.
-                break
+                break;
             }
 
             let value = if entry.value_inode == 0 {
                 let base = inode_size as usize + INLINE_HEADER_SIZE;
-                inode_bytes[base + entry.value_offset as usize..base + entry.value_offset as usize + entry.value_size as usize].to_owned()
+                inode_bytes[base + entry.value_offset as usize
+                    ..base + entry.value_offset as usize + entry.value_size as usize]
+                    .to_owned()
             } else {
-                if filesystem.superblock.incompat_features().contains(RequiredFeatureFlags::EA_INODE) {
+                if filesystem
+                    .superblock
+                    .incompat_features()
+                    .contains(RequiredFeatureFlags::EA_INODE)
+                {
                     panic!("Xattr using EA_INODE even though the feature flag has been disabled.")
                 }
                 let inode = Inode::load(filesystem, entry.value_inode)?;
 
-                let mut bytes = vec! [0u8; entry.value_size as usize];
+                let mut bytes = vec![0u8; entry.value_size as usize];
                 let bytes_read = inode.read(filesystem, entry.value_offset.into(), &mut bytes)?;
 
                 assert_eq!(bytes_read, bytes.len());
@@ -231,9 +256,6 @@ impl InlineXattrs {
             entries.insert(entry, value);
         }
 
-        Ok(Some(Self {
-            header,
-            entries,
-        }))
+        Ok(Some(Self { header, entries }))
     }
 }

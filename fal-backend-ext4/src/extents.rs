@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, convert::TryInto, error::Error as _, io, ops::Range};
+use std::{cmp::Ordering, convert::TryInto, error::Error as _, io, mem, ops::Range};
 
 use crate::{
     allocate_block_bytes, block_group, calculate_crc32c, disk::BlockKind, inode::Blocks, Filesystem,
@@ -6,6 +6,9 @@ use crate::{
 
 use quick_error::quick_error;
 use scroll::{Pread, Pwrite};
+
+mod pairs;
+pub use pairs::Pairs;
 
 /// The magic number identifying extent trees.
 pub const MAGIC: u16 = 0xF30A;
@@ -112,7 +115,10 @@ impl ExtentLeaf {
     }
     pub fn overlaps(&self, range: Range<u32>) -> bool {
         let self_range = self.rel_range();
-        range.contains(&self_range.start) || range.contains(&(self_range.end - 1)) || self_range.contains(&range.start) || self_range.contains(&(range.end - 1))
+        range.contains(&self_range.start)
+            || range.contains(&(self_range.end - 1))
+            || self_range.contains(&range.start)
+            || self_range.contains(&(range.end - 1))
     }
     pub fn is_empty(&self) -> bool {
         self.len() == 0
@@ -177,7 +183,10 @@ impl ExtentTree {
     pub fn from_block(seed: u32, bytes: &[u8]) -> Result<Self, scroll::Error> {
         Self::parse(seed, bytes, true)
     }
-    pub fn to_inode_blocks_field(this: &mut Self, blocks: &mut Blocks) -> Result<(), scroll::Error> {
+    pub fn to_inode_blocks_field(
+        this: &mut Self,
+        blocks: &mut Blocks,
+    ) -> Result<(), scroll::Error> {
         Self::serialize(this, &mut blocks.inner, false)
     }
     pub fn to_block(this: &mut Self, bytes: &mut [u8]) -> Result<(), scroll::Error> {
@@ -263,8 +272,8 @@ impl ExtentTree {
         }
         Ok(())
     }
-    fn calculate_max_entry_count(size: usize) -> usize {
-        (size - HEADER_SIZE - TAIL_SIZE) / ITEM_SIZE
+    fn calculate_max_entry_count(size: usize, use_tail: bool) -> usize {
+        (size - HEADER_SIZE - if use_tail { TAIL_SIZE } else { 0 }) / ITEM_SIZE
     }
     pub fn new_subtree(parent: &Self, size: usize) -> Self {
         let depth = parent
@@ -279,7 +288,7 @@ impl ExtentTree {
                 depth,
                 entry_count: 0,
                 generation: 0,
-                max_entry_count: Self::calculate_max_entry_count(size)
+                max_entry_count: Self::calculate_max_entry_count(size, true)
                     .try_into()
                     .expect("what extent tree block size (aka block size) are you using?"),
             },
@@ -363,9 +372,16 @@ impl ExtentTree {
     pub(crate) fn local_items_len(&self) -> usize {
         self.header.entry_count as usize
     }
+    pub(crate) fn dyn_local_items_len(&mut self) -> usize {
+        self.header.entry_count = self.body.len().try_into().expect("Too many node items");
+        self.local_items_len()
+    }
     pub(crate) fn node_is_full(&self) -> bool {
         assert!(self.local_items_len() <= self.local_items_capacity());
-        self.local_items_len() == self.local_items_capacity()
+        self.local_items_len() >= self.local_items_capacity()
+    }
+    pub(crate) fn node_will_be_full(&self) -> bool {
+        self.local_items_len() + 1 >= self.local_items_capacity()
     }
     pub fn is_leaf(&self) -> bool {
         self.header.depth == 0
@@ -402,9 +418,19 @@ impl ExtentTree {
             // Find the closest extent key, which points to the subtree containing a possibly closer extent key.
             let closest_lower_or_eq_idx = match self.resolve_local_internal(logical_block) {
                 Ok(idx) => idx,
-                Err(closest_lower_idx) => closest_lower_idx,
+                Err(closest_lower_idx) => {
+                    if closest_lower_idx < self.body.len() {
+                        closest_lower_idx
+                    } else {
+                        self.body.len() - 1
+                    }
+                }
             };
-            let item = self.internal_node_items().unwrap()[closest_lower_or_eq_idx];
+            let mut item = self.internal_node_items().unwrap()[closest_lower_or_eq_idx];
+
+            if logical_block < item.block {
+                item = self.internal_node_items()?[closest_lower_or_eq_idx - 1];
+            }
 
             // Load the subtree and search it.
             let mut child_node_block = allocate_block_bytes(&filesystem.superblock);
@@ -419,6 +445,12 @@ impl ExtentTree {
                 .unwrap();
             let child_node = Self::from_block(self.checksum_seed, &child_node_block).unwrap();
             child_node.resolve(filesystem, logical_block)
+        }
+    }
+    fn first_rel_baddr(&self) -> Option<u32> {
+        match self.body {
+            ExtentTreeBody::Internal(ref int) => int.first().map(|node| node.block),
+            ExtentTreeBody::Leaf(ref leaf) => leaf.first().map(|leaf| leaf.block),
         }
     }
 }
@@ -466,7 +498,9 @@ fn allocate_extent_leaf<D: fal::DeviceMut>(
         assert_eq!(allocated_range.end - allocated_range.start, u64::from(len));
 
         match root.resolve_local_leaf(rel_baddr) {
-            Ok(_) => return Err(AllocateExtentLeafError::AlreadyExists),
+            Ok(_) => {
+                return Err(AllocateExtentLeafError::AlreadyExists);
+            }
 
             Err(new_index) => {
                 let leaves = root.leaves().unwrap();
@@ -475,7 +509,10 @@ fn allocate_extent_leaf<D: fal::DeviceMut>(
 
                 if let Some(previous_extent) = previous_extent {
                     if new_index > 0 && previous_extent.overlaps(range.clone()) {
-                        return Err(AllocateExtentLeafError::Overlaps(previous_extent.rel_range(), range));
+                        return Err(AllocateExtentLeafError::Overlaps(
+                            previous_extent.rel_range(),
+                            range,
+                        ));
                     }
                 }
 
@@ -487,39 +524,96 @@ fn allocate_extent_leaf<D: fal::DeviceMut>(
             }
         }
     } else {
-        if root.node_is_full() {
-            return Err(AllocateExtentLeafError::NodeIsFull);
-        }
-        let allocated_block = block_group::allocate_block(filesystem)?;
-
         let mut block_bytes = allocate_block_bytes(&filesystem.superblock);
 
-        let mut subtree =
-            ExtentTree::new_subtree(&root, filesystem.superblock.block_size() as usize);
-
-        // Create a new subtree containing the single to-be-allocated extent.
-        allocate_extent_leaf(filesystem, &mut subtree, rel_baddr, len)?;
-        ExtentTree::serialize(&mut subtree, &mut block_bytes, true)?;
-        filesystem.disk.write_block(
-            filesystem,
-            BlockKind::Metadata,
-            allocated_block,
-            &block_bytes,
-        )?;
-
-        // Update the root to include the new entry.
-        match root.resolve_local_internal(rel_baddr) {
-            Ok(_) => return Err(AllocateExtentLeafError::AlreadyExists),
-
-            Err(new_index) => {
-                // The same thing as with the leaf insertion happens here; a new internal subtree
-                // pointer entry is simply inserted in a sorted order.
-
-                let new_entry = ExtentInternalNode::new(rel_baddr, allocated_block);
-                root.internal_node_items_mut()
-                    .unwrap()
-                    .insert(new_index, new_entry);
+        fn insert_new_subtree<E: fal::DeviceMut>(
+            filesystem: &Filesystem<E>,
+            root: &mut ExtentTree,
+            rel_baddr: u32,
+            len: u16,
+            block_bytes: &mut [u8],
+        ) -> Result<(), AllocateExtentLeafError> {
+            if root.node_is_full() {
+                return Err(AllocateExtentLeafError::NodeIsFull);
             }
+            let allocated_block = block_group::allocate_block(filesystem)?;
+
+            let mut subtree =
+                ExtentTree::new_subtree(&root, filesystem.superblock.block_size() as usize);
+
+            // Create a new subtree containing the single to-be-allocated extent.
+            allocate_extent_leaf(filesystem, &mut subtree, rel_baddr, len)?;
+
+            ExtentTree::serialize(&mut subtree, block_bytes, true)?;
+            filesystem.disk.write_block(
+                filesystem,
+                BlockKind::Metadata,
+                allocated_block,
+                &block_bytes,
+            )?;
+
+            // Update the root to include the new entry.
+            match root.resolve_local_internal(rel_baddr) {
+                Ok(_) => {
+                    return Err(AllocateExtentLeafError::AlreadyExists);
+                }
+
+                Err(new_index) => {
+                    // The same thing as with the leaf insertion happens here; a new internal subtree
+                    // pointer entry is simply inserted in a sorted order.
+
+                    let new_entry = ExtentInternalNode::new(rel_baddr, allocated_block);
+                    root.internal_node_items_mut()
+                        .unwrap()
+                        .insert(new_index, new_entry);
+                    Ok(())
+                }
+            }
+        };
+        // Try to climb up (closer to the leaves), and allocate there.
+        let mut idx = match root.resolve_local_internal(rel_baddr) {
+            // If rel_baddr already exists in the internal nodes, that doesn't necessarily mean
+            // that it's populated with leaves.
+            Ok(i) => i,
+
+            // If a binary search fails, then this index will be where to place the item to keep
+            // the array sorted. There will be a check whether the index is not the previous node
+            // (which possibly contains the leaves where rel_baddr can be inserted), which holds if
+            // the index is zero and the item count is zero, or if the index is outside the range
+            // of the nodes. If so, then a new subtree will simply be allocated.
+            Err(i) => i,
+        };
+        if idx >= root.dyn_local_items_len() {
+            idx = root.dyn_local_items_len() - 1;
+        }
+        if idx == 0 && root.dyn_local_items_len() == 0 {
+            // This node is empty, which means that a new subtree shall be allocated.
+            return insert_new_subtree(filesystem, root, rel_baddr, len, &mut block_bytes);
+        }
+        let block = root.internal_node_items().unwrap()[idx].physical_leaf_block();
+        filesystem
+            .disk
+            .read_block(filesystem, BlockKind::Metadata, block, &mut block_bytes)?;
+
+        let mut subtree = ExtentTree::from_block(root.checksum_seed, &block_bytes)?;
+
+        match allocate_extent_leaf(filesystem, &mut subtree, rel_baddr, len) {
+            Ok(()) => {
+                ExtentTree::serialize(&mut subtree, &mut block_bytes, true)?;
+
+                filesystem.disk.write_block(
+                    filesystem,
+                    BlockKind::Metadata,
+                    block,
+                    &block_bytes,
+                )?;
+                return Ok(());
+            }
+            Err(AllocateExtentLeafError::NodeIsFull) => {
+                // If the current subtree was full, then a new subtree has to be inserted.
+                return insert_new_subtree(filesystem, root, rel_baddr, len, &mut block_bytes);
+            }
+            Err(other) => return Err(other),
         }
     }
     Ok(())
@@ -532,12 +626,97 @@ quick_error! {
             from()
             description("the allocation of a new extent leaf or the extension of an existing leaf failed")
             cause(err)
-            display(this) -> ("{}: {}", this.description(), this.source().unwrap())
+            display(this) -> ("{}: {}", this.description(), this.cause().unwrap())
         }
-        TooLarge {
-            description("the maximum depth of all extent trees prevents the extent tree from allocating additional extents")
+        IncreaseLevelError(err: IncreaseLevelError) {
+            from()
+            description("extent tree level increase error")
+            cause(err)
+            display(this) -> ("additional blocks couldn't be allocated since the tree couldn't add more levels of depth: {}", this.cause().unwrap())
         }
     }
+}
+
+quick_error! {
+    #[derive(Debug)]
+    pub enum IncreaseLevelError {
+        DepthLimit {
+            description("the depth reached 5, the maximum")
+        }
+        ParseError(err: scroll::Error) {
+            from()
+            cause(err)
+            description("parse error")
+            display(this) -> ("{}: {}", this.description(), this.cause().unwrap())
+        }
+        AllocateBlockError(err: block_group::AllocateBlockError) {
+            from()
+            cause(err)
+            description("block allocation error for subtree")
+            display(this) -> ("{}: {}", this.description(), this.cause().unwrap())
+        }
+        DiskIoErr(err: io::Error) {
+            from()
+            cause(err)
+            description("disk i/o error")
+            display(this) -> ("{}: {}", this.description(), this.cause().unwrap())
+        }
+    }
+}
+
+pub fn increase_level<D: fal::DeviceMut>(
+    filesystem: &Filesystem<D>,
+    root: &mut ExtentTree,
+) -> Result<(), IncreaseLevelError> {
+    let mut old_root = mem::replace(
+        root,
+        ExtentTree {
+            header: ExtentHeader {
+                magic: MAGIC,
+                depth: if root.header.depth == 5 {
+                    /*for leaf in root.pairs(filesystem) {
+                        dbg!(leaf.unwrap());
+                    }
+                    panic!();*/
+                    return Err(IncreaseLevelError::DepthLimit);
+                } else {
+                    root.header.depth + 1
+                },
+                entry_count: 1,
+                max_entry_count: root.header.max_entry_count,
+                generation: 0,
+            },
+            body: ExtentTreeBody::Internal(vec![]),
+            checksum_seed: root.checksum_seed,
+            size: root.size, // typically 60 bytes
+            tail: None,
+        },
+    );
+    old_root.size = filesystem.superblock.block_size() as usize;
+    old_root.header.max_entry_count = ((old_root.size - HEADER_SIZE - TAIL_SIZE) / ITEM_SIZE)
+        .try_into()
+        .expect("too many entries to fit in a u16");
+    old_root.tail = Some(ExtentTail { checksum: 0 });
+
+    let mut block_bytes = allocate_block_bytes(&filesystem.superblock);
+    ExtentTree::serialize(&mut old_root, &mut block_bytes, true)?;
+
+    let baddr = block_group::allocate_block(filesystem)?;
+    filesystem
+        .disk
+        .write_block(filesystem, BlockKind::Metadata, baddr, &block_bytes)?;
+
+    let subtree_pointer = ExtentInternalNode::new(
+        old_root
+            .first_rel_baddr()
+            .expect("increasing the level of an empty tree"),
+        baddr,
+    );
+    root.internal_node_items_mut()
+        .unwrap()
+        .push(subtree_pointer);
+
+    Ok(())
 }
 
 pub fn allocate_extent_blocks<D: fal::DeviceMut>(
@@ -554,10 +733,44 @@ pub fn allocate_extent_blocks<D: fal::DeviceMut>(
     let mut current_rel_block = 0;
 
     while current_rel_block + blocks_per_extent < block_count {
-        allocate_extent_leaf(filesystem, root, rel_baddr + current_rel_block, blocks_per_extent as u16)?;
+        match allocate_extent_leaf(
+            filesystem,
+            root,
+            rel_baddr + current_rel_block,
+            blocks_per_extent as u16,
+        ) {
+            Ok(()) => (),
+            Err(AllocateExtentLeafError::NodeIsFull) => {
+                increase_level(filesystem, root)?;
+                allocate_extent_leaf(
+                    filesystem,
+                    root,
+                    rel_baddr + current_rel_block,
+                    blocks_per_extent as u16,
+                )?;
+            }
+            Err(other) => return Err(other.into()),
+        }
         current_rel_block += blocks_per_extent;
     }
-    allocate_extent_leaf(filesystem, root, rel_baddr + current_rel_block, (block_count - current_rel_block * blocks_per_extent) as u16)?;
+    match allocate_extent_leaf(
+        filesystem,
+        root,
+        rel_baddr + current_rel_block,
+        (block_count - current_rel_block * blocks_per_extent) as u16,
+    ) {
+        Ok(()) => (),
+        Err(AllocateExtentLeafError::NodeIsFull) => {
+            increase_level(filesystem, root)?;
+            allocate_extent_leaf(
+                filesystem,
+                root,
+                rel_baddr + current_rel_block,
+                (block_count - current_rel_block * blocks_per_extent) as u16,
+            )?;
+        }
+        Err(other) => return Err(other.into()),
+    }
     Ok(())
 }
 
