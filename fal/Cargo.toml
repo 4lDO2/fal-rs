@@ -5,7 +5,10 @@ authors = ["4lDO2 <4lDO2@protonmail.com>"]
 edition = "2018"
 license = "MIT OR Apache-2.0"
 
+[features]
+default = ["std"]
+std = ["libc/std", "uuid/std"]
+
 [dependencies]
-libc = "0.2"
-uuid = "0.7"
-time = "0.1"
+libc = { version = "0.2", default-features = false }
+uuid = { version = "0.8", default-features = false }

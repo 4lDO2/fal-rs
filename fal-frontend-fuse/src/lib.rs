@@ -74,17 +74,21 @@ fn fuse_filetype(ty: fal::FileType) -> fuse::FileType {
     }
 }
 
+fn convert_time(time: fal::Timespec) -> time::Timespec {
+    time::Timespec::new(time.sec, time.nsec)
+}
+
 fn fuse_attr<InodeAddr: Into<u64>>(attrs: fal::Attributes<InodeAddr>) -> fuse::FileAttr {
     fuse::FileAttr {
-        atime: attrs.access_time,
+        atime: convert_time(attrs.access_time),
         blocks: attrs.block_count,
-        crtime: attrs.creation_time,
-        ctime: attrs.change_time,
+        crtime: convert_time(attrs.creation_time),
+        ctime: convert_time(attrs.change_time),
         flags: attrs.flags,
         gid: attrs.group_id,
         ino: attrs.inode.into(),
         kind: fuse_filetype(attrs.filetype),
-        mtime: attrs.modification_time,
+        mtime: convert_time(attrs.modification_time),
         nlink: attrs.hardlink_count.try_into().unwrap(),
         perm: attrs.permissions,
         rdev: 0, // TODO

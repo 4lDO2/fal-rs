@@ -1,19 +1,35 @@
-pub extern crate libc;
-pub extern crate time;
+#![cfg_attr(not(feature = "std"), no_std)]
 
-use std::{
+pub extern crate libc;
+
+extern crate alloc;
+
+use alloc::{boxed::Box, vec::Vec};
+
+use core::{
     convert::TryFrom,
-    io::prelude::*,
     mem,
     ops::{Add, Div, Mul, Rem},
 };
-pub use time::Timespec;
 pub use uuid::Uuid;
 
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub struct Timespec {
+    pub sec: i64,
+    pub nsec: i32,
+}
+
+impl Timespec {
+    pub const fn new(sec: i64, nsec: i32) -> Self {
+        Self {
+            sec,
+            nsec,
+        }
+    }
+}
+
 pub fn read_uuid(block: &[u8], offset: usize) -> Uuid {
-    let mut bytes = [0u8; 16];
-    bytes.copy_from_slice(&block[offset..offset + 16]);
-    uuid::builder::Builder::from_bytes(bytes).build()
+    uuid::Builder::from_slice(&block[offset..offset + 16]).unwrap().build()
 }
 pub fn read_u64(block: &[u8], offset: usize) -> u64 {
     let mut bytes = [0u8; mem::size_of::<u64>()];
@@ -116,22 +132,100 @@ pub mod parsing {
 }
 
 /// A readonly device, such as the file /dev/sda. Typically implemented by the frontend.
-pub trait Device: Read + Seek {
+/// This trait doesn't require a seeking method, since all reads are supposed to be atomic (as in
+/// the seek and read call cannot be divided).
+///
+/// This trait only uses immutable references to self, so it's up to the implementer to use
+/// locking, atomic I/O if possible, or single-threaded interior mutability.
+pub trait DeviceRo {
     // TODO: Add support for querying bad sectors etc.
-    // TODO: Remove the std::io traits, TODO: right?.
+    // TODO: Concurrent I/O.
+
+    type IoError: core::fmt::Debug + core::fmt::Display;
+
+    /// Read bytes from the device at a specific offset. The return value is the number of bytes
+    /// read.
+    fn read(&self, offset: u64, buf: &mut [u8]) -> Result<usize, Self::IoError>;
+
+    /// Retrieve the size of the device, in bytes.
+    fn size(&self) -> Result<u64, Self::IoError>;
+
+    /// Seek to an offset. This method isn't required, but only there for performance
+    /// optimizations, mainly for HDDs.
+    #[allow(unused_variables)]
+    fn seek(&self, offset: u64) -> Result<(), Self::IoError> {
+        Ok(())
+    }
+}
+/// A read-write device.
+pub trait Device: DeviceRo {
+    /// Write bytes to the device at a specific offset. The return value is the number of bytes
+    /// read.
+    fn write(&self, offset: u64, buf: &[u8]) -> Result<usize, Self::IoError>;
 }
 
-impl Device for std::fs::File {}
-impl Device for &mut std::fs::File {}
-impl DeviceMut for std::fs::File {}
-impl DeviceMut for &mut std::fs::File {}
+#[cfg(feature = "std")]
+mod file_device {
+    use std::io::{self, prelude::*};
+    use std::sync::Mutex;
+    use super::*;
 
-/// A read-write device.
-pub trait DeviceMut: Device + Write {}
+    pub struct BasicDevice<D> {
+        device: Mutex<D>,
+    }
+    #[derive(Debug)]
+    struct NewOffsetFromSeekMismatch {
+        requested: u64,
+        got: u64,
+    }
+
+    impl std::fmt::Display for NewOffsetFromSeekMismatch {
+        fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, "the resulting offset {} after a seek call didn't match the requested {}", self.requested, self.got)
+        }
+    }
+    impl std::error::Error for NewOffsetFromSeekMismatch {}
+
+    impl<D: Read + Seek> DeviceRo for BasicDevice<D> {
+        type IoError = io::Error;
+
+        fn read(&self, offset: u64, buf: &mut [u8]) -> Result<usize, Self::IoError> {
+            let mut guard = self.device.lock().unwrap();
+
+            let current_offset = guard.seek(io::SeekFrom::Start(offset))?;
+
+            if current_offset != offset {
+                return Err(io::Error::new(io::ErrorKind::Other, NewOffsetFromSeekMismatch { requested: offset, got: current_offset }));
+            }
+
+            guard.read(buf)
+        }
+
+        fn size(&self) -> Result<u64, Self::IoError> {
+            self.device.lock().unwrap().seek(io::SeekFrom::End(0))
+        }
+    }
+    impl<D: Read + Seek + Write> Device for BasicDevice<D> {
+        fn write(&self, offset: u64, buffer: &[u8]) -> Result<usize, Self::IoError> {
+            let mut guard = self.device.lock().unwrap();
+
+            let current_offset = guard.seek(io::SeekFrom::Start(offset))?;
+
+            if current_offset != offset {
+                return Err(io::Error::new(io::ErrorKind::Other, NewOffsetFromSeekMismatch { requested: offset, got: current_offset }));
+            }
+
+            guard.write(buffer)
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+pub use file_device::*;
 
 /// An abstract inode structure.
 pub trait Inode: Clone {
-    type InodeAddr: Into<u64> + Eq + std::fmt::Debug;
+    type InodeAddr: Into<u64> + Eq + core::fmt::Debug;
 
     fn generation_number(&self) -> Option<u64>;
     fn addr(&self) -> Self::InodeAddr;
@@ -187,6 +281,7 @@ pub struct FsAttributes {
     pub max_fname_len: u32,
 }
 
+#[derive(Debug)]
 pub struct DirectoryEntry<InodeAddr: Into<u64>> {
     pub name: Vec<u8>,
     pub filetype: FileType,
@@ -228,10 +323,11 @@ impl Error {
     }
 }
 
+#[cfg(feature = "std")]
 impl std::error::Error for Error {}
 
-impl std::fmt::Display for Error {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl core::fmt::Display for Error {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
             Error::NoEntity => write!(formatter, "no such file or directory"),
             Error::BadFd => write!(formatter, "bad file descriptor"),
@@ -249,7 +345,7 @@ impl std::fmt::Display for Error {
     }
 }
 
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<T, E = Error> = core::result::Result<T, E>;
 
 /// Describes how access times are handled within a filesystem implementation. These do not
 /// directly correspond to the options documented in mount(8), but they are related.
@@ -299,12 +395,12 @@ impl Default for Options {
 }
 
 /// An abstract filesystem. Typically implemented by the backend.
-pub trait Filesystem<D: DeviceMut>
+pub trait Filesystem<D: Device>
 where
     Self: Sized,
 {
     /// An inode address. u32 on ext2.
-    type InodeAddr: From<u32> + Into<u64> + Copy + TryFrom<u64> + Eq + std::fmt::Debug;
+    type InodeAddr: From<u32> + Into<u64> + Copy + TryFrom<u64> + Eq + core::fmt::Debug;
 
     /// An inode structure, capable of retrieving inode information.
     type InodeStruct: Inode + Clone;

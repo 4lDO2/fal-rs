@@ -5,7 +5,7 @@ use std::{
 
 use chashmap::CHashMap;
 use crc::crc32;
-use fal::{time::Timespec, Filesystem as _};
+use fal::{Filesystem as _, Timespec};
 
 pub mod block_group;
 pub mod disk;

@@ -5,7 +5,7 @@ use crate::{
         JInodeVal,
     },
 };
-use fal::time::Timespec;
+use fal::Timespec;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Inode {

@@ -11,4 +11,4 @@ fal = { path = "../fal", version = "0.1" }
 crc = "1"
 bitflags = "1.2"
 enum_primitive = "0.1"
-uuid = "0.7"
+uuid = "0.8"
