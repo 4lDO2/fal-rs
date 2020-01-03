@@ -129,8 +129,8 @@ pub struct Omap {
 }
 
 impl Omap {
-    pub fn load<D: fal::Device>(
-        device: &mut D,
+    pub fn load<D: fal::DeviceRo>(
+        device: &D,
         superblock: &NxSuperblock,
         baddr: BlockAddr,
     ) -> Self {
@@ -146,9 +146,9 @@ impl Omap {
 
         Self { omap, tree }
     }
-    pub fn get<D: fal::Device>(
+    pub fn get<D: fal::DeviceRo>(
         &self,
-        device: &mut D,
+        device: &D,
         superblock: &NxSuperblock,
         key: OmapKey,
     ) -> Option<OmapValue> {
@@ -163,9 +163,9 @@ impl Omap {
             )
             .map(|v| v.into_omap_value().unwrap())
     }
-    pub fn get_partial<'a, D: fal::Device>(
+    pub fn get_partial<'a, D: fal::DeviceRo>(
         &'a self,
-        device: &'a mut D,
+        device: &'a D,
         superblock: &'a NxSuperblock,
         key: OmapKey,
     ) -> Option<impl Iterator<Item = (OmapKey, OmapValue)> + 'a> {
@@ -181,9 +181,9 @@ impl Omap {
                 iter.map(|(k, v)| (k.into_omap_key().unwrap(), v.into_omap_value().unwrap()))
             })
     }
-    pub fn get_partial_latest<'a, D: fal::Device>(
+    pub fn get_partial_latest<'a, D: fal::DeviceRo>(
         &'a self,
-        device: &'a mut D,
+        device: &'a D,
         superblock: &'a NxSuperblock,
         key: OmapKey,
     ) -> Option<(OmapKey, OmapValue)> {

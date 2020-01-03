@@ -7,8 +7,9 @@ license = "MIT OR Apache-2.0"
 
 [features]
 default = ["std"]
-std = ["libc/std", "uuid/std"]
+std = ["libc/std", "uuid/std", "core-error/std"]
 
 [dependencies]
 libc = { version = "0.2", default-features = false }
+core-error = { version = "0.0.1-rc3", default-features = false }
 uuid = { version = "0.8", default-features = false }

@@ -4,8 +4,8 @@ use crate::{
     allocate_block_bytes, block_group, calculate_crc32c, disk::BlockKind, inode::Blocks, Filesystem,
 };
 
-use quick_error::quick_error;
 use scroll::{Pread, Pwrite};
+use snafu::Snafu;
 
 mod pairs;
 pub use pairs::Pairs;
@@ -392,7 +392,7 @@ impl ExtentTree {
     /// Get the extent that contains the logical_block. The extent may have a start offset smaller
     /// than the logical_block, but the logical block has to be inside the bounds indicated by the
     /// start block and length of the extent.
-    pub fn resolve<D: fal::Device>(
+    pub fn resolve<D: fal::DeviceRo>(
         &self,
         filesystem: &Filesystem<D>,
         logical_block: u32,
@@ -455,40 +455,38 @@ impl ExtentTree {
     }
 }
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum AllocateExtentLeafError {
-        NodeIsFull {
-            description("node is full")
-        }
-        AlreadyExists {
-            description("extent already exists")
-        }
-        AllocateBlockError(err: block_group::AllocateBlockError) {
-            from()
-            cause(err)
-        }
-        SerializationError(err: scroll::Error) {
-            from()
-            cause(err)
-        }
-        DiskIoError(err: io::Error) {
-            from()
-            cause(err)
-        }
-        Overlaps(r1: Range<u32>, r2: Range<u32>) {
-            description("the base relative block address overlapped an existing extent when allocating")
-            display(this) -> ("{}, {:?} overlaps {:?}", this.description(), r1, r2)
-        }
+mod alloc_extent_leaf_err {
+    use super::*;
+
+    #[derive(Debug, Snafu)]
+    pub enum AllocateExtentLeafError<D: fal::DeviceRo> {
+        #[snafu(display("node is full"))]
+        NodeIsFull,
+
+        #[snafu(display("node already exists"))]
+        AlreadyExists,
+
+        #[snafu(display("failed to allocate block: {}", err))]
+        AllocateBlockError { #[snafu(source)] err: block_group::AllocateBlockError<D> },
+
+        #[snafu(display("parse or serialization error: {}", err))]
+        SerializationError { #[snafu(source)] err: scroll::Error },
+
+        #[snafu(display("disk i/o error: {}", err))]
+        DiskIoError { #[snafu(source)] err: D::IoError },
+
+        #[snafu(display("the base relative block address {:?}, overlapped an existing extent when allocating {:?}", r1, r2))]
+        Overlaps { r1: Range<u32>, r2: Range<u32> },
     }
 }
+pub use alloc_extent_leaf_err::AllocateExtentLeafError;
 
-fn allocate_extent_leaf<D: fal::DeviceMut>(
+fn allocate_extent_leaf<D: fal::Device>(
     filesystem: &Filesystem<D>,
     root: &mut ExtentTree,
     rel_baddr: u32,
     len: u16,
-) -> Result<(), AllocateExtentLeafError> {
+) -> Result<(), AllocateExtentLeafError<D>> {
     if root.is_leaf() {
         if root.node_is_full() {
             return Err(AllocateExtentLeafError::NodeIsFull);
@@ -509,10 +507,10 @@ fn allocate_extent_leaf<D: fal::DeviceMut>(
 
                 if let Some(previous_extent) = previous_extent {
                     if new_index > 0 && previous_extent.overlaps(range.clone()) {
-                        return Err(AllocateExtentLeafError::Overlaps(
-                            previous_extent.rel_range(),
-                            range,
-                        ));
+                        return Err(AllocateExtentLeafError::Overlaps {
+                            r1: previous_extent.rel_range(),
+                            r2: range,
+                        });
                     }
                 }
 
@@ -526,13 +524,13 @@ fn allocate_extent_leaf<D: fal::DeviceMut>(
     } else {
         let mut block_bytes = allocate_block_bytes(&filesystem.superblock);
 
-        fn insert_new_subtree<E: fal::DeviceMut>(
+        fn insert_new_subtree<E: fal::Device>(
             filesystem: &Filesystem<E>,
             root: &mut ExtentTree,
             rel_baddr: u32,
             len: u16,
             block_bytes: &mut [u8],
-        ) -> Result<(), AllocateExtentLeafError> {
+        ) -> Result<(), AllocateExtentLeafError<E>> {
             if root.node_is_full() {
                 return Err(AllocateExtentLeafError::NodeIsFull);
             }
@@ -619,55 +617,59 @@ fn allocate_extent_leaf<D: fal::DeviceMut>(
     Ok(())
 }
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum AllocateExtentBlocksError {
-        AllocLeafError(err: AllocateExtentLeafError) {
-            from()
-            description("the allocation of a new extent leaf or the extension of an existing leaf failed")
-            cause(err)
-            display(this) -> ("{}: {}", this.description(), this.cause().unwrap())
-        }
-        IncreaseLevelError(err: IncreaseLevelError) {
-            from()
-            description("extent tree level increase error")
-            cause(err)
-            display(this) -> ("additional blocks couldn't be allocated since the tree couldn't add more levels of depth: {}", this.cause().unwrap())
-        }
+mod alloc_extents_blk_error {
+    use super::*;
+
+    #[derive(Debug, Snafu)]
+    pub enum AllocateExtentBlocksError<D: fal::DeviceRo> {
+        #[snafu(display("the allocation of a new extent leaf or the extension of an existing leaf failed: {}", err))]
+        AllocLeafError {
+            #[snafu(source)]
+            err: AllocateExtentLeafError<D>,
+        },
+
+        #[snafu(display("additional blocks couldn't be allocated since the tree couldn't add more levels of depth: {}", err))]
+        IncreaseLevelError {
+            #[snafu(source)]
+            err: super::IncreaseLevelError<D>,
+        },
     }
 }
+pub use alloc_extents_blk_error::AllocateExtentBlocksError;
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum IncreaseLevelError {
-        DepthLimit {
-            description("the depth reached 5, the maximum")
-        }
-        ParseError(err: scroll::Error) {
-            from()
-            cause(err)
-            description("parse error")
-            display(this) -> ("{}: {}", this.description(), this.cause().unwrap())
-        }
-        AllocateBlockError(err: block_group::AllocateBlockError) {
-            from()
-            cause(err)
-            description("block allocation error for subtree")
-            display(this) -> ("{}: {}", this.description(), this.cause().unwrap())
-        }
-        DiskIoErr(err: io::Error) {
-            from()
-            cause(err)
-            description("disk i/o error")
-            display(this) -> ("{}: {}", this.description(), this.cause().unwrap())
-        }
+mod increase_level_error {
+    use super::*;
+
+    #[derive(Debug, Snafu)]
+    pub enum IncreaseLevelError<D: fal::DeviceRo> {
+        #[snafu(display("the depth reached 5, the maximum"))]
+        DepthLimit,
+
+        #[snafu(display("parse or serialization error: {}", err))]
+        ParseError {
+            #[snafu(source)]
+            err: scroll::Error,
+        },
+
+        #[snafu(display("block allocation error for subtree: {}", err))]
+        AllocateBlockError {
+            #[snafu(source)]
+            err: block_group::AllocateBlockError<D>,
+        },
+
+        #[snafu(display("disk i/o error: {}", err))]
+        DiskIoErr {
+            #[snafu(source)]
+            err: D::IoError,
+        },
     }
 }
+pub use increase_level_error::IncreaseLevelError;
 
-pub fn increase_level<D: fal::DeviceMut>(
+pub fn increase_level<D: fal::Device>(
     filesystem: &Filesystem<D>,
     root: &mut ExtentTree,
-) -> Result<(), IncreaseLevelError> {
+) -> Result<(), IncreaseLevelError<D>> {
     let mut old_root = mem::replace(
         root,
         ExtentTree {
@@ -719,12 +721,12 @@ pub fn increase_level<D: fal::DeviceMut>(
     Ok(())
 }
 
-pub fn allocate_extent_blocks<D: fal::DeviceMut>(
+pub fn allocate_extent_blocks<D: fal::Device>(
     filesystem: &Filesystem<D>,
     root: &mut ExtentTree,
     rel_baddr: u32,
     block_count: u32,
-) -> Result<(), AllocateExtentBlocksError> {
+) -> Result<(), AllocateExtentBlocksError<D>> {
     let blocks_per_extent = u32::from(MAX_EXTENT_LEN);
 
     // BIG TODO: If AllocExtentLeafError::NodeIsFull is returned, a new tree (in the inode blocks

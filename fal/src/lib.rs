@@ -131,27 +131,65 @@ pub mod parsing {
     }
 }
 
+/// A trait which allows device I/O errors to get some kind of abstraction.
+pub trait IoError: core::fmt::Debug + core::fmt::Display + core_error::Error + 'static {
+    /// Returns whether the operations that failed because of this error should retry. This
+    /// corresponds to something like EINTR, not EAGAIN or EWOULDBLOCK.
+    fn should_retry(&self) -> bool;
+}
+
+pub struct WriteZeroError;
+pub struct UnexpectedEof;
+
 /// A readonly device, such as the file /dev/sda. Typically implemented by the frontend.
 /// This trait doesn't require a seeking method, since all reads are supposed to be atomic (as in
-/// the seek and read call cannot be divided).
+/// that the seek and read call cannot be divided).
 ///
 /// This trait only uses immutable references to self, so it's up to the implementer to use
 /// locking, atomic I/O if possible, or single-threaded interior mutability.
 pub trait DeviceRo {
     // TODO: Add support for querying bad sectors etc.
     // TODO: Concurrent I/O.
+    // TODO: Trimming.
+    // TODO: Async/await
 
-    type IoError: core::fmt::Debug + core::fmt::Display;
+    type IoError: IoError + From<WriteZeroError> + From<UnexpectedEof>;
 
     /// Read bytes from the device at a specific offset. The return value is the number of bytes
     /// read.
     fn read(&self, offset: u64, buf: &mut [u8]) -> Result<usize, Self::IoError>;
 
+    // TODO: Should read always behave like read_exact?
+
+    /// Read the exact number of bytes from the device at a specific offset. This will guarantee
+    /// that the buffer will be filled, or an error will occur. This method should be used instead
+    /// of the regular read function.
+    fn read_exact(&self, mut offset: u64, mut buf: &mut [u8]) -> Result<(), Self::IoError> {
+        while !buf.is_empty() {
+            match self.read(offset, buf) {
+                Ok(0) => break,
+
+                Ok(n) => {
+                    offset += n as u64;
+                    buf = &mut buf[n..];
+                    continue;
+                }
+                Err(e) if e.should_retry() => continue,
+                Err(e) => return Err(e),
+            }
+        }
+
+        if !buf.is_empty() {
+            return Err(Self::IoError::from(UnexpectedEof));
+        }
+        Ok(())
+    }
+
     /// Retrieve the size of the device, in bytes.
     fn size(&self) -> Result<u64, Self::IoError>;
 
     /// Seek to an offset. This method isn't required, but only there for performance
-    /// optimizations, mainly for HDDs.
+    /// optimizations, mainly for HDDs. By default, this is a no-op.
     #[allow(unused_variables)]
     fn seek(&self, offset: u64) -> Result<(), Self::IoError> {
         Ok(())
@@ -161,7 +199,28 @@ pub trait DeviceRo {
 pub trait Device: DeviceRo {
     /// Write bytes to the device at a specific offset. The return value is the number of bytes
     /// read.
+    #[must_use]
     fn write(&self, offset: u64, buf: &[u8]) -> Result<usize, Self::IoError>;
+
+    // TODO: Again, should write() always be write_all()?
+
+    /// Write bytes to the device at an offset, but guarantees that every byte in the buffer will
+    /// be written, or an error will occur.
+    fn write_all(&self, mut offset: u64, mut buf: &[u8]) -> Result<(), Self::IoError> {
+        while !buf.is_empty() {
+            match self.write(offset, buf) {
+                Ok(0) => return Err(From::<WriteZeroError>::from(WriteZeroError)),
+                Ok(n) => {
+                    offset += n as u64;
+                    buf = &buf[n..];
+                    continue;
+                }
+                Err(e) if e.should_retry() => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(feature = "std")]
@@ -172,6 +231,16 @@ mod file_device {
 
     pub struct BasicDevice<D> {
         device: Mutex<D>,
+    }
+    impl<D> BasicDevice<D> {
+        pub fn new(inner: D) -> Self {
+            Self {
+                device: Mutex::new(inner),
+            }
+        }
+        pub fn into_inner(self) -> D {
+            self.device.into_inner().unwrap()
+        }
     }
     #[derive(Debug)]
     struct NewOffsetFromSeekMismatch {
@@ -185,6 +254,22 @@ mod file_device {
         }
     }
     impl std::error::Error for NewOffsetFromSeekMismatch {}
+
+    impl IoError for io::Error {
+        fn should_retry(&self) -> bool {
+            self.kind() == io::ErrorKind::Interrupted
+        }
+    }
+    impl From<WriteZeroError> for io::Error {
+        fn from(_err: WriteZeroError) -> Self {
+            Self::from(io::ErrorKind::WriteZero)
+        }
+    }
+    impl From<UnexpectedEof> for io::Error {
+        fn from(_err: UnexpectedEof) -> Self {
+            Self::from(io::ErrorKind::UnexpectedEof)
+        }
+    }
 
     impl<D: Read + Seek> DeviceRo for BasicDevice<D> {
         type IoError = io::Error;

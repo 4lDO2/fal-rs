@@ -25,7 +25,7 @@ use crate::{
     BlockAddr, ObjPhys, ObjectIdentifier, ObjectType,
 };
 
-pub struct Filesystem<D: fal::Device> {
+pub struct Filesystem<D: fal::DeviceRo> {
     pub device: Mutex<D>,
     pub container_superblock: NxSuperblock,
     pub ephemeral_objects: HashMap<ObjectIdentifier, GenericObject>,
@@ -39,9 +39,9 @@ pub struct Filesystem<D: fal::Device> {
     pub general_options: fal::Options,
 }
 
-impl<D: fal::Device> Filesystem<D> {
-    pub fn mount(mut device: D, general_options: fal::Options) -> Self {
-        let container_superblock = NxSuperblock::load(&mut device);
+impl<D: fal::DeviceRo> Filesystem<D> {
+    pub fn mount(device: D, general_options: fal::Options) -> Self {
+        let container_superblock = NxSuperblock::load(&device);
 
         if container_superblock.chkpnt_desc_blkcnt & (1 << 31) != 0 {
             unimplemented!("B-tree checkpoints aren't implemented as of now")
@@ -57,7 +57,7 @@ impl<D: fal::Device> Filesystem<D> {
             let range = block_index as usize * block_size..(block_index as usize + 1) * block_size;
             read_block_to(
                 &container_superblock,
-                &mut device,
+                &device,
                 &mut descriptor_area[range.clone()],
                 container_superblock.chkpnt_desc_base + i64::from(block_index),
             );
@@ -72,7 +72,7 @@ impl<D: fal::Device> Filesystem<D> {
         let superblock = (0..container_superblock.chkpnt_desc_len)
             .map(|i| {
                 checkpoint::read_from_desc_area(
-                    &mut device,
+                    &device,
                     &container_superblock,
                     container_superblock.chkpnt_desc_first + i,
                 )
@@ -85,7 +85,7 @@ impl<D: fal::Device> Filesystem<D> {
         let ephemeral_object_ids = (0..container_superblock.chkpnt_desc_len)
             .map(|i| {
                 checkpoint::read_from_desc_area(
-                    &mut device,
+                    &device,
                     &container_superblock,
                     container_superblock.chkpnt_desc_first + i,
                 )
@@ -105,7 +105,7 @@ impl<D: fal::Device> Filesystem<D> {
                 (
                     id,
                     checkpoint::read_from_data_area(
-                        &mut device,
+                        &device,
                         &container_superblock,
                         (paddr.0 - superblock.chkpnt_data_base as u64) as u32,
                     )
@@ -132,7 +132,7 @@ impl<D: fal::Device> Filesystem<D> {
         let container_superblock: NxSuperblock = superblock;
 
         let omap = Omap::load(
-            &mut device,
+            &device,
             &container_superblock,
             container_superblock.object_map_oid.0 as i64,
         );
@@ -145,13 +145,13 @@ impl<D: fal::Device> Filesystem<D> {
             .map(|volume| {
                 let (_, omap_value) = omap
                     .get_partial_latest(
-                        &mut device,
+                        &device,
                         &container_superblock,
                         OmapKey::partial(volume),
                     )
                     .expect("Volume virtual oid_t wasn't found in the omap B+ tree.");
 
-                Volume::load(&mut device, &container_superblock, omap_value.paddr)
+                Volume::load(&device, &container_superblock, omap_value.paddr)
             })
             .collect::<Vec<_>>();
 
@@ -174,20 +174,15 @@ impl<D: fal::Device> Filesystem<D> {
         self.last_fh.fetch_add(1, atomic::Ordering::SeqCst)
     }
 }
-impl<D: fal::DeviceMut> Filesystem<D> {
+impl<D: fal::Device> Filesystem<D> {
     pub fn write_block(
         superblock: &NxSuperblock,
-        device: &mut D,
+        device: &D,
         address: BlockAddr,
         block: &[u8],
     ) {
         debug_assert_eq!(block.len(), superblock.block_size as usize);
-        device
-            .seek(SeekFrom::Start(
-                address as u64 * u64::from(superblock.block_size),
-            ))
-            .unwrap();
-        device.write_all(&block).unwrap();
+        device.write_all(address as u64 * u64::from(superblock.block_size), &block).unwrap();
     }
 }
 
@@ -199,7 +194,7 @@ pub struct Volume {
 }
 
 impl Volume {
-    pub fn load<D: fal::Device>(device: &mut D, nx_super: &NxSuperblock, phys: BlockAddr) -> Self {
+    pub fn load<D: fal::DeviceRo>(device: &D, nx_super: &NxSuperblock, phys: BlockAddr) -> Self {
         let superblock = ApfsSuperblock::parse(&read_block(nx_super, device, phys));
 
         let omap = Omap::load(device, nx_super, superblock.omap_oid.0 as i64);
@@ -213,8 +208,8 @@ impl Volume {
             root_tree,
         }
     }
-    fn root_oid_phys<D: fal::Device>(
-        device: &mut D,
+    fn root_oid_phys<D: fal::DeviceRo>(
+        device: &D,
         superblock: &NxSuperblock,
         omap: &Omap,
         vol_superblock: &ApfsSuperblock,
@@ -230,7 +225,7 @@ impl Volume {
 }
 
 type Result<T> = fal::Result<T>;
-impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
+impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
     type InodeAddr = u64;
     type InodeStruct = Inode;
     type Options = ();

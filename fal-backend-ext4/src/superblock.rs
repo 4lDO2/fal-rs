@@ -4,8 +4,8 @@ use std::{
 };
 
 use bitflags::bitflags;
-use quick_error::quick_error;
 use scroll::{Pread, Pwrite};
+use snafu::Snafu;
 
 use crate::calculate_crc32c;
 
@@ -218,30 +218,29 @@ fn _log2_round_up<T: From<u8> + AddAssign + ShrAssign + Eq>(mut t: T) -> T {
     count
 }
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum LoadSuperblockError {
-        ParseError(err: scroll::Error) {
-            description("superblock parsing error")
-            from()
-        }
-        ChecksumMismatch {
-            description("the superblock checksum was incorrect")
-        }
-        IoError(err: io::Error) {
-            description("i/o error")
-            from()
-        }
-    }
+#[derive(Debug, Snafu)]
+pub enum LoadSuperblockError {
+
+    #[snafu(display("superblock parse error"))]
+    ParseError {
+        err: scroll::Error,
+    },
+
+    #[snafu(display("the superblock checksum was incorrect"))]
+    ChecksumMismatch,
+
+    #[snafu(display("disk i/o error: {}", err))]
+    IoError {
+        err: io::Error,
+    },
 }
 
 impl Superblock {
     /// Load and parse the super block.
-    pub fn load<R: fal::Device>(device: &mut R) -> Result<Self, LoadSuperblockError> {
-        device.seek(SeekFrom::Start(SUPERBLOCK_OFFSET))?;
-
+    pub fn load<R: fal::DeviceRo>(device: &mut R) -> Result<Self, LoadSuperblockError> {
         let mut block_bytes = [0u8; 1024];
-        device.read_exact(&mut block_bytes)?;
+
+        device.read(SUPERBLOCK_OFFSET, &mut block_bytes);
 
         let this = Self::parse(&block_bytes)?;
 
@@ -326,7 +325,7 @@ impl Superblock {
         }
     }
 
-    pub fn store<D: fal::DeviceMut>(&mut self, device: &mut D) -> io::Result<()> {
+    pub fn store<D: fal::Device>(&mut self, device: &D) -> io::Result<()> {
         let mut block_bytes = [0u8; 1024];
         self.serialize(&mut block_bytes);
 
@@ -335,8 +334,7 @@ impl Superblock {
             fal::write_u32(&mut block_bytes, 1020, ext.superblock_checksum);
         }
 
-        device.seek(SeekFrom::Start(SUPERBLOCK_OFFSET))?;
-        device.write_all(&block_bytes)?;
+        device.write_all(SUPERBLOCK_OFFSET, &block_bytes);
 
         Ok(())
     }

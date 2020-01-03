@@ -128,8 +128,8 @@ impl CheckpointDescAreaEntry {
     }
 }
 
-pub fn read_from_desc_area<D: fal::Device>(
-    device: &mut D,
+pub fn read_from_desc_area<D: fal::DeviceRo>(
+    device: &D,
     superblock: &NxSuperblock,
     index: u32,
 ) -> CheckpointDescAreaEntry {
@@ -152,8 +152,8 @@ pub fn read_from_desc_area<D: fal::Device>(
     }
 }
 
-pub fn read_from_data_area<D: fal::Device>(
-    device: &mut D,
+pub fn read_from_data_area<D: fal::DeviceRo>(
+    device: &D,
     superblock: &NxSuperblock,
     index: u32,
 ) -> Option<GenericObject> {

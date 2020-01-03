@@ -31,7 +31,7 @@ impl ExtentTree {
 }
 
 impl<'a, 'b, D: fal::Device> Iterator for Pairs<'a, 'b, D> {
-    type Item = Result<ExtentLeaf, InodeIoError>;
+    type Item = Result<ExtentLeaf, InodeIoError<D>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {

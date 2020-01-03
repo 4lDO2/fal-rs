@@ -10,7 +10,7 @@ use crate::{block_group, Filesystem};
 pub enum BlockKind {
     /// Data, i.e. the contents of files and directories.
     // TODO: Should the contents of directories be cached more than files' data, especially with
-    // HTREEs.
+    // HTREEs?
     Data,
 
     /// Metadata, which contains information about inodes, block groups, extents, etc. By default,
@@ -28,26 +28,28 @@ pub enum BlockKind {
 
 /// The underlying disk of an ext2/3/4 filesystem.
 pub struct Disk<T> {
-    inner: Mutex<T>,
+    inner: T,
     size: u64,
     // TODO: Cache
 }
 
 impl<T> Disk<T> {
-    pub fn inner(&self) -> MutexGuard<'_, T> {
-        self.inner.lock().unwrap()
-    }
     pub fn into_inner(self) -> T {
-        self.inner.into_inner().unwrap()
+        // TODO: Write everything from the write cache first.
+        self.inner
+    }
+    // pub(crate) because the cache shouldn't be bypassed.
+    pub(crate) fn inner(&self) -> &T {
+        &self.inner
     }
 }
-impl<T: fal::Device> Disk<T> {
+impl<T: fal::DeviceRo> Disk<T> {
     /// Wrap a `Read` + `Write` + `Seek` device for optimal caching and journaling.
-    pub fn new(mut inner: T) -> Result<Self, io::Error> {
-        let size = inner.seek(SeekFrom::End(0))?;
+    pub fn new(inner: T) -> Result<Self, T::IoError> {
+        let size = inner.size()?;
 
         Ok(Self {
-            inner: Mutex::new(inner),
+            inner,
             size,
         })
     }
@@ -60,7 +62,7 @@ impl<T: fal::Device> Disk<T> {
         kind: BlockKind,
         block_address: u64,
         buffer: &mut [u8],
-    ) -> io::Result<()> {
+    ) -> Result<(), T::IoError> {
         debug_assert!(block_address * u64::from(filesystem.superblock.block_size()) < self.size);
         debug_assert!(block_group::block_exists(block_address, filesystem).unwrap_or(false));
         self.read_block_raw(filesystem, kind, block_address, buffer)
@@ -73,16 +75,15 @@ impl<T: fal::Device> Disk<T> {
         _kind: BlockKind,
         block_address: u64,
         buffer: &mut [u8],
-    ) -> io::Result<()> {
-        let mut guard = self.inner.lock().unwrap();
-        guard.seek(SeekFrom::Start(
+    ) -> Result<(), T::IoError> {
+        self.inner.read_exact(
             block_address * u64::from(filesystem.superblock.block_size()),
-        ))?;
-        guard.read_exact(buffer)?;
+            buffer,
+        )?;
         Ok(())
     }
 }
-impl<T: fal::DeviceMut> Disk<T> {
+impl<T: fal::Device> Disk<T> {
     /// Write a block, bypassing the existence check.
     pub fn write_block_raw(
         &self,
@@ -90,7 +91,7 @@ impl<T: fal::DeviceMut> Disk<T> {
         _kind: BlockKind,
         block_address: u64,
         buffer: &[u8],
-    ) -> io::Result<()> {
+    ) -> Result<(), T::IoError> {
         // TODO: Write to the journal first, and once that write is complete, perform the actual
         // write. This behavior can be configured (data=journal|ordered|writeback). By default,
         // metadata will always go through the journal (ordered); while data is written directly,
@@ -100,11 +101,11 @@ impl<T: fal::DeviceMut> Disk<T> {
             .info
             .kbs_written
             .fetch_add(buffer.len() as u64, atomic::Ordering::Acquire);
-        let mut guard = self.inner.lock().unwrap();
-        guard.seek(SeekFrom::Start(
+
+        self.inner.write_all(
             block_address as u64 * u64::from(filesystem.superblock.block_size()),
-        ))?;
-        guard.write_all(buffer)?;
+            buffer
+        )?;
         Ok(())
     }
     /// Write a block, checking for its existence if debug assertions are enabled.
@@ -114,7 +115,7 @@ impl<T: fal::DeviceMut> Disk<T> {
         kind: BlockKind,
         block_address: u64,
         buffer: &[u8],
-    ) -> io::Result<()> {
+    ) -> Result<(), T::IoError> {
         debug_assert!(block_group::block_exists(block_address, filesystem).unwrap_or(false));
         self.write_block_raw(filesystem, kind, block_address, buffer)
     }

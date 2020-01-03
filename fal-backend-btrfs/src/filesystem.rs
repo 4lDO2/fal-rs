@@ -1,21 +1,20 @@
-use std::{io::SeekFrom, sync::Mutex};
+use std::sync::Mutex;
 
 use crate::{chunk_map::ChunkMap, oid, superblock::Superblock, tree::Tree, DiskKey, DiskKeyType};
 
-const FIRST_CHUNK_TREE_OBJECTID: u64 = 256;
+pub const FIRST_CHUNK_TREE_OBJECTID: u64 = 256;
 
-pub fn read_node_phys<D: fal::Device>(
+pub fn read_node_phys<D: fal::DeviceRo>(
     device: &mut D,
     superblock: &Superblock,
     offset: u64,
 ) -> Box<[u8]> {
     let mut bytes = vec![0u8; superblock.node_size as usize];
-    device.seek(SeekFrom::Start(offset)).unwrap();
-    device.read_exact(&mut bytes).unwrap();
+    device.read_exact(offset, &mut bytes).unwrap();
     bytes.into_boxed_slice()
 }
 
-pub fn read_node<D: fal::Device>(
+pub fn read_node<D: fal::DeviceRo>(
     device: &mut D,
     superblock: &Superblock,
     chunk_map: &ChunkMap,
@@ -29,7 +28,7 @@ pub fn read_node<D: fal::Device>(
 }
 
 #[derive(Debug)]
-pub struct Filesystem<D: fal::Device> {
+pub struct Filesystem<D: fal::DeviceRo> {
     pub device: Mutex<D>,
     pub superblock: Superblock,
 

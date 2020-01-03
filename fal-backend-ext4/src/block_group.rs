@@ -6,8 +6,8 @@ use std::{
 };
 
 use bitflags::bitflags;
-use quick_error::quick_error;
 use scroll::{Pread, Pwrite};
+use snafu::Snafu;
 
 use crate::{
     allocate_block_bytes, calculate_crc32c, disk::BlockKind, superblock, superblock::Superblock,
@@ -199,13 +199,13 @@ impl BlockGroupDescriptor {
     pub fn flags(&self) -> BlockGroupDescriptorFlags {
         BlockGroupDescriptorFlags::from_bits(self.base.flags).unwrap()
     }
-    fn bitmap<'a, 'b, D: fal::Device>(
+    fn bitmap<'a, 'b, D: fal::DeviceRo>(
         &self,
         filesystem: &'b Filesystem<D>,
         start: u64,
         block_bytes: &'a mut [u8],
         baddr: u64,
-    ) -> Result<Option<Bitmap<'a, 'b>>, BgdError> {
+    ) -> Result<Option<Bitmap<'a, 'b>>, BgdError<D>> {
         let bm_block_index = (block_group_offset(&filesystem.superblock, baddr) / 8)
             / u64::from(filesystem.superblock.block_size());
 
@@ -220,21 +220,21 @@ impl BlockGroupDescriptor {
             superblock: &filesystem.superblock,
         }))
     }
-    pub fn block_bitmap<'a, 'b, D: fal::Device>(
+    pub fn block_bitmap<'a, 'b, D: fal::DeviceRo>(
         &self,
         filesystem: &'b Filesystem<D>,
         block_bytes: &'a mut [u8],
         baddr: u64,
-    ) -> Result<Option<Bitmap<'a, 'b>>, BgdError> {
+    ) -> Result<Option<Bitmap<'a, 'b>>, BgdError<D>> {
         let bm_start_baddr = self.block_usage_bm_start_baddr();
         self.bitmap(filesystem, bm_start_baddr, block_bytes, baddr)
     }
-    pub fn inode_bitmap<'a, 'b, D: fal::Device>(
+    pub fn inode_bitmap<'a, 'b, D: fal::DeviceRo>(
         &self,
         filesystem: &'b Filesystem<D>,
         block_bytes: &'a mut [u8],
         baddr: u64,
-    ) -> Result<Option<Bitmap<'a, 'b>>, BgdError> {
+    ) -> Result<Option<Bitmap<'a, 'b>>, BgdError<D>> {
         let bm_start_baddr = self.inode_usage_bm_start_baddr();
         self.bitmap(filesystem, bm_start_baddr, block_bytes, baddr)
     }
@@ -247,31 +247,35 @@ pub fn block_group_offset(superblock: &superblock::Superblock, offset: u64) -> u
     offset % u64::from(superblock.block_size())
 }
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum BgdError {
-        IoError(err: io::Error) {
-            from()
-            description("disk i/o error")
-            cause(err)
-        }
-        ParseError(err: scroll::Error) {
-            from()
-            description("block group descriptor parsing error")
-            cause(err)
-            display("block group descriptor parsing error: {}", err)
-        }
-        ChecksumMismatch {
-            description("invalid block group descriptor checksum")
-        }
+mod bgd_err {
+    use super::*;
+
+    #[derive(Debug, Snafu)]
+    pub enum BgdError<D: fal::DeviceRo> {
+
+        #[snafu(display("disk i/o error: {}", source))]
+        #[snafu(context(false))]
+        DiskIoError {
+            source: D::IoError,
+        },
+
+        #[snafu(display("block group descriptor parsing error: {}", source))]
+        #[snafu(context(false))]
+        ParseError {
+            source: scroll::Error,
+        },
+
+        #[snafu(display("invalid block group descriptor checksum"))]
+        ChecksumMismatch,
     }
 }
+pub use bgd_err::BgdError;
 
-fn get_block_group_descriptor<'a, D: fal::Device>(
+fn get_block_group_descriptor<'a, D: fal::DeviceRo>(
     filesystem: &Filesystem<D>,
     index: u64,
     block_bytes: &'a mut [u8],
-) -> Result<(&'a mut [u8], u64), BgdError> {
+) -> Result<(&'a mut [u8], u64), BgdError<D>> {
     let size = if filesystem.superblock.is_64bit() {
         BlockGroupDescriptor::SIZE_64BIT
     } else {
@@ -297,10 +301,10 @@ fn get_block_group_descriptor<'a, D: fal::Device>(
 
     Ok((descriptor_bytes, absolute_offset))
 }
-pub fn load_block_group_descriptor<D: fal::Device>(
+pub fn load_block_group_descriptor<D: fal::DeviceRo>(
     filesystem: &Filesystem<D>,
     index: u64,
-) -> Result<BlockGroupDescriptor, BgdError> {
+) -> Result<BlockGroupDescriptor, BgdError<D>> {
     let mut block_bytes = vec![0; filesystem.superblock.block_size() as usize];
 
     let (descriptor_bytes, _) = get_block_group_descriptor(filesystem, index, &mut block_bytes)?;
@@ -317,11 +321,11 @@ pub fn load_block_group_descriptor<D: fal::Device>(
     }
     Ok(desc)
 }
-pub fn store_block_group_descriptor<D: fal::DeviceMut>(
+pub fn store_block_group_descriptor<D: fal::Device>(
     filesystem: &Filesystem<D>,
     bgdesc: &mut BlockGroupDescriptor,
     index: u64,
-) -> Result<(), BgdError> {
+) -> Result<(), BgdError<D>> {
     let mut block_bytes = vec![0u8; filesystem.superblock.block_size() as usize];
 
     let (descriptor_bytes, absolute_offset) =
@@ -357,10 +361,10 @@ pub fn inode_block_group_index(superblock: &superblock::Superblock, inode: u32) 
 pub fn inode_index_inside_group(superblock: &superblock::Superblock, inode: u32) -> u32 {
     (inode - 1) % superblock.inodes_per_group
 }
-pub fn inode_exists<D: fal::Device>(
+pub fn inode_exists<D: fal::DeviceRo>(
     inode: u32,
     filesystem: &Filesystem<D>,
-) -> Result<bool, BgdError> {
+) -> Result<bool, BgdError<D>> {
     if inode == 0 {
         return Ok(false);
     }
@@ -401,7 +405,7 @@ pub fn inode_exists<D: fal::Device>(
 
     Ok(bm_byte & bm_bit != 0)
 }
-pub fn free_inode<D: fal::DeviceMut>(
+pub fn free_inode<D: fal::Device>(
     _inode: u32,
     _filesystem: &mut Filesystem<D>,
 ) -> io::Result<()> {
@@ -482,11 +486,11 @@ impl<'a, 'b> Bitmap<'a, 'b> {
         calculate_crc32c(superblock.checksum_seed().unwrap(), &self.bytes[..size])
     }
 }
-pub fn read_block_bitmap<'a, 'b, D: fal::Device>(
+pub fn read_block_bitmap<'a, 'b, D: fal::DeviceRo>(
     baddr: u64,
     filesystem: &'b Filesystem<D>,
     block_bytes: &'a mut [u8],
-) -> Result<Option<Bitmap<'a, 'b>>, BgdError> {
+) -> Result<Option<Bitmap<'a, 'b>>, BgdError<D>> {
     let group_index = baddr / u64::from(filesystem.superblock.blocks_per_group);
 
     let descriptor = load_block_group_descriptor(filesystem, group_index)?;
@@ -499,20 +503,20 @@ pub fn read_block_bitmap<'a, 'b, D: fal::Device>(
     }
     descriptor.block_bitmap(filesystem, block_bytes, baddr)
 }
-pub fn block_exists<D: fal::Device>(
+pub fn block_exists<D: fal::DeviceRo>(
     baddr: u64,
     filesystem: &Filesystem<D>,
-) -> Result<bool, BgdError> {
+) -> Result<bool, BgdError<D>> {
     let mut block_bytes = vec![0u8; filesystem.superblock.block_size() as usize];
     Ok(read_block_bitmap(baddr, filesystem, &mut block_bytes)?
         .map(|bitmap: Bitmap| bitmap.get(baddr))
         .unwrap_or(false))
 }
-pub fn set_block_exists<D: fal::DeviceMut>(
+pub fn set_block_exists<D: fal::Device>(
     baddr: u64,
     exists: bool,
     filesystem: &Filesystem<D>,
-) -> Result<(), BgdError> {
+) -> Result<(), BgdError<D>> {
     let mut block_bytes = vec![0u8; filesystem.superblock.block_size() as usize];
     let mut bitmap: Bitmap = read_block_bitmap(baddr, filesystem, &mut block_bytes)?
         .unwrap_or_else(|| unimplemented!("allocating new blocks"));
@@ -523,36 +527,39 @@ pub fn set_block_exists<D: fal::DeviceMut>(
     Ok(())
 }
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum AllocateBlockError {
-        DiskIoError(err: io::Error) {
-            from()
-            cause(err)
-            description("disk i/o error")
-            display("disk i/o error: {}", err)
-        }
-        ParseError(err: scroll::Error) {
-            from()
-            cause(err)
-            description("parsing error")
-            display("parsing error: {}", err)
-        }
-        BgdError(err: BgdError) {
-            from()
-            cause(err)
-            description("block group descriptor table error")
-            display("block group descriptor table error: {}", err)
-        }
-        InsufficientSpace(size: u32) {
-            description("no block group containing the requested amount of blocks")
-            display("no block group containing {} free contiguous blocks", size)
-        }
-        ChecksumMismatch {
-            description("some of the block group descriptors had (possibly) corrupted data")
-        }
+mod alloc_blk_err {
+    use super::*;
+
+    #[derive(Debug, Snafu)]
+    pub enum AllocateBlockError<D: fal::DeviceRo> {
+
+        #[snafu(display("disk i/o error: {}", err))]
+        DiskIoError {
+            #[snafu(source)] err: D::IoError,
+        },
+
+        #[snafu(display("parsing error: {}", err))]
+        ParseError {
+            #[snafu(source)] err: scroll::Error,
+        },
+        
+        #[snafu(display("block group descriptor table error: {}", err))]
+        BgdError {
+            #[snafu(source)] err: super::BgdError<D>,
+        },
+
+        #[snafu(display("no block group containing {} free contiguous blocks", size))]
+        InsufficientSpace {
+            size: u32
+        },
+
+        #[snafu(display("some of the block group descriptors had (possibly) corrupted data"))]
+        ChecksumMismatch,
     }
 }
+pub use alloc_blk_err::AllocateBlockError;
+
+#[derive(Debug)]
 struct DescriptorHandle<'a> {
     desc_bytes: &'a mut [u8],
     desc: &'a mut BlockGroupDescriptor,
@@ -564,12 +571,12 @@ impl<'a> DescriptorHandle<'a> {
 }
 fn iter_through_bgdescs<
     T,
-    D: fal::DeviceMut,
-    F: FnMut(DescriptorHandle) -> Result<Option<T>, AllocateBlockError>,
+    D: fal::Device,
+    F: FnMut(DescriptorHandle) -> Result<Option<T>, AllocateBlockError<D>>,
 >(
     filesystem: &Filesystem<D>,
     mut function: F,
-) -> Result<Option<T>, AllocateBlockError> {
+) -> Result<Option<T>, AllocateBlockError<D>> {
     let block_group_count =
         filesystem.superblock.block_count() / u64::from(filesystem.superblock.blocks_per_group);
     let mut block_bytes = vec![0u8; filesystem.superblock.block_size() as usize];
@@ -641,17 +648,17 @@ enum ThingToAllocate {
     Inodes,
 }
 
-fn allocate_blocks_or_inodes<D: fal::DeviceMut>(
+fn allocate_blocks_or_inodes<D: fal::Device>(
     filesystem: &Filesystem<D>,
     thing_to_allocate: ThingToAllocate,
     len: u32,
-) -> Result<Range<u64>, AllocateBlockError> {
+) -> Result<Range<u64>, AllocateBlockError<D>> {
     let mut bitmap_block_bytes = vec![0u8; filesystem.superblock.block_size() as usize];
 
     // Find the first block group with a free block count of at least len.
     match iter_through_bgdescs(
         filesystem,
-        |handle| -> Result<Option<Range<u64>>, AllocateBlockError> {
+        |handle| -> Result<Option<Range<u64>>, AllocateBlockError<D>> {
             let unalloc_count = match thing_to_allocate {
                 ThingToAllocate::Blocks => handle.desc.unalloc_block_count(),
                 ThingToAllocate::Inodes => handle.desc.unalloc_inode_count(),
@@ -784,28 +791,28 @@ fn allocate_blocks_or_inodes<D: fal::DeviceMut>(
         },
     )? {
         Some(t) => Ok(t),
-        None => Err(AllocateBlockError::InsufficientSpace(len)),
+        None => Err(AllocateBlockError::InsufficientSpace { size: len }),
     }
 }
-pub fn allocate_blocks<D: fal::DeviceMut>(
+pub fn allocate_blocks<D: fal::Device>(
     filesystem: &Filesystem<D>,
     len: u32,
-) -> Result<Range<u64>, AllocateBlockError> {
+) -> Result<Range<u64>, AllocateBlockError<D>> {
     allocate_blocks_or_inodes(filesystem, ThingToAllocate::Blocks, len)
 }
-pub fn allocate_inodes<D: fal::DeviceMut>(
+pub fn allocate_inodes<D: fal::Device>(
     filesystem: &Filesystem<D>,
     len: u32,
-) -> Result<Range<u64>, AllocateBlockError> {
+) -> Result<Range<u64>, AllocateBlockError<D>> {
     allocate_blocks_or_inodes(filesystem, ThingToAllocate::Inodes, len)
 }
-pub fn allocate_block<D: fal::DeviceMut>(
+pub fn allocate_block<D: fal::Device>(
     filesystem: &Filesystem<D>,
-) -> Result<u64, AllocateBlockError> {
+) -> Result<u64, AllocateBlockError<D>> {
     Ok(allocate_blocks(filesystem, 1)?.start)
 }
-pub fn allocate_inode<D: fal::DeviceMut>(
+pub fn allocate_inode<D: fal::Device>(
     filesystem: &Filesystem<D>,
-) -> Result<u64, AllocateBlockError> {
+) -> Result<u64, AllocateBlockError<D>> {
     Ok(allocate_inodes(filesystem, 1)?.start)
 }

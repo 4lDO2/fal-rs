@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use arrayvec::ArrayVec;
-use quick_error::quick_error;
 use scroll::{Pread, Pwrite};
+use snafu::Snafu;
 
 use crate::{
     inode::{Inode, InodeIoError, InodeRaw, BASE_INODE_SIZE},
@@ -171,25 +171,24 @@ pub struct InlineXattrs {
     pub entries: HashMap<XattrEntry, Vec<u8>>,
 }
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum LoadXattrsError {
-        EaInodeIoError(err: Box<InodeIoError>) {
-            from()
-            cause(err)
-            description("extended attribute inode i/o error")
-            display("extended attribute inode i/o error: {}", err)
-        }
-        ParseError(err: scroll::Error) {
-            from()
-            cause(err)
-            description("parse error")
-            display("parse error: {}", err)
-        }
-    }
+#[derive(Debug, Snafu)]
+pub enum LoadXattrsError<D: fal::DeviceRo> {
+
+    #[snafu(display("extended attribute inode i/o error: {}", err))]
+    EaInodeIoError {
+        #[snafu(source)]
+        err: Box<InodeIoError<D>>,
+    },
+
+    #[snafu(display("parse error: {}", err))]
+    ParseError { 
+        #[snafu(source)]
+        err: scroll::Error,
+    },
 }
-impl From<InodeIoError> for LoadXattrsError {
-    fn from(io: InodeIoError) -> Self {
+
+impl<D: fal::DeviceRo> From<InodeIoError<D>> for LoadXattrsError<D> {
+    fn from(io: InodeIoError<D>) -> Self {
         Box::new(io).into()
     }
 }
@@ -199,7 +198,7 @@ impl InlineXattrs {
         filesystem: &Filesystem<D>,
         inode: &InodeRaw,
         inode_bytes: &[u8],
-    ) -> Result<Option<Self>, LoadXattrsError> {
+    ) -> Result<Option<Self>, LoadXattrsError<D>> {
         let inode_size =
             BASE_INODE_SIZE as u16 + inode.ext.as_ref().map(|ext| ext.extra_isize).unwrap_or(0);
         let space_for_xattrs = filesystem.superblock.inode_size() - inode_size;

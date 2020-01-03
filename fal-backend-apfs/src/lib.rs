@@ -212,25 +212,20 @@ pub fn read_obj_phys(bytes: &[u8], offset: &mut usize) -> ObjPhys {
     obj_phys
 }
 
-pub fn read_block_to<D: fal::Device>(
+pub fn read_block_to<D: fal::DeviceRo>(
     superblock: &NxSuperblock,
-    device: &mut D,
+    device: &D,
     block: &mut [u8],
     address: crate::BlockAddr,
 ) {
     debug_assert!(address >= 0);
     debug_assert_eq!(block.len(), superblock.block_size as usize);
 
-    device
-        .seek(SeekFrom::Start(
-            address as u64 * u64::from(superblock.block_size),
-        ))
-        .unwrap();
-    device.read_exact(block).unwrap();
+    device.read_exact(address as u64 * u64::from(superblock.block_size), block).unwrap();
 }
-pub fn read_block<D: fal::Device>(
+pub fn read_block<D: fal::DeviceRo>(
     superblock: &NxSuperblock,
-    device: &mut D,
+    device: &D,
     address: crate::BlockAddr,
 ) -> Box<[u8]> {
     let mut block_bytes = vec![0u8; superblock.block_size as usize].into_boxed_slice();

@@ -309,8 +309,8 @@ impl BTreeValue {
 }
 
 impl BTreeNode {
-    pub fn load<D: fal::Device>(
-        device: &mut D,
+    pub fn load<D: fal::DeviceRo>(
+        device: &D,
         superblock: &NxSuperblock,
         addr: BlockAddr,
     ) -> Self {
@@ -384,9 +384,9 @@ impl BTreeNode {
             toc,
         }
     }
-    fn get_generic<'a, D: fal::Device>(
+    fn get_generic<'a, D: fal::DeviceRo>(
         &'a self,
-        device: &mut D,
+        device: &D,
         superblock: &NxSuperblock,
         resolver: Resolver<'a, 'a>,
         key: &BTreeKey,
@@ -587,8 +587,8 @@ pub struct BTree {
 }
 
 impl BTree {
-    pub fn load<D: fal::Device>(
-        device: &mut D,
+    pub fn load<D: fal::DeviceRo>(
+        device: &D,
         superblock: &NxSuperblock,
         addr: BlockAddr,
     ) -> Self {
@@ -601,9 +601,9 @@ impl BTree {
     pub fn info(&self) -> &BTreeInfo {
         self.root.info.as_ref().unwrap()
     }
-    pub fn get_generic<'a, D: fal::Device>(
+    pub fn get_generic<'a, D: fal::DeviceRo>(
         &'a self,
-        device: &mut D,
+        device: &D,
         superblock: &NxSuperblock,
         resolver: Resolver<'a, 'a>,
         key: &BTreeKey,
@@ -613,9 +613,9 @@ impl BTree {
         self.root
             .get_generic(device, superblock, resolver, key, fixed, compare)
     }
-    pub fn get<'a, D: fal::Device>(
+    pub fn get<'a, D: fal::DeviceRo>(
         &self,
-        device: &mut D,
+        device: &D,
         superblock: &NxSuperblock,
         resolver: Resolver<'a, 'a>,
         key: &BTreeKey,
@@ -623,9 +623,9 @@ impl BTree {
         self.get_generic(device, superblock, resolver, key, Ord::cmp)
             .map(|((_, value), _)| value)
     }
-    pub fn pairs<'a, D: fal::Device>(
+    pub fn pairs<'a, D: fal::DeviceRo>(
         &'a self,
-        device: &'a mut D,
+        device: &'a D,
         superblock: &'a NxSuperblock,
         resolver: Resolver<'a, 'a>,
     ) -> Pairs<'a, 'a, D> {
@@ -641,9 +641,9 @@ impl BTree {
             previous_key: None,
         }
     }
-    pub fn similar_pairs<'a, D: fal::Device>(
+    pub fn similar_pairs<'a, D: fal::DeviceRo>(
         &'a self,
-        device: &'a mut D,
+        device: &'a D,
         superblock: &'a NxSuperblock,
         resolver: Resolver<'a, 'a>,
         key: &BTreeKey,
@@ -669,17 +669,17 @@ impl BTree {
             previous_key: None,
         })
     }
-    pub fn keys<'a, D: fal::Device>(
+    pub fn keys<'a, D: fal::DeviceRo>(
         &'a self,
-        device: &'a mut D,
+        device: &'a D,
         superblock: &'a NxSuperblock,
         resolver: Resolver<'a, 'a>,
     ) -> impl Iterator<Item = BTreeKey> + 'a {
         self.pairs(device, superblock, resolver).map(|(k, _)| k)
     }
-    pub fn values<'a, D: fal::Device>(
+    pub fn values<'a, D: fal::DeviceRo>(
         &'a self,
-        device: &'a mut D,
+        device: &'a D,
         superblock: &'a NxSuperblock,
         resolver: Resolver<'a, 'a>,
     ) -> impl Iterator<Item = BTreeValue> + 'a {
@@ -688,8 +688,8 @@ impl BTree {
 }
 
 /// Stack-based tree traversal iterator
-pub struct Pairs<'a, 'b, D: fal::Device> {
-    pub(crate) device: &'b mut D,
+pub struct Pairs<'a, 'b, D: fal::DeviceRo> {
+    pub(crate) device: &'b D,
     pub(crate) superblock: &'b NxSuperblock,
     pub(crate) path: Path<'a>,
     pub(crate) resolver: Resolver<'b, 'a>,
@@ -699,7 +699,7 @@ pub struct Pairs<'a, 'b, D: fal::Device> {
 }
 
 // Based on the btrfs Pairs code with some modifications.
-impl<'a, 'b, D: fal::Device> Iterator for Pairs<'a, 'b, D> {
+impl<'a, 'b, D: fal::DeviceRo> Iterator for Pairs<'a, 'b, D> {
     type Item = (BTreeKey, BTreeValue);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -785,8 +785,8 @@ impl<'a, 'b, D: fal::Device> Iterator for Pairs<'a, 'b, D> {
     }
 }
 
-fn load_subtree<'a, 'b, D: fal::Device>(
-    device: &mut D,
+fn load_subtree<'a, 'b, D: fal::DeviceRo>(
+    device: &D,
     superblock: &NxSuperblock,
     root: &BTreeNode,
     path: &Path<'a>,

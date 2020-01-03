@@ -13,8 +13,8 @@ chashmap = "2.2"
 crc = "1"
 log = "0.4"
 md4 = "0.8"
-quick-error = "1.2"
 scroll = { version = "0.10", features = ["derive"] }
+snafu = { git = "https://github.com/shepmaster/snafu" }
 uuid = "0.7"
 
 fal = { path = "../fal", version = "0.1" }

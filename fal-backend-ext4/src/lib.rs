@@ -30,7 +30,7 @@ pub fn allocate_block_bytes(superblock: &Superblock) -> Box<[u8]> {
 trait ConvertToFalError<T> {
     fn into_fal_result(self, warning_start: &'static str) -> fal::Result<T>;
 }
-impl<T> ConvertToFalError<T> for Result<T, InodeIoError> {
+impl<T, D: fal::DeviceRo> ConvertToFalError<T> for Result<T, InodeIoError<D>> {
     fn into_fal_result(self, warning_start: &'static str) -> fal::Result<T> {
         self.map_err(|err| {
             err.into_fal_error_or_with(|err| {
@@ -67,7 +67,7 @@ enum Open {
     Directory,
 }
 
-impl<D: fal::DeviceMut> Filesystem<D> {
+impl<D: fal::Device> Filesystem<D> {
     fn open(&mut self, addr: u32, ty: Open) -> fal::Result<u64> {
         let fh = FileHandle {
             fh: self.last_fh,
@@ -148,7 +148,7 @@ pub struct FileHandle {
     inode: Inode,
 }
 
-impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
+impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
     type InodeAddr = u32;
     type InodeStruct = Inode;
     type Options = ();
@@ -398,7 +398,7 @@ impl<D: fal::DeviceMut> fal::Filesystem<D> for Filesystem<D> {
     fn unmount(mut self) {
         if !self.general_options.immutable {
             self.update_superblock();
-            self.superblock.store(&mut *self.disk.inner()).unwrap()
+            self.superblock.store(self.disk.inner()).unwrap()
         }
     }
     fn store_inode(&mut self, inode: &Inode) -> fal::Result<()> {

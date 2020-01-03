@@ -87,10 +87,9 @@ impl NxSuperblock {
     const EPH_INFO_COUNT: u32 = 4;
     const EPH_MIN_BLOCK_COUNT: u32 = 4;
 
-    pub fn load<D: fal::Device>(device: &mut D) -> Self {
+    pub fn load<D: fal::DeviceRo>(device: &D) -> Self {
         let mut block_bytes = [0; 4096];
-        device.seek(SeekFrom::Start(0)).unwrap();
-        device.read_exact(&mut block_bytes).unwrap();
+        device.read_exact(0, &mut block_bytes).unwrap();
         Self::parse(&block_bytes)
     }
     pub fn parse(block_bytes: &[u8]) -> Self {
@@ -229,11 +228,10 @@ impl NxSuperblock {
             fusion_wbc,
         }
     }
-    pub fn store<D: fal::DeviceMut>(this: &Self, device: &mut D) {
+    pub fn store<D: fal::Device>(this: &Self, device: &D) {
         let mut block_bytes = [0u8; 4096];
         Self::serialize(this, &mut block_bytes);
-        device.seek(SeekFrom::Start(0)).unwrap();
-        device.write_all(&block_bytes).unwrap();
+        device.write_all(0, &block_bytes).unwrap();
     }
     pub fn serialize(this: &Self, block: &mut [u8]) {
         ObjPhys::serialize(&this.header, &mut block[..ObjPhys::LEN]);
