@@ -241,6 +241,14 @@ pub trait Device: DeviceRo {
     fn write_blocks(&self, block: u64, buf: &[u8]) -> Result<(), DeviceError>;
 
     // TODO: Flushing
+
+    /// Discard a block (TRIM), to inform hardware that the block doesn't have to be stored
+    /// anymore. Only available on some command sets and hardware, and OSes. By default this is a
+    /// no-op.
+    #[allow(unused_variables)]
+    fn discard(&self, start_block: u64, count: u64) -> Result<(), DeviceError> {
+        Ok(())
+    }
 }
 
 #[cfg(feature = "std")]

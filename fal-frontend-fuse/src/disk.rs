@@ -39,6 +39,7 @@ mod linux_ioctls {
     nix::ioctl_read!(linux_blk_get_blocksize, 0x12, 112, libc::c_int); // BLKBSZGET
     nix::ioctl_read!(linux_blk_get_sectorsize, 0x12, 104, libc::c_int); // BLKSSZGET
     nix::ioctl_read!(linux_blk_rotational, 0x12, 126, libc::c_ushort); // BLKROTATIONAL
+    nix::ioctl_write_ptr!(linux_blk_discard_range, 0x12, 119, [u64; 2]); // BLKROTATIONAL
 
     /// Get the block size of a block device.
     ///
@@ -76,6 +77,15 @@ mod linux_ioctls {
             Err(error) => return Err(IoctlError::IoError(error)),
         }
         Ok(value != 0)
+    }
+
+    pub unsafe fn basic_discard_range(fd: libc::c_int, base: u64, count: u64) -> Result<(), IoctlError> {
+        let mut array = [base, count];
+        match linux_blk_discard_range(fd, &mut array as *const [u64; 2]) {
+            Ok(_) => (),
+            Err(error) => return Err(IoctlError::IoError(error)),
+        }
+        Ok(())
     }
 
     #[derive(Debug, Error)]
@@ -240,6 +250,13 @@ impl fal::Device for Device {
             Ok(result)
         })
     }
+    fn discard(&self, start_block: u64, count: u64) -> Result<(), fal::DeviceError> {
+        #[cfg(target_os = "linux")]
+        unsafe { linux_ioctls::basic_discard_range(self.file.as_raw_fd() as libc::c_int, start_block, count)? };
+
+        Ok(())
+    }
+    // TODO: Secure erase, discard zero-out (refer to Linux ioctls)
 }
 
 #[derive(Debug, Error)]
