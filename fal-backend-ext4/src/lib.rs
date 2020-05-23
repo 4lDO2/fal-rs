@@ -30,7 +30,7 @@ pub fn allocate_block_bytes(superblock: &Superblock) -> Box<[u8]> {
 trait ConvertToFalError<T> {
     fn into_fal_result(self, warning_start: &'static str) -> fal::Result<T>;
 }
-impl<T, D: fal::DeviceRo> ConvertToFalError<T> for Result<T, InodeIoError<D>> {
+impl<T> ConvertToFalError<T> for Result<T, InodeIoError> {
     fn into_fal_result(self, warning_start: &'static str) -> fal::Result<T> {
         self.map_err(|err| {
             err.into_fal_error_or_with(|err| {

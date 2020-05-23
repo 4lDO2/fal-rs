@@ -19,60 +19,46 @@ use crate::{
 use bitflags::bitflags;
 use fal::Timespec;
 use scroll::{Pread, Pwrite};
-use snafu::Snafu;
+use thiserror::Error;
 
 pub const ROOT: u32 = 2;
 
 pub const BASE_INODE_SIZE: u64 = 128;
 pub const EXTENDED_INODE_SIZE: u64 = 160;
 
-#[derive(Debug, Snafu)]
-pub enum InodeIoError<D: fal::DeviceRo> {
+#[derive(Debug, Error)]
+pub enum InodeIoError {
+    #[error("disk i/o error: {}", {0})]
+    DiskIoError(#[from] fal::DeviceError),
 
-    #[snafu(display("disk i/o error: {}", err))]
-    DiskIoError {
-        #[snafu(source)]
-        err: D::IoError,
-    },
+    #[error("block group descriptor table error: {0}")]
+    BgdError(#[from] block_group::BgdError),
 
-    #[snafu(display("block group descriptor table error: {}", err))]
-    BgdError {
-        #[snafu(source)]
-        err: block_group::BgdError<D>,
-    },
+    #[error("inode parse error: {0}")]
+    ParseError(#[from] scroll::Error),
 
-    #[snafu(display("inode parse error: {}", err))]
-    ParseError {
-        #[snafu(source)]
-        err: scroll::Error,
-    },
-
-    #[snafu(display("inode checksum mismatch"))]
+    #[error("inode checksum mismatch")]
     ChecksumMismatch,
 
-    #[snafu(display("frontend error: {}", err))]
-    FrontendError {
-        #[snafu(source)]
-        err: fal::Error,
-    },
+    #[error("frontend error: {0}")]
+    FrontendError(#[from] fal::Error),
 
-    #[snafu(display("inode size too large for being inline ({} bytes)", size))]
-    InodeTooLargeForInline{ size: u64 },
+    #[error("inode size too large for being inline ({} bytes)", size)]
+    InodeTooLargeForInline { size: u64 },
 
-    #[snafu(display("failed to allocate additional extents-based blocks: {}", err))]
-    AllocateExtentBlocksError { 
-        #[snafu(source)]
-        err: extents::AllocateExtentBlocksError<D>,
-    },
+    #[error("failed to allocate additional extents-based blocks: {0}")]
+    AllocateExtentBlocksError(#[from] extents::AllocateExtentBlocksError),
 
-    #[snafu(display("failed to load xattrs: {}", err))]
-    LoadXattrsErr {
-        #[snafu(source)]
-        err: LoadXattrsError<D>,
-    },
+    #[error("failed to load xattrs: {0}")]
+    LoadXattrsErr(#[from] Box<LoadXattrsError>),
+}
+impl From<LoadXattrsError> for InodeIoError {
+     fn from(err: LoadXattrsError) -> Self {
+         Self::LoadXattrsErr(Box::new(err))
+     }
 }
 
-impl<D: fal::DeviceRo> InodeIoError<D> {
+impl InodeIoError {
     pub fn into_fal_error_or_with<F: Fn(Self)>(self, internal_error_handler: F) -> fal::Error {
         match self {
             Self::FrontendError(err) => err,
@@ -543,7 +529,7 @@ impl Inode {
     pub fn load<R: fal::DeviceRo>(
         filesystem: &Filesystem<R>,
         inode_address: u32,
-    ) -> Result<Self, InodeIoError<R>> {
+    ) -> Result<Self, InodeIoError> {
         if inode_address == 0 || inode_address >= filesystem.superblock.inode_count {
             return Err(fal::Error::Invalid.into());
         }
@@ -591,7 +577,7 @@ impl Inode {
     pub fn store<D: fal::Device>(
         this: &Self,
         filesystem: &Filesystem<D>,
-    ) -> Result<(), InodeIoError<D>> {
+    ) -> Result<(), InodeIoError> {
         let inode_address = this.addr;
 
         if inode_address == 0 {
@@ -709,7 +695,7 @@ impl Inode {
         filesystem: &Filesystem<D>,
         singly_baddr: u32,
         rel_baddr: u32,
-    ) -> io::Result<u32> {
+    ) -> Result<u32, fal::DeviceError> {
         let mut singly_indirect_block_bytes = allocate_block_bytes(&filesystem.superblock);
         // TODO: Metadata?
         filesystem.disk.read_block(
@@ -729,7 +715,7 @@ impl Inode {
         filesystem: &Filesystem<D>,
         doubly_baddr: u32,
         rel_baddr: u32,
-    ) -> io::Result<u32> {
+    ) -> Result<u32, fal::DeviceError> {
         let entry_count = Self::entry_count(filesystem.superblock.block_size());
 
         let mut doubly_indirect_block_bytes = allocate_block_bytes(&filesystem.superblock);
@@ -750,7 +736,7 @@ impl Inode {
         filesystem: &Filesystem<D>,
         triply_baddr: u32,
         rel_baddr: u32,
-    ) -> io::Result<u32> {
+    ) -> Result<u32, fal::DeviceError> {
         let entry_count = Self::entry_count(filesystem.superblock.block_size());
 
         let mut triply_indirect_block_bytes = allocate_block_bytes(&filesystem.superblock);
@@ -774,7 +760,7 @@ impl Inode {
         &self,
         filesystem: &Filesystem<D>,
         rel_baddr: u32,
-    ) -> Result<u64, InodeIoError<D>> {
+    ) -> Result<u64, InodeIoError> {
         if self.flags().contains(InodeFlags::EXTENTS) {
             // TODO: Cache this tree.
             let tree = self.blocks.extent_tree(self.checksum_seed);
@@ -814,7 +800,7 @@ impl Inode {
         rel_baddr: u32,
         filesystem: &Filesystem<D>,
         buffer: &mut [u8],
-    ) -> Result<(), InodeIoError<D>> {
+    ) -> Result<(), InodeIoError> {
         if u64::from(rel_baddr) >= self.size_in_blocks(&filesystem.superblock) {
             return Err(fal::Error::Overflow.into());
         }
@@ -829,7 +815,7 @@ impl Inode {
         rel_baddr: u32,
         filesystem: &Filesystem<D>,
         buffer: &[u8],
-    ) -> Result<(), InodeIoError<D>> {
+    ) -> Result<(), InodeIoError> {
         if u64::from(rel_baddr) >= self.size_in_blocks(&filesystem.superblock) {
             return Err(fal::Error::Overflow.into());
         }
@@ -844,7 +830,7 @@ impl Inode {
         filesystem: &Filesystem<D>,
         offset: u64,
         mut buffer: &mut [u8],
-    ) -> Result<usize, InodeIoError<D>> {
+    ) -> Result<usize, InodeIoError> {
         if self.flags().contains(InodeFlags::INLINE_DATA) {
             if self.flags().contains(InodeFlags::EXTENTS) {
                 panic!("Inode flag check bypassed")
@@ -959,7 +945,7 @@ impl Inode {
         filesystem: &Filesystem<D>,
         baddr: u32,
         len: u32,
-    ) -> Result<(), InodeIoError<D>> {
+    ) -> Result<(), InodeIoError> {
         if self.flags().contains(InodeFlags::INLINE_DATA) {
             unimplemented!("inline data may be stored in extended attributes");
             self.flags().remove(InodeFlags::INLINE_DATA);
@@ -993,7 +979,7 @@ impl Inode {
         filesystem: &Filesystem<D>,
         offset: u64,
         mut buffer: &[u8],
-    ) -> Result<u64, InodeIoError<D>> {
+    ) -> Result<u64, InodeIoError> {
         if self.flags().contains(InodeFlags::INLINE_DATA) {
             unimplemented!("writing to inline inodes");
         }
@@ -1100,7 +1086,7 @@ impl Inode {
     fn raw_dir_entries<'a, D: fal::DeviceRo>(
         &'a self,
         filesystem: &'a Filesystem<D>,
-    ) -> Result<RawDirIterator<'a, D>, InodeIoError<D>> {
+    ) -> Result<RawDirIterator<'a, D>, InodeIoError> {
         if self.ty() != InodeType::Dir {
             return Err(fal::Error::NotDirectory.into());
         }
@@ -1120,7 +1106,7 @@ impl Inode {
         &self,
         filesystem: &Filesystem<D>,
         name: &[u8],
-    ) -> Result<Option<(usize, DirEntry)>, InodeIoError<D>> {
+    ) -> Result<Option<(usize, DirEntry)>, InodeIoError> {
         if self.flags().contains(InodeFlags::DIR_HASH_IDX) {
             let mut buffer = vec![0u8; filesystem.superblock.block_size() as usize];
             self.read_block(0, filesystem, &mut buffer)?;
@@ -1140,7 +1126,7 @@ impl Inode {
     pub fn dir_entries<'a, D: fal::DeviceRo>(
         &'a self,
         filesystem: &'a Filesystem<D>,
-    ) -> Result<DirIterator<'a, D>, InodeIoError<D>> {
+    ) -> Result<DirIterator<'a, D>, InodeIoError> {
         Ok(DirIterator {
             raw: self.raw_dir_entries(filesystem)?,
         })
@@ -1148,7 +1134,7 @@ impl Inode {
     pub fn symlink_target<'a, D: fal::DeviceRo>(
         &'a self,
         filesystem: &mut Filesystem<D>,
-    ) -> Result<Cow<'a, [u8]>, InodeIoError<D>> {
+    ) -> Result<Cow<'a, [u8]>, InodeIoError> {
         if self.size <= 60 {
             // fast symlink
             Ok(Cow::Borrowed(&self.blocks.inner[..self.size as usize]))
@@ -1167,7 +1153,7 @@ impl Inode {
         &self,
         filesystem: &mut Filesystem<D>,
         inode: u32,
-    ) -> io::Result<()> {
+    ) -> Result<(), fal::DeviceError> {
         assert_eq!(self.base.hardlink_count, 0);
 
         // Frees the inode and its owned blocks.
@@ -1177,7 +1163,7 @@ impl Inode {
         &mut self,
         filesystem: &mut Filesystem<D>,
         name: &[u8],
-    ) -> Result<(), InodeIoError<D>> {
+    ) -> Result<(), InodeIoError> {
         // Remove the entry by setting the length of the entry with matching name to zero, and
         // append the length of that entry to the previous (if any).
 
@@ -1399,7 +1385,7 @@ impl DirEntry {
     pub fn ty<D: fal::DeviceRo>(
         &self,
         filesystem: &Filesystem<D>,
-    ) -> Result<InodeType, InodeIoError<D>> {
+    ) -> Result<InodeType, InodeIoError> {
         Ok(match self.type_indicator {
             Some(ty) => ty,
             None => Inode::load(filesystem, self.inode)?.ty(),

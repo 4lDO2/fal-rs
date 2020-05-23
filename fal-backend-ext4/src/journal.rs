@@ -1,12 +1,12 @@
 //! Journaling structures and procedures.
-//! __NOTE: Every field here is stored as _big endian___
+//! __ NOTE: Every field here is stored as _big endian_ __
 
 use std::{fmt, ops::Range};
 
 use bitflags::bitflags;
 use crc::{crc32, Hasher32};
 use scroll::{Pread, Pwrite};
-use snafu::Snafu;
+use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{calculate_crc32c, superblock::Superblock, Filesystem, Inode};
@@ -453,22 +453,16 @@ pub struct Journal {
     pub superblock: JournalSuperblock,
 }
 
-#[derive(Debug, Snafu)]
-pub enum JournalInitError<D: fal::DeviceRo> {
-    #[snafu(display("i/o error: {}", err))]
-    IoError {
-        #[snafu(source)]
-        err: crate::inode::InodeIoError<D>,
-    },
+#[derive(Debug, Error)]
+pub enum JournalInitError {
+    #[error("i/o error: {0}")]
+    IoError(#[from] crate::inode::InodeIoError),
 
-    #[snafu(display("journal doesn't support v3 checksums"))]
+    #[error("journal doesn't support v3 checksums")]
     UnsupportedJournalFormat,
 
-    #[snafu(display("parse error: {}", err))]
-    ParseError {
-        #[snafu(source)]
-        err: scroll::Error,
-    }
+    #[error("parse error: {0}")]
+    ParseError(#[from] scroll::Error),
 }
 
 #[derive(Debug)]
@@ -485,7 +479,7 @@ pub fn find_meta_block<D: fal::DeviceRo>(
     start_baddr: u32,
     block_bytes: &mut [u8],
     superblock: &JournalSuperblock,
-) -> Result<Option<(u32, JournalHeader)>, JournalInitError<D>> {
+) -> Result<Option<(u32, JournalHeader)>, JournalInitError> {
     for baddr in start_baddr..superblock.max_len {
         journal_inode.read_block(baddr, filesystem, block_bytes)?;
         let header: JournalHeader = match block_bytes.pread_with::<JournalHeader>(0, scroll::BE) {
@@ -506,7 +500,7 @@ pub fn find_transaction<D: fal::DeviceRo>(
     start_baddr: u32,
     block_bytes: &mut [u8],
     journal_superblock: &JournalSuperblock,
-) -> Result<Option<(u32, Transaction)>, JournalInitError<D>> {
+) -> Result<Option<(u32, Transaction)>, JournalInitError> {
     let mut desc_blocks = vec![];
     let mut start_block = start_baddr;
     let mut previous_desc_block: Option<JournalDescriptorBlock> = None;
@@ -550,15 +544,12 @@ pub fn find_transaction<D: fal::DeviceRo>(
     }
     Ok(None)
 }
-#[derive(Debug, Snafu)]
-pub enum VerifyTransactionError<D: fal::DeviceRo> {
-    #[snafu(display("i/o error: {}", err))]
-    IoErr {
-        #[snafu(source)]
-        err: crate::inode::InodeIoError<D>,
-    },
+#[derive(Debug, Error)]
+pub enum VerifyTransactionError {
+    #[error("i/o error: {0}")]
+    IoErr(#[from] crate::inode::InodeIoError),
 
-    #[snafu(display("checksums mismatch"))]
+    #[error("checksums mismatch")]
     ChecksumMismatch,
 }
 
@@ -571,7 +562,7 @@ pub fn verify_transaction<D: fal::DeviceRo>(
     transaction: &Transaction,
     journal_inode: &Inode,
     journal_superblock: &JournalSuperblock,
-) -> Result<(), VerifyTransactionError<D>> {
+) -> Result<(), VerifyTransactionError> {
     let mut data_block = vec![0u8; journal_superblock.block_size as usize];
     for (desc, data_block_range) in &transaction.desc_blocks {
         for (tag, data_baddr) in desc.tags.iter().zip(data_block_range.clone()) {
@@ -593,7 +584,7 @@ pub fn verify_transaction<D: fal::DeviceRo>(
 impl Journal {
     pub fn load<D: fal::Device>(
         filesystem: &Filesystem<D>,
-    ) -> Result<Option<Self>, JournalInitError<D>> {
+    ) -> Result<Option<Self>, JournalInitError> {
         let journal_inode = match filesystem.superblock.extended.as_ref() {
             Some(i) => i,
             None => return Ok(None),

@@ -5,7 +5,7 @@ use crate::{
 };
 
 use scroll::{Pread, Pwrite};
-use snafu::Snafu;
+use thiserror::Error;
 
 mod pairs;
 pub use pairs::Pairs;
@@ -458,24 +458,24 @@ impl ExtentTree {
 mod alloc_extent_leaf_err {
     use super::*;
 
-    #[derive(Debug, Snafu)]
-    pub enum AllocateExtentLeafError<D: fal::DeviceRo> {
-        #[snafu(display("node is full"))]
+    #[derive(Debug, Error)]
+    pub enum AllocateExtentLeafError {
+        #[error("node is full")]
         NodeIsFull,
 
-        #[snafu(display("node already exists"))]
+        #[error("node already exists")]
         AlreadyExists,
 
-        #[snafu(display("failed to allocate block: {}", err))]
-        AllocateBlockError { #[snafu(source)] err: block_group::AllocateBlockError<D> },
+        #[error("failed to allocate block: {0}")]
+        AllocateBlockError(#[from] block_group::AllocateBlockError),
 
-        #[snafu(display("parse or serialization error: {}", err))]
-        SerializationError { #[snafu(source)] err: scroll::Error },
+        #[error("parse or serialization error: {0}")]
+        SerializationError(#[from] scroll::Error),
 
-        #[snafu(display("disk i/o error: {}", err))]
-        DiskIoError { #[snafu(source)] err: D::IoError },
+        #[error("disk i/o error: {0}")]
+        DiskIoError(#[from] fal::DeviceError),
 
-        #[snafu(display("the base relative block address {:?}, overlapped an existing extent when allocating {:?}", r1, r2))]
+        #[error("the base relative block address {:?}, overlapped an existing extent when allocating {:?}", r1, r2)]
         Overlaps { r1: Range<u32>, r2: Range<u32> },
     }
 }
@@ -486,7 +486,7 @@ fn allocate_extent_leaf<D: fal::Device>(
     root: &mut ExtentTree,
     rel_baddr: u32,
     len: u16,
-) -> Result<(), AllocateExtentLeafError<D>> {
+) -> Result<(), AllocateExtentLeafError> {
     if root.is_leaf() {
         if root.node_is_full() {
             return Err(AllocateExtentLeafError::NodeIsFull);
@@ -530,7 +530,7 @@ fn allocate_extent_leaf<D: fal::Device>(
             rel_baddr: u32,
             len: u16,
             block_bytes: &mut [u8],
-        ) -> Result<(), AllocateExtentLeafError<E>> {
+        ) -> Result<(), AllocateExtentLeafError> {
             if root.node_is_full() {
                 return Err(AllocateExtentLeafError::NodeIsFull);
             }
@@ -620,18 +620,18 @@ fn allocate_extent_leaf<D: fal::Device>(
 mod alloc_extents_blk_error {
     use super::*;
 
-    #[derive(Debug, Snafu)]
-    pub enum AllocateExtentBlocksError<D: fal::DeviceRo> {
-        #[snafu(display("the allocation of a new extent leaf or the extension of an existing leaf failed: {}", err))]
+    #[derive(Debug, Error)]
+    pub enum AllocateExtentBlocksError {
+        #[error("the allocation of a new extent leaf or the extension of an existing leaf failed: {}", err)]
         AllocLeafError {
-            #[snafu(source)]
-            err: AllocateExtentLeafError<D>,
+            #[from]
+            err: AllocateExtentLeafError,
         },
 
-        #[snafu(display("additional blocks couldn't be allocated since the tree couldn't add more levels of depth: {}", err))]
+        #[error("additional blocks couldn't be allocated since the tree couldn't add more levels of depth: {}", err)]
         IncreaseLevelError {
-            #[snafu(source)]
-            err: super::IncreaseLevelError<D>,
+            #[from]
+            err: super::IncreaseLevelError,
         },
     }
 }
@@ -640,28 +640,19 @@ pub use alloc_extents_blk_error::AllocateExtentBlocksError;
 mod increase_level_error {
     use super::*;
 
-    #[derive(Debug, Snafu)]
-    pub enum IncreaseLevelError<D: fal::DeviceRo> {
-        #[snafu(display("the depth reached 5, the maximum"))]
+    #[derive(Debug, Error)]
+    pub enum IncreaseLevelError {
+        #[error("the depth reached 5, the maximum")]
         DepthLimit,
 
-        #[snafu(display("parse or serialization error: {}", err))]
-        ParseError {
-            #[snafu(source)]
-            err: scroll::Error,
-        },
+        #[error("parse or serialization error: {0}")]
+        ParseError(#[from] scroll::Error),
 
-        #[snafu(display("block allocation error for subtree: {}", err))]
-        AllocateBlockError {
-            #[snafu(source)]
-            err: block_group::AllocateBlockError<D>,
-        },
+        #[error("block allocation error for subtree: {0}")]
+        AllocateBlockError(#[from] block_group::AllocateBlockError),
 
-        #[snafu(display("disk i/o error: {}", err))]
-        DiskIoErr {
-            #[snafu(source)]
-            err: D::IoError,
-        },
+        #[error("disk i/o error: {0}")]
+        DiskIoErr(#[from] fal::DeviceError),
     }
 }
 pub use increase_level_error::IncreaseLevelError;
@@ -669,7 +660,7 @@ pub use increase_level_error::IncreaseLevelError;
 pub fn increase_level<D: fal::Device>(
     filesystem: &Filesystem<D>,
     root: &mut ExtentTree,
-) -> Result<(), IncreaseLevelError<D>> {
+) -> Result<(), IncreaseLevelError> {
     let mut old_root = mem::replace(
         root,
         ExtentTree {
@@ -726,7 +717,7 @@ pub fn allocate_extent_blocks<D: fal::Device>(
     root: &mut ExtentTree,
     rel_baddr: u32,
     block_count: u32,
-) -> Result<(), AllocateExtentBlocksError<D>> {
+) -> Result<(), AllocateExtentBlocksError> {
     let blocks_per_extent = u32::from(MAX_EXTENT_LEN);
 
     // BIG TODO: If AllocExtentLeafError::NodeIsFull is returned, a new tree (in the inode blocks

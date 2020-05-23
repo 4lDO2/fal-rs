@@ -5,7 +5,7 @@ use std::{
 
 use bitflags::bitflags;
 use scroll::{Pread, Pwrite};
-use snafu::Snafu;
+use thiserror::Error;
 
 use crate::calculate_crc32c;
 
@@ -218,21 +218,17 @@ fn _log2_round_up<T: From<u8> + AddAssign + ShrAssign + Eq>(mut t: T) -> T {
     count
 }
 
-#[derive(Debug, Snafu)]
+#[derive(Debug, Error)]
 pub enum LoadSuperblockError {
 
-    #[snafu(display("superblock parse error"))]
-    ParseError {
-        err: scroll::Error,
-    },
+    #[error("superblock parse error")]
+    ParseError(#[from] scroll::Error),
 
-    #[snafu(display("the superblock checksum was incorrect"))]
+    #[error("the superblock checksum was incorrect")]
     ChecksumMismatch,
 
-    #[snafu(display("disk i/o error: {}", err))]
-    IoError {
-        err: io::Error,
-    },
+    #[error("disk i/o error: {0}")]
+    IoError(#[from] fal::DeviceError),
 }
 
 impl Superblock {

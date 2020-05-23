@@ -131,15 +131,71 @@ pub mod parsing {
     }
 }
 
+pub struct DeviceError {
+    inner: Box<dyn IoError>,
+}
+impl DeviceError {
+    pub fn inner(&self) -> &dyn IoError {
+        &*self.inner
+    }
+}
+impl core::fmt::Debug for DeviceError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Debug::fmt(&*self.inner, f)
+    }
+}
+impl core::fmt::Display for DeviceError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(&*self.inner, f)
+    }
+}
+impl std::error::Error for DeviceError {}
+
+impl<E: IoError> From<E> for DeviceError {
+    fn from(err: E) -> Self {
+        Self {
+            inner: Box::new(err),
+        }
+    }
+}
+
 /// A trait which allows device I/O errors to get some kind of abstraction.
-pub trait IoError: core::fmt::Debug + core::fmt::Display + core_error::Error + 'static {
+pub trait IoError: core::fmt::Debug + core::fmt::Display + std::error::Error + 'static {
     /// Returns whether the operations that failed because of this error should retry. This
     /// corresponds to something like EINTR, not EAGAIN or EWOULDBLOCK.
     fn should_retry(&self) -> bool;
 }
 
+#[derive(Debug)]
 pub struct WriteZeroError;
+
+impl core::fmt::Display for WriteZeroError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "wrote zero bytes")
+    }
+}
+impl std::error::Error for WriteZeroError {}
+
+#[derive(Debug)]
 pub struct UnexpectedEof;
+
+impl core::fmt::Display for UnexpectedEof {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "unexpected EOF")
+    }
+}
+impl std::error::Error for UnexpectedEof {}
+
+impl IoError for UnexpectedEof {
+    fn should_retry(&self) -> bool {
+        false
+    }
+}
+impl IoError for WriteZeroError {
+    fn should_retry(&self) -> bool {
+        false
+    }
+}
 
 /// A readonly device, such as the file /dev/sda. Typically implemented by the frontend.
 /// This trait doesn't require a seeking method, since all reads are supposed to be atomic (as in
@@ -147,24 +203,24 @@ pub struct UnexpectedEof;
 ///
 /// This trait only uses immutable references to self, so it's up to the implementer to use
 /// locking, atomic I/O if possible, or single-threaded interior mutability.
-pub trait DeviceRo {
-    // TODO: Add support for querying bad sectors etc.
+pub trait DeviceRo: std::fmt::Debug {
+    // TODO: Add support for querying bad sectors etc (or perhaps that's done via simply checking
+    // if the block can actually be written to successfully, when its data was invalid (e.g. a
+    // checksum)).
     // TODO: Concurrent I/O.
     // TODO: Trimming.
     // TODO: Async/await
 
-    type IoError: IoError + From<WriteZeroError> + From<UnexpectedEof>;
-
     /// Read bytes from the device at a specific offset. The return value is the number of bytes
     /// read.
-    fn read(&self, offset: u64, buf: &mut [u8]) -> Result<usize, Self::IoError>;
+    fn read(&self, offset: u64, buf: &mut [u8]) -> Result<usize, DeviceError>;
 
     // TODO: Should read always behave like read_exact?
 
     /// Read the exact number of bytes from the device at a specific offset. This will guarantee
     /// that the buffer will be filled, or an error will occur. This method should be used instead
     /// of the regular read function.
-    fn read_exact(&self, mut offset: u64, mut buf: &mut [u8]) -> Result<(), Self::IoError> {
+    fn read_exact(&self, mut offset: u64, mut buf: &mut [u8]) -> Result<(), DeviceError> {
         while !buf.is_empty() {
             match self.read(offset, buf) {
                 Ok(0) => break,
@@ -174,24 +230,24 @@ pub trait DeviceRo {
                     buf = &mut buf[n..];
                     continue;
                 }
-                Err(e) if e.should_retry() => continue,
+                Err(e) if e.inner().should_retry() => continue,
                 Err(e) => return Err(e),
             }
         }
 
         if !buf.is_empty() {
-            return Err(Self::IoError::from(UnexpectedEof));
+            return Err(UnexpectedEof.into());
         }
         Ok(())
     }
 
     /// Retrieve the size of the device, in bytes.
-    fn size(&self) -> Result<u64, Self::IoError>;
+    fn size(&self) -> Result<u64, DeviceError>;
 
     /// Seek to an offset. This method isn't required, but only there for performance
     /// optimizations, mainly for HDDs. By default, this is a no-op.
     #[allow(unused_variables)]
-    fn seek(&self, offset: u64) -> Result<(), Self::IoError> {
+    fn seek(&self, offset: u64) -> Result<(), DeviceError> {
         Ok(())
     }
 }
@@ -200,22 +256,22 @@ pub trait Device: DeviceRo {
     /// Write bytes to the device at a specific offset. The return value is the number of bytes
     /// read.
     #[must_use]
-    fn write(&self, offset: u64, buf: &[u8]) -> Result<usize, Self::IoError>;
+    fn write(&self, offset: u64, buf: &[u8]) -> Result<usize, DeviceError>;
 
     // TODO: Again, should write() always be write_all()?
 
     /// Write bytes to the device at an offset, but guarantees that every byte in the buffer will
     /// be written, or an error will occur.
-    fn write_all(&self, mut offset: u64, mut buf: &[u8]) -> Result<(), Self::IoError> {
+    fn write_all(&self, mut offset: u64, mut buf: &[u8]) -> Result<(), DeviceError> {
         while !buf.is_empty() {
             match self.write(offset, buf) {
-                Ok(0) => return Err(From::<WriteZeroError>::from(WriteZeroError)),
+                Ok(0) => return Err(WriteZeroError.into()),
                 Ok(n) => {
                     offset += n as u64;
                     buf = &buf[n..];
                     continue;
                 }
-                Err(e) if e.should_retry() => continue,
+                Err(e) if e.inner().should_retry() => continue,
                 Err(e) => return Err(e),
             }
         }
@@ -271,36 +327,40 @@ mod file_device {
         }
     }
 
-    impl<D: Read + Seek> DeviceRo for BasicDevice<D> {
-        type IoError = io::Error;
+    impl<D> std::fmt::Debug for BasicDevice<D> {
+        fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, "(device)")
+        }
+    }
 
-        fn read(&self, offset: u64, buf: &mut [u8]) -> Result<usize, Self::IoError> {
+    impl<D: Read + Seek> DeviceRo for BasicDevice<D> {
+        fn read(&self, offset: u64, buf: &mut [u8]) -> Result<usize, DeviceError> {
             let mut guard = self.device.lock().unwrap();
 
             let current_offset = guard.seek(io::SeekFrom::Start(offset))?;
 
             if current_offset != offset {
-                return Err(io::Error::new(io::ErrorKind::Other, NewOffsetFromSeekMismatch { requested: offset, got: current_offset }));
+                return Err(io::Error::new(io::ErrorKind::Other, NewOffsetFromSeekMismatch { requested: offset, got: current_offset }).into());
             }
 
-            guard.read(buf)
+            Ok(guard.read(buf)?)
         }
 
-        fn size(&self) -> Result<u64, Self::IoError> {
-            self.device.lock().unwrap().seek(io::SeekFrom::End(0))
+        fn size(&self) -> Result<u64, DeviceError> {
+            Ok(self.device.lock().unwrap().seek(io::SeekFrom::End(0))?)
         }
     }
     impl<D: Read + Seek + Write> Device for BasicDevice<D> {
-        fn write(&self, offset: u64, buffer: &[u8]) -> Result<usize, Self::IoError> {
+        fn write(&self, offset: u64, buffer: &[u8]) -> Result<usize, DeviceError> {
             let mut guard = self.device.lock().unwrap();
 
             let current_offset = guard.seek(io::SeekFrom::Start(offset))?;
 
             if current_offset != offset {
-                return Err(io::Error::new(io::ErrorKind::Other, NewOffsetFromSeekMismatch { requested: offset, got: current_offset }));
+                return Err(io::Error::new(io::ErrorKind::Other, NewOffsetFromSeekMismatch { requested: offset, got: current_offset }).into());
             }
 
-            guard.write(buffer)
+            Ok(guard.write(buffer)?)
         }
     }
 }

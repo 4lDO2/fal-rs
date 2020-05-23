@@ -45,7 +45,7 @@ impl<T> Disk<T> {
 }
 impl<T: fal::DeviceRo> Disk<T> {
     /// Wrap a `Read` + `Write` + `Seek` device for optimal caching and journaling.
-    pub fn new(inner: T) -> Result<Self, T::IoError> {
+    pub fn new(inner: T) -> Result<Self, fal::DeviceError> {
         let size = inner.size()?;
 
         Ok(Self {
@@ -62,7 +62,7 @@ impl<T: fal::DeviceRo> Disk<T> {
         kind: BlockKind,
         block_address: u64,
         buffer: &mut [u8],
-    ) -> Result<(), T::IoError> {
+    ) -> Result<(), fal::DeviceError> {
         debug_assert!(block_address * u64::from(filesystem.superblock.block_size()) < self.size);
         debug_assert!(block_group::block_exists(block_address, filesystem).unwrap_or(false));
         self.read_block_raw(filesystem, kind, block_address, buffer)
@@ -75,7 +75,7 @@ impl<T: fal::DeviceRo> Disk<T> {
         _kind: BlockKind,
         block_address: u64,
         buffer: &mut [u8],
-    ) -> Result<(), T::IoError> {
+    ) -> Result<(), fal::DeviceError> {
         self.inner.read_exact(
             block_address * u64::from(filesystem.superblock.block_size()),
             buffer,
@@ -91,7 +91,7 @@ impl<T: fal::Device> Disk<T> {
         _kind: BlockKind,
         block_address: u64,
         buffer: &[u8],
-    ) -> Result<(), T::IoError> {
+    ) -> Result<(), fal::DeviceError> {
         // TODO: Write to the journal first, and once that write is complete, perform the actual
         // write. This behavior can be configured (data=journal|ordered|writeback). By default,
         // metadata will always go through the journal (ordered); while data is written directly,
@@ -115,7 +115,7 @@ impl<T: fal::Device> Disk<T> {
         kind: BlockKind,
         block_address: u64,
         buffer: &[u8],
-    ) -> Result<(), T::IoError> {
+    ) -> Result<(), fal::DeviceError> {
         debug_assert!(block_group::block_exists(block_address, filesystem).unwrap_or(false));
         self.write_block_raw(filesystem, kind, block_address, buffer)
     }

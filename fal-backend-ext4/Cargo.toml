@@ -14,7 +14,7 @@ crc = "1"
 log = "0.4"
 md4 = "0.8"
 scroll = { version = "0.10", features = ["derive"] }
-snafu = { git = "https://github.com/shepmaster/snafu" }
+thiserror = "1"
 uuid = "0.7"
 
 fal = { path = "../fal", version = "0.1" }
