@@ -55,7 +55,7 @@ pub fn parse_fs_options(options_str: &'_ str) -> Result<fal::Options, OptionsPar
     Ok(options)
 }
 
-pub struct FuseFilesystem<Backend: fal::Filesystem<File>> {
+pub struct FuseFilesystem<Backend: fal::Filesystem<fal::BasicDevice<File>>> {
     inner: Option<Backend>,
     options: fal::Options,
 }
@@ -109,11 +109,11 @@ macro_rules! handle_fal_error(
     };}
 );
 
-impl<Backend: fal::Filesystem<File>> FuseFilesystem<Backend> {
+impl<Backend: fal::Filesystem<fal::BasicDevice<File>>> FuseFilesystem<Backend> {
     pub fn init(device: File, path: &OsStr, options: fal::Options) -> io::Result<Self> {
         Ok(Self {
             inner: Some(Backend::mount(
-                device,
+                fal::BasicDevice::new(device),
                 options,
                 Default::default(),
                 path.as_bytes(),
@@ -145,7 +145,9 @@ fn fuse_inode_from_fs_inode<InodeAddr: Into<u64> + Copy>(fs_inode: InodeAddr) ->
     }
 }
 
-impl<Backend: fal::Filesystem<File>> fuse::Filesystem for FuseFilesystem<Backend> {
+impl<Backend: fal::Filesystem<fal::BasicDevice<File>>> fuse::Filesystem
+    for FuseFilesystem<Backend>
+{
     fn init(&mut self, _req: &Request) -> Result<(), libc::c_int> {
         Ok(())
     }

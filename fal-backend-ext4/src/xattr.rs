@@ -173,7 +173,6 @@ pub struct InlineXattrs {
 
 #[derive(Debug, Error)]
 pub enum LoadXattrsError {
-
     #[error("extended attribute inode i/o error: {0}")]
     EaInodeIoError(#[from] InodeIoError),
 

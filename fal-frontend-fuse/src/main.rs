@@ -77,7 +77,7 @@ fn main() {
         match filesystem_type {
             #[cfg(feature = "ext4")]
             "ext2" | "ext3" | "ext4" => fuse::mount(
-                FuseFilesystem::<fal_backend_ext4::Filesystem<std::fs::File>>::init(
+                FuseFilesystem::<fal_backend_ext4::Filesystem<fal::BasicDevice<std::fs::File>>>::init(
                     file,
                     mount_point.as_ref(),
                     fuse_options,
@@ -90,7 +90,7 @@ fn main() {
 
             #[cfg(feature = "btrfs")]
             "btrfs" => fuse::mount(
-                FuseFilesystem::<fal_backend_btrfs::Filesystem<std::fs::File>>::init(
+                FuseFilesystem::<fal_backend_btrfs::Filesystem<fal::BasicDevice<std::fs::File>>>::init(
                     file,
                     mount_point.as_ref(),
                     fuse_options,
@@ -103,7 +103,7 @@ fn main() {
 
             #[cfg(feature = "apfs")]
             "apfs" => fuse::mount(
-                FuseFilesystem::<fal_backend_apfs::Filesystem<std::fs::File>>::init(
+                FuseFilesystem::<fal_backend_apfs::Filesystem<fal::BasicDevice<std::fs::File>>>::init(
                     file,
                     mount_point.as_ref(),
                     fuse_options,

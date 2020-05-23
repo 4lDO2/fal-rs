@@ -48,10 +48,7 @@ impl<T: fal::DeviceRo> Disk<T> {
     pub fn new(inner: T) -> Result<Self, fal::DeviceError> {
         let size = inner.size()?;
 
-        Ok(Self {
-            inner,
-            size,
-        })
+        Ok(Self { inner, size })
     }
 
     /// Read a block, which is checked for existence in the block group descriptor tables for debug
@@ -104,7 +101,7 @@ impl<T: fal::Device> Disk<T> {
 
         self.inner.write_all(
             block_address as u64 * u64::from(filesystem.superblock.block_size()),
-            buffer
+            buffer,
         )?;
         Ok(())
     }

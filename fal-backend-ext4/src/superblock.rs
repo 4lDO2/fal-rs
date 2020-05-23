@@ -220,7 +220,6 @@ fn _log2_round_up<T: From<u8> + AddAssign + ShrAssign + Eq>(mut t: T) -> T {
 
 #[derive(Debug, Error)]
 pub enum LoadSuperblockError {
-
     #[error("superblock parse error")]
     ParseError(#[from] scroll::Error),
 

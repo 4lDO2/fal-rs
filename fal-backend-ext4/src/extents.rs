@@ -622,7 +622,10 @@ mod alloc_extents_blk_error {
 
     #[derive(Debug, Error)]
     pub enum AllocateExtentBlocksError {
-        #[error("the allocation of a new extent leaf or the extension of an existing leaf failed: {}", err)]
+        #[error(
+            "the allocation of a new extent leaf or the extension of an existing leaf failed: {}",
+            err
+        )]
         AllocLeafError {
             #[from]
             err: AllocateExtentLeafError,

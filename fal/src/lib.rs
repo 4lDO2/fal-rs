@@ -21,15 +21,14 @@ pub struct Timespec {
 
 impl Timespec {
     pub const fn new(sec: i64, nsec: i32) -> Self {
-        Self {
-            sec,
-            nsec,
-        }
+        Self { sec, nsec }
     }
 }
 
 pub fn read_uuid(block: &[u8], offset: usize) -> Uuid {
-    uuid::Builder::from_slice(&block[offset..offset + 16]).unwrap().build()
+    uuid::Builder::from_slice(&block[offset..offset + 16])
+        .unwrap()
+        .build()
 }
 pub fn read_u64(block: &[u8], offset: usize) -> u64 {
     let mut bytes = [0u8; mem::size_of::<u64>()];
@@ -281,9 +280,9 @@ pub trait Device: DeviceRo {
 
 #[cfg(feature = "std")]
 mod file_device {
+    use super::*;
     use std::io::{self, prelude::*};
     use std::sync::Mutex;
-    use super::*;
 
     pub struct BasicDevice<D> {
         device: Mutex<D>,
@@ -306,7 +305,11 @@ mod file_device {
 
     impl std::fmt::Display for NewOffsetFromSeekMismatch {
         fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-            write!(f, "the resulting offset {} after a seek call didn't match the requested {}", self.requested, self.got)
+            write!(
+                f,
+                "the resulting offset {} after a seek call didn't match the requested {}",
+                self.requested, self.got
+            )
         }
     }
     impl std::error::Error for NewOffsetFromSeekMismatch {}
@@ -340,7 +343,14 @@ mod file_device {
             let current_offset = guard.seek(io::SeekFrom::Start(offset))?;
 
             if current_offset != offset {
-                return Err(io::Error::new(io::ErrorKind::Other, NewOffsetFromSeekMismatch { requested: offset, got: current_offset }).into());
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    NewOffsetFromSeekMismatch {
+                        requested: offset,
+                        got: current_offset,
+                    },
+                )
+                .into());
             }
 
             Ok(guard.read(buf)?)
@@ -357,7 +367,14 @@ mod file_device {
             let current_offset = guard.seek(io::SeekFrom::Start(offset))?;
 
             if current_offset != offset {
-                return Err(io::Error::new(io::ErrorKind::Other, NewOffsetFromSeekMismatch { requested: offset, got: current_offset }).into());
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    NewOffsetFromSeekMismatch {
+                        requested: offset,
+                        got: current_offset,
+                    },
+                )
+                .into());
             }
 
             Ok(guard.write(buffer)?)

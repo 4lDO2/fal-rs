@@ -53,9 +53,9 @@ pub enum InodeIoError {
     LoadXattrsErr(#[from] Box<LoadXattrsError>),
 }
 impl From<LoadXattrsError> for InodeIoError {
-     fn from(err: LoadXattrsError) -> Self {
-         Self::LoadXattrsErr(Box::new(err))
-     }
+    fn from(err: LoadXattrsError) -> Self {
+        Self::LoadXattrsErr(Box::new(err))
+    }
 }
 
 impl InodeIoError {

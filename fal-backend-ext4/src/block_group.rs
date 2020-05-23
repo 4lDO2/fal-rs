@@ -251,7 +251,6 @@ mod bgd_err {
     use super::*;
     #[derive(Error, Debug)]
     pub enum BgdError {
-
         #[error("disk i/o error: {0}")]
         DiskIoError(#[from] fal::DeviceError),
 
@@ -525,7 +524,6 @@ mod alloc_blk_err {
 
     #[derive(Debug, Error)]
     pub enum AllocateBlockError {
-
         #[error("disk i/o error: {0}")]
         DiskIoError(#[from] fal::DeviceError),
 
@@ -536,9 +534,7 @@ mod alloc_blk_err {
         BgdError(#[from] super::BgdError),
 
         #[error("no block group containing {} free contiguous blocks", size)]
-        InsufficientSpace {
-            size: u32
-        },
+        InsufficientSpace { size: u32 },
 
         #[error("some of the block group descriptors had (possibly) corrupted data")]
         ChecksumMismatch,

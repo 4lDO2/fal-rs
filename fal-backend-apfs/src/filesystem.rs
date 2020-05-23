@@ -144,11 +144,7 @@ impl<D: fal::DeviceRo> Filesystem<D> {
             .take_while(|oid| oid.is_valid())
             .map(|volume| {
                 let (_, omap_value) = omap
-                    .get_partial_latest(
-                        &device,
-                        &container_superblock,
-                        OmapKey::partial(volume),
-                    )
+                    .get_partial_latest(&device, &container_superblock, OmapKey::partial(volume))
                     .expect("Volume virtual oid_t wasn't found in the omap B+ tree.");
 
                 Volume::load(&device, &container_superblock, omap_value.paddr)
@@ -175,14 +171,11 @@ impl<D: fal::DeviceRo> Filesystem<D> {
     }
 }
 impl<D: fal::Device> Filesystem<D> {
-    pub fn write_block(
-        superblock: &NxSuperblock,
-        device: &D,
-        address: BlockAddr,
-        block: &[u8],
-    ) {
+    pub fn write_block(superblock: &NxSuperblock, device: &D, address: BlockAddr, block: &[u8]) {
         debug_assert_eq!(block.len(), superblock.block_size as usize);
-        device.write_all(address as u64 * u64::from(superblock.block_size), &block).unwrap();
+        device
+            .write_all(address as u64 * u64::from(superblock.block_size), &block)
+            .unwrap();
     }
 }
 

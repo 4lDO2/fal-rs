@@ -309,11 +309,7 @@ impl BTreeValue {
 }
 
 impl BTreeNode {
-    pub fn load<D: fal::DeviceRo>(
-        device: &D,
-        superblock: &NxSuperblock,
-        addr: BlockAddr,
-    ) -> Self {
+    pub fn load<D: fal::DeviceRo>(device: &D, superblock: &NxSuperblock, addr: BlockAddr) -> Self {
         Self::parse(&read_block(superblock, device, addr))
     }
     pub fn parse(bytes: &[u8]) -> Self {
@@ -587,11 +583,7 @@ pub struct BTree {
 }
 
 impl BTree {
-    pub fn load<D: fal::DeviceRo>(
-        device: &D,
-        superblock: &NxSuperblock,
-        addr: BlockAddr,
-    ) -> Self {
+    pub fn load<D: fal::DeviceRo>(device: &D, superblock: &NxSuperblock, addr: BlockAddr) -> Self {
         let root = BTreeNode::load(device, superblock, addr);
 
         assert!(root.is_root());

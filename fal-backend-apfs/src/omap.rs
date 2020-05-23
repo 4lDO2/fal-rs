@@ -129,11 +129,7 @@ pub struct Omap {
 }
 
 impl Omap {
-    pub fn load<D: fal::DeviceRo>(
-        device: &D,
-        superblock: &NxSuperblock,
-        baddr: BlockAddr,
-    ) -> Self {
+    pub fn load<D: fal::DeviceRo>(device: &D, superblock: &NxSuperblock, baddr: BlockAddr) -> Self {
         let block = read_block(superblock, device, baddr);
 
         let omap = OmapPhys::parse(&block);
