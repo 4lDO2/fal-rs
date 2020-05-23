@@ -14,6 +14,8 @@ use time::Timespec;
 
 use fal::Inode;
 
+mod disk;
+
 #[derive(Debug)]
 pub enum OptionsParseError<'a> {
     UnknownOption(&'a str),

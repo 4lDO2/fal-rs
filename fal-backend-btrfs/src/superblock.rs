@@ -87,7 +87,9 @@ enum_from_primitive! {
 
 impl Superblock {
     pub fn load<D: fal::DeviceRo>(device: &mut D) -> Self {
-        let disk_size = device.size().unwrap();
+        let disk_info = device.disk_info().unwrap();
+        let disk_size = disk_info.block_count * u64::from(disk_info.block_size);
+        // FIXME
 
         let mut block = [0u8; 4096];
 
@@ -96,7 +98,7 @@ impl Superblock {
             .copied()
             .filter(|offset| offset + 4096 < disk_size)
             .map(|offset| {
-                device.read_exact(offset, &mut block).unwrap();
+                device.read_blocks(offset / u64::from(disk_info.block_size), &mut block).unwrap();
 
                 Self::parse(&block)
             })

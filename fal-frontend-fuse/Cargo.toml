@@ -15,11 +15,16 @@ btrfs = ["fal-backend-btrfs"]
 
 [dependencies]
 clap = "2.33"
+cranelift-bforest = "0.63"
+crossbeam-queue = "0.2"
 env_logger = "0.6"
 fal = { path = "../fal", version = "0.1" }
 libc = "0.2"
-time = "0.1"
+nix = "0.17"
 fuse = "0.3"
+parking_lot = "0.10"
+thiserror = "1"
+time = "0.1"
 
 fal-backend-ext4 = { version = "0.1", optional = true, path = "../fal-backend-ext4" }
 fal-backend-btrfs = { version = "0.1", optional = true, path = "../fal-backend-btrfs" }

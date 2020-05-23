@@ -29,7 +29,7 @@ pub enum BlockKind {
 /// The underlying disk of an ext2/3/4 filesystem.
 pub struct Disk<T> {
     inner: T,
-    size: u64,
+    info: fal::DiskInfo,
     // TODO: Cache
 }
 
@@ -42,13 +42,19 @@ impl<T> Disk<T> {
     pub(crate) fn inner(&self) -> &T {
         &self.inner
     }
+    fn phys_blocks_per_block(&self, filesystem: &Filesystem<T>) -> u32 {
+        filesystem.superblock.block_size() / self.info.block_size
+    }
 }
 impl<T: fal::DeviceRo> Disk<T> {
     /// Wrap a `Read` + `Write` + `Seek` device for optimal caching and journaling.
     pub fn new(inner: T) -> Result<Self, fal::DeviceError> {
-        let size = inner.size()?;
+        let info = inner.disk_info()?;
 
-        Ok(Self { inner, size })
+        Ok(Self {
+            inner,
+            info,
+        })
     }
 
     /// Read a block, which is checked for existence in the block group descriptor tables for debug
@@ -60,7 +66,7 @@ impl<T: fal::DeviceRo> Disk<T> {
         block_address: u64,
         buffer: &mut [u8],
     ) -> Result<(), fal::DeviceError> {
-        debug_assert!(block_address * u64::from(filesystem.superblock.block_size()) < self.size);
+        debug_assert!(block_address * u64::from(self.phys_blocks_per_block(filesystem)) < self.info.block_count);
         debug_assert!(block_group::block_exists(block_address, filesystem).unwrap_or(false));
         self.read_block_raw(filesystem, kind, block_address, buffer)
     }
@@ -73,8 +79,8 @@ impl<T: fal::DeviceRo> Disk<T> {
         block_address: u64,
         buffer: &mut [u8],
     ) -> Result<(), fal::DeviceError> {
-        self.inner.read_exact(
-            block_address * u64::from(filesystem.superblock.block_size()),
+        self.inner.read_blocks(
+            block_address * u64::from(self.phys_blocks_per_block(filesystem)),
             buffer,
         )?;
         Ok(())
@@ -99,8 +105,8 @@ impl<T: fal::Device> Disk<T> {
             .kbs_written
             .fetch_add(buffer.len() as u64, atomic::Ordering::Acquire);
 
-        self.inner.write_all(
-            block_address as u64 * u64::from(filesystem.superblock.block_size()),
+        self.inner.write_blocks(
+            block_address * u64::from(filesystem.superblock.block_size()),
             buffer,
         )?;
         Ok(())

@@ -10,7 +10,9 @@ pub fn read_node_phys<D: fal::DeviceRo>(
     offset: u64,
 ) -> Box<[u8]> {
     let mut bytes = vec![0u8; superblock.node_size as usize];
-    device.read_exact(offset, &mut bytes).unwrap();
+    // FIXME
+    debug_assert_eq!(superblock.node_size % device.disk_info().unwrap().block_size, 0);
+    device.read_blocks(offset, &mut bytes).unwrap();
     bytes.into_boxed_slice()
 }
 

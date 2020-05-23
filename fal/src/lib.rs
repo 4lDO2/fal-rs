@@ -196,7 +196,16 @@ impl IoError for WriteZeroError {
     }
 }
 
-/// A readonly device, such as the file /dev/sda. Typically implemented by the frontend.
+/// Information about a physical disk.
+#[derive(Clone, Copy, Debug)]
+pub struct DiskInfo {
+    pub block_size: u32,
+    pub block_count: u64,
+    pub sector_size: Option<u64>,
+    pub is_rotational: Option<bool>,
+}
+
+/// A readonly block device, such as the file /dev/sda. Typically implemented by the frontend.
 /// This trait doesn't require a seeking method, since all reads are supposed to be atomic (as in
 /// that the seek and read call cannot be divided).
 ///
@@ -208,74 +217,30 @@ pub trait DeviceRo: std::fmt::Debug {
     // checksum)).
     // TODO: Concurrent I/O.
     // TODO: Trimming.
-    // TODO: Async/await
+    // TODO: Async/await.
 
-    /// Read bytes from the device at a specific offset. The return value is the number of bytes
-    /// read.
-    fn read(&self, offset: u64, buf: &mut [u8]) -> Result<usize, DeviceError>;
+    /// Read blocks from the device at a specific offset. All blocks have to be read.
+    fn read_blocks(&self, block: u64, buf: &mut [u8]) -> Result<(), DeviceError>;
 
-    // TODO: Should read always behave like read_exact?
-
-    /// Read the exact number of bytes from the device at a specific offset. This will guarantee
-    /// that the buffer will be filled, or an error will occur. This method should be used instead
-    /// of the regular read function.
-    fn read_exact(&self, mut offset: u64, mut buf: &mut [u8]) -> Result<(), DeviceError> {
-        while !buf.is_empty() {
-            match self.read(offset, buf) {
-                Ok(0) => break,
-
-                Ok(n) => {
-                    offset += n as u64;
-                    buf = &mut buf[n..];
-                    continue;
-                }
-                Err(e) if e.inner().should_retry() => continue,
-                Err(e) => return Err(e),
-            }
-        }
-
-        if !buf.is_empty() {
-            return Err(UnexpectedEof.into());
-        }
-        Ok(())
-    }
-
-    /// Retrieve the size of the device, in bytes.
-    fn size(&self) -> Result<u64, DeviceError>;
+    /// Retrieve miscellaneous information about the disk, such as block size, preferred alignment,
+    /// number of blocks, etc.
+    fn disk_info(&self) -> Result<DiskInfo, DeviceError>;
 
     /// Seek to an offset. This method isn't required, but only there for performance
     /// optimizations, mainly for HDDs. By default, this is a no-op.
     #[allow(unused_variables)]
-    fn seek(&self, offset: u64) -> Result<(), DeviceError> {
+    fn seek(&self, block: u64) -> Result<(), DeviceError> {
         Ok(())
     }
 }
 /// A read-write device.
 pub trait Device: DeviceRo {
-    /// Write bytes to the device at a specific offset. The return value is the number of bytes
-    /// read.
+    /// Write blocks to the device at a specific offset. Unlike std's Write trait, this will error
+    /// if all blocks weren't written.
     #[must_use]
-    fn write(&self, offset: u64, buf: &[u8]) -> Result<usize, DeviceError>;
+    fn write_blocks(&self, block: u64, buf: &[u8]) -> Result<(), DeviceError>;
 
-    // TODO: Again, should write() always be write_all()?
-
-    /// Write bytes to the device at an offset, but guarantees that every byte in the buffer will
-    /// be written, or an error will occur.
-    fn write_all(&self, mut offset: u64, mut buf: &[u8]) -> Result<(), DeviceError> {
-        while !buf.is_empty() {
-            match self.write(offset, buf) {
-                Ok(0) => return Err(WriteZeroError.into()),
-                Ok(n) => {
-                    offset += n as u64;
-                    buf = &buf[n..];
-                    continue;
-                }
-                Err(e) if e.inner().should_retry() => continue,
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(())
-    }
+    // TODO: Flushing
 }
 
 #[cfg(feature = "std")]
@@ -285,9 +250,12 @@ mod file_device {
     use std::sync::Mutex;
 
     pub struct BasicDevice<D> {
+        // TODO: Use a concurrent tree to instead lock based on ranges.
         device: Mutex<D>,
     }
     impl<D> BasicDevice<D> {
+        const BLOCK_SIZE: u32 = 512;
+
         pub fn new(inner: D) -> Self {
             Self {
                 device: Mutex::new(inner),
@@ -337,9 +305,10 @@ mod file_device {
     }
 
     impl<D: Read + Seek> DeviceRo for BasicDevice<D> {
-        fn read(&self, offset: u64, buf: &mut [u8]) -> Result<usize, DeviceError> {
+        fn read_blocks(&self, block: u64, buf: &mut [u8]) -> Result<(), DeviceError> {
             let mut guard = self.device.lock().unwrap();
 
+            let offset = block * u64::from(Self::BLOCK_SIZE);
             let current_offset = guard.seek(io::SeekFrom::Start(offset))?;
 
             if current_offset != offset {
@@ -353,17 +322,27 @@ mod file_device {
                 .into());
             }
 
-            Ok(guard.read(buf)?)
+            guard.read(buf)?;
+            // TODO: Check len
+            Ok(())
         }
 
-        fn size(&self) -> Result<u64, DeviceError> {
-            Ok(self.device.lock().unwrap().seek(io::SeekFrom::End(0))?)
+        fn disk_info(&self) -> Result<DiskInfo, DeviceError> {
+            let size = self.device.lock().unwrap().seek(io::SeekFrom::End(0))?;
+
+            Ok(DiskInfo {
+                block_size: Self::BLOCK_SIZE,
+                block_count: size / u64::from(Self::BLOCK_SIZE),
+                is_rotational: None,
+                sector_size: None,
+            })
         }
     }
     impl<D: Read + Seek + Write> Device for BasicDevice<D> {
-        fn write(&self, offset: u64, buffer: &[u8]) -> Result<usize, DeviceError> {
+        fn write_blocks(&self, block: u64, buffer: &[u8]) -> Result<(), DeviceError> {
             let mut guard = self.device.lock().unwrap();
 
+            let offset = block * u64::from(Self::BLOCK_SIZE);
             let current_offset = guard.seek(io::SeekFrom::Start(offset))?;
 
             if current_offset != offset {
@@ -377,7 +356,8 @@ mod file_device {
                 .into());
             }
 
-            Ok(guard.write(buffer)?)
+            guard.write(buffer)?;
+            Ok(())
         }
     }
 }

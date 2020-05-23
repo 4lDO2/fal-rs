@@ -89,7 +89,7 @@ impl NxSuperblock {
 
     pub fn load<D: fal::DeviceRo>(device: &D) -> Self {
         let mut block_bytes = [0; 4096];
-        device.read_exact(0, &mut block_bytes).unwrap();
+        device.read_blocks(0, &mut block_bytes).unwrap();
         Self::parse(&block_bytes)
     }
     pub fn parse(block_bytes: &[u8]) -> Self {
@@ -231,7 +231,7 @@ impl NxSuperblock {
     pub fn store<D: fal::Device>(this: &Self, device: &D) {
         let mut block_bytes = [0u8; 4096];
         Self::serialize(this, &mut block_bytes);
-        device.write_all(0, &block_bytes).unwrap();
+        device.write_blocks(0, &block_bytes).unwrap();
     }
     pub fn serialize(this: &Self, block: &mut [u8]) {
         ObjPhys::serialize(&this.header, &mut block[..ObjPhys::LEN]);

@@ -37,10 +37,13 @@ pub struct Filesystem<D: fal::DeviceRo> {
     pub spacemanager_oid: ObjectIdentifier,
     pub reaper_oid: ObjectIdentifier,
     pub general_options: fal::Options,
+
+    disk_info: fal::DiskInfo,
 }
 
 impl<D: fal::DeviceRo> Filesystem<D> {
     pub fn mount(device: D, general_options: fal::Options) -> Self {
+        let disk_info = device.disk_info().unwrap();
         let container_superblock = NxSuperblock::load(&device);
 
         if container_superblock.chkpnt_desc_blkcnt & (1 << 31) != 0 {
@@ -161,6 +164,7 @@ impl<D: fal::DeviceRo> Filesystem<D> {
             spacemanager_oid,
             reaper_oid,
             general_options,
+            disk_info,
         }
     }
     pub fn volume(&self) -> &Volume {
@@ -171,10 +175,14 @@ impl<D: fal::DeviceRo> Filesystem<D> {
     }
 }
 impl<D: fal::Device> Filesystem<D> {
+    fn phys_blocks_per_block(disk_info: &fal::DiskInfo, superblock: &NxSuperblock) -> u32 {
+        superblock.block_size / disk_info.block_size
+    }
     pub fn write_block(superblock: &NxSuperblock, device: &D, address: BlockAddr, block: &[u8]) {
         debug_assert_eq!(block.len(), superblock.block_size as usize);
+        // FIXME
         device
-            .write_all(address as u64 * u64::from(superblock.block_size), &block)
+            .write_blocks(address as u64 * u64::from(Self::phys_blocks_per_block(&device.disk_info().unwrap(), superblock)), &block)
             .unwrap();
     }
 }

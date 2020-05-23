@@ -221,8 +221,9 @@ pub fn read_block_to<D: fal::DeviceRo>(
     debug_assert!(address >= 0);
     debug_assert_eq!(block.len(), superblock.block_size as usize);
 
+    // FIXME
     device
-        .read_exact(address as u64 * u64::from(superblock.block_size), block)
+        .read_blocks(address as u64 * u64::from(superblock.block_size) / u64::from(device.disk_info().unwrap().block_size), block)
         .unwrap();
 }
 pub fn read_block<D: fal::DeviceRo>(
