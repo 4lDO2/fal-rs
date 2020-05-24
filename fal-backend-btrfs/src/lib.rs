@@ -9,6 +9,7 @@ pub mod tree;
 
 use core::cmp::Ordering;
 use core::convert::TryFrom;
+use core::fmt;
 
 use bitflags::bitflags;
 use crc::{crc32, Hasher32};
@@ -41,7 +42,7 @@ mod sizes {
     pub const P: u64 = T * K;
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, AsBytes, FromBytes, Unaligned)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq, AsBytes, FromBytes, Unaligned)]
 #[repr(packed)]
 pub struct DiskKey {
     pub oid: u64_le,
@@ -72,6 +73,27 @@ impl PartialOrd for DiskKey {
 impl Ord for DiskKey {
     fn cmp(&self, other: &Self) -> Ordering {
         self.compare(other)
+    }
+}
+impl fmt::Debug for DiskKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DiskKey")
+            .field("oid", &self.oid.get())
+            .field("ty", &DiskKeyType::from_u8(self.ty))
+            .field("offset", &self.offset.get())
+            .finish()
+
+    }
+}
+
+#[derive(Clone, Copy, Eq, Hash, PartialEq, AsBytes, FromBytes, Unaligned)]
+#[repr(packed)]
+pub struct PackedUuid {
+    pub bytes: [u8; 16],
+}
+impl fmt::Debug for PackedUuid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&uuid::Uuid::from_bytes(self.bytes), f)
     }
 }
 
@@ -180,39 +202,41 @@ impl Checksum {
     }
     pub fn calculate(ty: superblock::ChecksumType, bytes: &[u8]) -> Option<Self> {
         match ty {
-            #[cfg(feature = "crc")]
+            #[cfg(feature = "crc32c")]
             ChecksumType::Crc32c => Some({
-                use crc::crc64::Hasher64;
-
                 let mut hasher = crc32::Digest::new_with_initial(crc32::CASTAGNOLI, Self::CRC32C_SEED);
                 hasher.write(bytes);
                 Checksum::Crc32c(hasher.sum32())
             }),
-            #[cfg(feature = "twox_hash")]
+            #[cfg(feature = "xxhash")]
             ChecksumType::Xxhash => Some({
                 use core::hash::Hasher;
 
-                let mut hasher = twox_hash::Xxhash64::with_seed(Self, Self::XXHASH_SEED);
+                let mut hasher = twox_hash::XxHash64::with_seed(Self::XXHASH_SEED);
                 hasher.write(bytes);
                 Checksum::Xxhash(hasher.finish())
             }),
-            #[cfg(feature = "sha2")]
+            #[cfg(feature = "sha256")]
             ChecksumType::Sha256 => Some({
-                use sha2::digest::{FixedOutput, Input};
+                use sha2::digest::Digest;
 
                 let mut hasher = sha2::Sha256::default();
                 hasher.input(bytes);
-                Checksum::Sha256(hasher.fixed_result().into())
+                Checksum::Sha256(hasher.result().into())
             }),
-            #[cfg(feature = "blake")]
+            #[cfg(feature = "blake2")]
             ChecksumType::Blake2 => Some({
-                use blake2::digest::{FixedOutput, Input};
+                use blake2::digest::{Input, VariableOutput};
 
-                let mut hasher = blake2::Blake2b::default();
+                let mut hasher = blake2::VarBlake2b::new(32).unwrap();
                 hasher.input(bytes);
-                Checksum::Blake2(hasher.fixed_result().into())
+
+                let mut ret: Option<[u8; 32]> = None;
+                hasher.variable_result(|slice| ret = <[u8; 32]>::try_from(slice).ok());
+                Checksum::Blake2(ret.unwrap())
             }),
 
+            #[allow(unreachable_patterns)]
             _ => None,
         }
     }
@@ -229,24 +253,24 @@ impl Checksum {
     }
 
     const SUPPORTED_CHECKSUMS: [Option<ChecksumType>; 4] = [
-        #[cfg(feature = "crc")]
+        #[cfg(feature = "crc32c")]
         Some(ChecksumType::Crc32c),
-        #[cfg(not(feature = "crc"))]
+        #[cfg(not(feature = "crc32c"))]
         None,
 
-        #[cfg(feature = "twox_hash")]
+        #[cfg(feature = "xxhash")]
         Some(ChecksumType::Xxhash),
-        #[cfg(not(feature = "twox_hash"))]
+        #[cfg(not(feature = "xxhash"))]
         None,
 
-        #[cfg(feature = "sha2")]
+        #[cfg(feature = "sha256")]
         Some(ChecksumType::Sha256),
-        #[cfg(not(feature = "sha2"))]
+        #[cfg(not(feature = "sha256"))]
         None,
 
-        #[cfg(feature = "blake2")]
+        #[cfg(feature = "blake2b")]
         Some(ChecksumType::Blake2),
-        #[cfg(not(feature = "blake2"))]
+        #[cfg(not(feature = "blake2b"))]
         None,
     ];
     pub fn supported_checksums() -> impl Iterator<Item = ChecksumType> + 'static {

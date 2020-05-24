@@ -16,7 +16,7 @@ impl ChunkMap {
             map: superblock
                 .system_chunk_array
                 .iter(superblock.system_chunk_array_size.get() as usize)
-                .map(|(disk_key, chunk_item)| (disk_key.offset.get(), chunk_item.to_box()))
+                .map(|(disk_key, chunk_item)| (disk_key.offset.get(), chunk_item.to_owned()))
                 .collect(),
         }
     }
@@ -52,7 +52,7 @@ impl ChunkMap {
     ) {
         let new_pairs = tree
             .pairs(device, superblock, self)
-            .filter_map(|(k, v)| v.as_chunk_item().map(|v| (k.offset.get(), v.to_box())))
+            .filter_map(|(k, v)| v.as_chunk_item().map(|v| (k.offset.get(), v.to_owned())))
             .collect::<Vec<_>>();
         self.map.extend(new_pairs)
     }

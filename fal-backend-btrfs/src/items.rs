@@ -4,7 +4,7 @@ use core::num::NonZeroUsize;
 
 use crate::{
     superblock::{ChecksumType, Superblock},
-    DiskKey, Timespec,
+    DiskKey, PackedUuid, Timespec,
 
     u64_le, u32_le, u16_le,
 };
@@ -55,19 +55,20 @@ impl ChunkItem {
         if bytes.len() < Self::BASE_LEN {
             return None;
         }
-        let stripe_count = u16::from_le_bytes(<[u8; 2]>::try_from(&bytes[46..48]).ok()?);
+        let stripe_count = u16::from_le_bytes(<[u8; 2]>::try_from(&bytes[44..46]).ok()?);
         Some(NonZeroUsize::new(Self::BASE_LEN + stripe_count as usize * mem::size_of::<Stripe>()).unwrap())
     }
 
     pub fn parse<'a>(bytes: &'a [u8]) -> Option<&'a Self> {
-        let stripe_count = u16::from_le_bytes(<[u8; 2]>::try_from(&bytes[44..56]).ok()?);
+        let stripe_count = u16::from_le_bytes(<[u8; 2]>::try_from(&bytes[44..46]).ok()?);
 
         unsafe {
             if bytes.len() < Self::BASE_LEN {
                 return None;
             }
 
-            if Self::BASE_LEN + stripe_count as usize * mem::size_of::<Stripe>() >= bytes.len() {
+            if Self::BASE_LEN + stripe_count as usize * mem::size_of::<Stripe>() > bytes.len() {
+                dbg!(stripe_count);
                 return None;
             }
 
@@ -80,22 +81,6 @@ impl ChunkItem {
             Some(&*(slice::from_raw_parts(begin, len) as *const [Stripe] as *const Self))
         }
     }
-    pub fn serialize(&self, bytes: &mut [u8]) {
-        // TODO: More unsafe magic
-        bytes[..8].copy_from_slice(&u64::to_le_bytes(self.len.get()));
-        bytes[8..16].copy_from_slice(&u64::to_le_bytes(self.len.get()));
-        bytes[16..24].copy_from_slice(&u64::to_le_bytes(self.len.get()));
-        bytes[24..32].copy_from_slice(&u64::to_le_bytes(self.len.get()));
-        bytes[32..36].copy_from_slice(&u64::to_le_bytes(self.len.get()));
-        bytes[36..40].copy_from_slice(&u64::to_le_bytes(self.len.get()));
-        bytes[40..44].copy_from_slice(&u64::to_le_bytes(self.len.get()));
-        bytes[44..46].copy_from_slice(&u64::to_le_bytes(self.len.get()));
-        bytes[46..48].copy_from_slice(&u64::to_le_bytes(self.len.get()));
-
-        for (i, stripe) in self.stripes.iter().enumerate() {
-            bytes[48 + i * mem::size_of::<Stripe>()..48 + (i + 1) * mem::size_of::<Stripe>()].copy_from_slice(stripe.as_bytes());
-        }
-    }
     pub fn size_in_bytes(&self) -> usize {
         Self::BASE_LEN + self.stripes.len() * mem::size_of::<Stripe>()
     }
@@ -105,12 +90,22 @@ impl ChunkItem {
             .find(|stripe| &stripe.device_uuid == &superblock.device_item.uuid)
             .expect("Using the superblock of a different filesystem")
     }
-    pub fn to_box(&self) -> Box<Self> {
-        let mut b = vec! [0u8; self.size_in_bytes()].into_boxed_slice();
-        self.serialize(&mut b);
-        unsafe { Box::from_raw(Box::into_raw(b) as *mut Self) }
+    pub fn as_bytes(&self) -> &[u8] {
+        unsafe { slice::from_raw_parts(self as *const Self as *const u8, self.size_in_bytes()) }
     }
 }
+impl ToOwned for ChunkItem {
+    type Owned = Box<Self>;
+
+    fn to_owned(&self) -> Self::Owned {
+        let mut b = vec! [0u8; self.size_in_bytes()].into_boxed_slice();
+        b.copy_from_slice(self.as_bytes());
+
+        let ptr: *mut [u8] = Box::into_raw(b);
+        unsafe { Box::from_raw(slice::from_raw_parts(ptr as *const u8 as *const Stripe, self.stripes.len()) as *const [Stripe] as *const Self as *mut Self) }
+    }
+}
+
 impl fmt::Debug for ChunkItem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ChunkItem")
@@ -133,7 +128,7 @@ impl fmt::Debug for ChunkItem {
 pub struct Stripe {
     pub device_id: u64_le,
     pub offset: u64_le,
-    pub device_uuid: [u8; 16],
+    pub device_uuid: PackedUuid,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, AsBytes, FromBytes, Unaligned)]
@@ -154,9 +149,9 @@ pub struct RootItem {
     pub level: u8,
 
     pub generation_v2: u64_le,
-    pub uuid: [u8; 16],
-    pub parent_uuid: [u8; 16],
-    pub received_uuid: [u8; 16],
+    pub uuid: PackedUuid,
+    pub parent_uuid: PackedUuid,
+    pub received_uuid: PackedUuid,
 
     pub c_xid: u64_le,
     pub o_xid: u64_le,
@@ -167,6 +162,8 @@ pub struct RootItem {
     pub otime: Timespec,
     pub stime: Timespec,
     pub rtime: Timespec,
+
+    pub _rsvd: [u64_le; 8],
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, AsBytes, FromBytes, Unaligned)]
@@ -242,7 +239,7 @@ impl InodeRef {
                 return None;
             }
 
-            if Self::BASE_LEN + name_len as usize >= bytes.len() {
+            if Self::BASE_LEN + name_len as usize > bytes.len() {
                 return None;
             }
 
@@ -251,6 +248,24 @@ impl InodeRef {
 
             Some(&*(slice::from_raw_parts(begin, len) as *const [u8] as *const Self))
         }
+    }
+    pub fn size_in_bytes(&self) -> usize {
+        Self::BASE_LEN + self.name.len()
+    }
+    pub fn as_bytes(&self) -> &[u8] {
+        unsafe { slice::from_raw_parts(self as *const Self as *const u8, self.size_in_bytes()) }
+    }
+}
+impl ToOwned for InodeRef {
+    type Owned = Box<Self>;
+
+    fn to_owned(&self) -> Self::Owned {
+        let mut b = vec! [0u8; self.size_in_bytes()].into_boxed_slice();
+        b.copy_from_slice(self.as_bytes());
+
+        // TODO: Add a miri test for this
+        let ptr: *mut [u8] = Box::into_raw(b);
+        unsafe { Box::from_raw(slice::from_raw_parts(ptr as *const u8, self.name.len()) as *const [u8] as *const Self as *mut Self) }
     }
 }
 
@@ -262,7 +277,6 @@ pub struct RootRef {
     pub name_len: u16_le,
 }
 
-#[derive(Clone, Debug, AsBytes, FromBytes, Unaligned)]
 #[repr(packed)]
 pub struct DirItem {
     pub location: DiskKey,
@@ -270,6 +284,23 @@ pub struct DirItem {
     pub data_len: u16_le,
     pub name_len: u16_le,
     pub ty: u8,
+    pub rest: [u8],
+}
+impl fmt::Debug for DirItem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let zero_pos = self.name().iter().copied().position(|c| c == 0).unwrap_or(self.name().len());
+        let name = String::from_utf8_lossy(&self.name()[..zero_pos]).into_owned();
+
+        f.debug_struct("DirItem")
+            .field("location", &self.location)
+            .field("xid", &self.xid.get())
+            .field("name_len", &self.name_len.get())
+            .field("data_len", &self.data_len.get())
+            .field("ty", &self.ty)
+            .field("name", &name)
+            .field("data", &self.data())
+            .finish()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, FromPrimitive)]
@@ -288,8 +319,57 @@ pub enum Filetype {
 }
 
 impl DirItem {
+    pub const BASE_LEN: usize = 30;
+
+    pub fn struct_size(bytes: &[u8]) -> Option<usize> {
+        if bytes.len() < Self::BASE_LEN {
+            return None;
+        }
+        let data_len = u16::from_le_bytes(<[u8; 2]>::try_from(&bytes[25..27]).ok()?);
+        let name_len = u16::from_le_bytes(<[u8; 2]>::try_from(&bytes[27..29]).ok()?);
+        
+        Some(Self::BASE_LEN + data_len as usize + name_len as usize)
+    }
     pub fn file_type(&self) -> Option<Filetype> {
         Filetype::from_u8(self.ty)
+    }
+    pub fn size_in_bytes(&self) -> usize {
+        Self::BASE_LEN + self.rest.len()
+    }
+    pub fn parse<'a>(bytes: &'a [u8]) -> Option<&'a Self> {
+        unsafe {
+            if bytes.len() < Self::BASE_LEN {
+                return None;
+            }
+            if Self::struct_size(bytes)? > bytes.len() {
+                return None;
+            }
+
+            let begin = bytes.as_ptr();
+            let len = Self::struct_size(bytes)? - Self::BASE_LEN;
+
+            Some(&*(std::slice::from_raw_parts(begin, len) as *const [u8] as *const Self))
+        }
+    }
+    pub fn as_bytes(&self) -> &[u8] {
+        unsafe { slice::from_raw_parts(self as *const Self as *const u8, self.size_in_bytes()) }
+    }
+    pub fn name(&self) -> &[u8] {
+        &self.rest[..self.name_len.get() as usize]
+    }
+    pub fn data(&self) -> &[u8] {
+        &self.rest[self.name_len.get() as usize..self.name_len.get() as usize + self.data_len.get() as usize]
+    }
+}
+impl ToOwned for DirItem {
+    type Owned = Box<Self>;
+
+    fn to_owned(&self) -> Self::Owned {
+        let mut b = vec! [0u8; self.size_in_bytes()].into_boxed_slice();
+        b.copy_from_slice(self.as_bytes());
+
+        let ptr: *mut [u8] = Box::into_raw(b);
+        unsafe { Box::from_raw(slice::from_raw_parts(ptr as *const u8, self.rest.len()) as *const [u8] as *const Self as *mut Self) }
     }
 }
 
@@ -304,6 +384,14 @@ pub struct FileExtentItem {
 
     /// Either inline data or `FileExtentItemExtOnDisk`.
     pub rest: [u8],
+}
+
+impl ToOwned for FileExtentItem {
+    type Owned = Box<Self>;
+
+    fn to_owned(&self) -> Self::Owned {
+        todo!()
+    }
 }
 
 #[derive(Clone, Copy, Debug, FromPrimitive)]
@@ -433,7 +521,7 @@ pub struct DevExtent {
     pub chunk_oid: u64_le,
     pub chunk_offset: u64_le,
     pub len: u64_le,
-    pub chunk_tree_uuid: [u8; 16],
+    pub chunk_tree_uuid: PackedUuid,
 }
 
 #[derive(Eq, Hash, PartialEq)]
@@ -459,13 +547,20 @@ impl fmt::Debug for CsumItem {
             .finish()
     }
 }
+impl ToOwned for CsumItem {
+    type Owned = Box<Self>;
+
+    fn to_owned(&self) -> Self::Owned {
+        todo!()
+    }
+}
 
 #[derive(Eq, Hash, PartialEq)]
 #[repr(packed)]
 pub struct UuidItem {
     // Based on print-io.c from the btrfs source code. It seems like UUID items are simply an array
     // of subvolume ids.
-    pub subvolumes: [u64],
+    pub subvolumes: [u64_le],
 }
 
 impl UuidItem {
@@ -485,8 +580,15 @@ impl fmt::Debug for UuidItem {
             .finish()
     }
 }
+impl ToOwned for UuidItem {
+    type Owned = Box<Self>;
 
-#[derive(Debug, AsBytes, FromBytes, Unaligned)]
+    fn to_owned(&self) -> Self::Owned {
+        todo!()
+    }
+}
+
+#[derive(Clone, Copy, Debug, AsBytes, FromBytes, Unaligned)]
 #[repr(packed)]
 pub struct DevItem {
     pub id: u64_le,
@@ -501,6 +603,32 @@ pub struct DevItem {
     pub group: u32_le,
     pub seek_speed: u8,
     pub bandwidth: u8,
-    pub uuid: [u8; 16],
-    pub fs_uuid: [u8; 16],
+    pub uuid: PackedUuid,
+    pub fs_uuid: PackedUuid,
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn unsafe_magic() {
+        use super::ChunkItem;
+
+        let bytes = [
+            0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x10, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00,
+            0x00, 0x10, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0xbd, 0x87, 0x14, 0x30, 0xc6, 0x33, 0x45, 0xea,
+            0xa6, 0x53, 0xe8, 0x07, 0x28, 0x08, 0x2d, 0xf8,
+        ];
+        let chunk_item: &ChunkItem = ChunkItem::parse(&bytes).unwrap();
+        assert_eq!(&bytes[..], chunk_item.as_bytes());
+        let boxed: Box<ChunkItem> = chunk_item.to_owned();
+        assert_eq!(&bytes[..], boxed.as_bytes());
+        assert_eq!(&*boxed, chunk_item);
+    }
 }

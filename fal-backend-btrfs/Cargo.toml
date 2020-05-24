@@ -6,7 +6,12 @@ edition = "2018"
 license = "MIT OR Apache-2.0"
 
 [features]
-default = ["crc", "sha2", "twox-hash", "blake2"]
+crc32c = ["crc"]
+xxhash = ["twox-hash"]
+sha256 = ["sha2"]
+blake2b = ["blake2"]
+
+default = ["crc32c", "xxhash", "sha256", "blake2b"]
 
 [dependencies]
 fal = { path = "../fal", version = "0.1" }

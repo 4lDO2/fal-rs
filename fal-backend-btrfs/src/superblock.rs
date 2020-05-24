@@ -8,7 +8,7 @@ use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
 use crate::{
     items::{BlockGroupType, DevItem, ChunkItem},
-    sizes, Checksum, DiskKey, DiskKeyType, InvalidChecksum,
+    sizes, Checksum, DiskKey, DiskKeyType, InvalidChecksum, PackedUuid,
 
     u64_le, u32_le, u16_le,
 };
@@ -17,11 +17,11 @@ const SUPERBLOCK_OFFSETS: [u64; 4] = [64 * sizes::K, 64 * sizes::M, 256 * sizes:
 const CHECKSUM_SIZE: usize = 32;
 const MAGIC: u64 = 0x4D5F53665248425F; // ASCII for "_BHRfS_M"
 
-#[derive(Debug, AsBytes, FromBytes, Unaligned)]
+#[derive(Clone, Copy, Debug, AsBytes, FromBytes, Unaligned)]
 #[repr(packed)]
 pub struct Superblock {
     pub checksum: [u8; 32],
-    pub fs_id: [u8; 16],
+    pub fs_id: PackedUuid,
     pub byte_number: u64_le,
     pub flags: u64_le,
     pub magic: u64_le,
@@ -47,7 +47,7 @@ pub struct Superblock {
     pub flags_for_write_support: u64_le,
     pub required_flags: u64_le,
 
-    pub checksum_type: u8,
+    pub checksum_type: u16_le,
 
     pub root_level: u8,
     pub chunk_root_level: u8,
@@ -57,9 +57,11 @@ pub struct Superblock {
     //pub device_label: [u8; 256],
     pub device_label: DeviceLabel,
 
-    pub cache_generation: u8,
-    pub uuid_tree_generation: u8,
-    pub metadata_uuid: [u8; 16],
+    pub cache_generation: u64_le,
+    pub uuid_tree_generation: u64_le,
+    pub metadata_uuid: PackedUuid,
+    pub _rsvd: [u64_le; 28],
+
     //pub system_chunk_array: [u8; 2048],
     pub system_chunk_array: SystemChunkArray,
     pub root_backups: [RootBackup; 4],
@@ -69,6 +71,17 @@ pub struct Superblock {
 
 #[repr(packed)]
 pub struct DeviceLabel([u8; 256]);
+impl Clone for DeviceLabel {
+    fn clone_from(&mut self, source: &Self) {
+        self.0.copy_from_slice(&source.0)
+    }
+    fn clone(&self) -> Self {
+        let mut new = Self([0u8; 256]);
+        new.clone_from(self);
+        new
+    }
+}
+impl Copy for DeviceLabel {}
 
 // XXX: Const generics; for some obscure reason, only arrays with length of up to 32 bytes actually
 // support basic traits.
@@ -107,6 +120,17 @@ impl fmt::Debug for DeviceLabel {
 
 #[repr(packed)]
 pub struct SystemChunkArray([u8; 2048]);
+impl Clone for SystemChunkArray {
+    fn clone_from(&mut self, source: &Self) {
+        self.0.copy_from_slice(&source.0)
+    }
+    fn clone(&self) -> Self {
+        let mut new = Self([0u8; 2048]);
+        new.clone_from(self);
+        new
+    }
+}
+impl Copy for SystemChunkArray {}
 
 unsafe impl zerocopy::FromBytes for SystemChunkArray {
     fn only_derive_is_allowed_to_implement_this_trait()
@@ -130,6 +154,7 @@ impl fmt::Debug for SystemChunkArray {
 
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, FromPrimitive)]
+#[repr(u16)]
 pub enum ChecksumType {
     Crc32c = 0,
     Xxhash = 1,
@@ -168,11 +193,11 @@ impl Superblock {
             .unwrap()
     }
     pub fn parse<'a>(block: &'a [u8]) -> Result<LayoutVerified<&'a [u8], Self>, SuperblockParseError> {
-        let superblock = LayoutVerified::<&'a [u8], Self>::new_unaligned(block).expect("calling btrfs::Superblock::parse with insufficient bytes");
+        let superblock = LayoutVerified::<&'a [u8], Self>::new_unaligned(&block[..mem::size_of::<Superblock>()]).expect("calling btrfs::Superblock::parse with insufficient bytes");
 
-        let checksum_ty = ChecksumType::from_u8(superblock.checksum_type).ok_or(SuperblockParseError::UnrecognizedChecksumTy(superblock.checksum_type))?;
+        let checksum_ty = ChecksumType::from_u16(superblock.checksum_type.get()).ok_or(SuperblockParseError::UnrecognizedChecksumTy(superblock.checksum_type.get()))?;
 
-        let stored_checksum = Checksum::parse(checksum_ty, &block[..32]).ok_or(InvalidChecksum::UnsupportedChecksum(checksum_ty))?;
+        let stored_checksum = Checksum::parse(checksum_ty, &block[..32]).unwrap();
         let calculated_checksum = Checksum::calculate(checksum_ty, &block[32..]).ok_or(InvalidChecksum::UnsupportedChecksum(checksum_ty))?;
 
         if calculated_checksum == stored_checksum {
@@ -183,14 +208,14 @@ impl Superblock {
     }
     /// Panics if the checksum_ty field has been set to something else after validation.
     pub fn checksum_ty(&self) -> ChecksumType {
-        ChecksumType::from_u8(self.checksum_type).expect("checksum_ty has been set to invalid value")
+        ChecksumType::from_u16(self.checksum_type.get()).expect("checksum_ty has been set to invalid value")
     }
 }
 
 #[derive(Debug, Error)]
 pub enum SuperblockParseError {
     #[error("unrecognized checksum type: {0}")]
-    UnrecognizedChecksumTy(u8),
+    UnrecognizedChecksumTy(u16),
     
     #[error("invalid checksum: {0}")]
     InvalidChecksum(#[from] InvalidChecksum),
@@ -238,11 +263,13 @@ impl SystemChunkArray {
 
                 // TODO: Verify that types are correct etc.
 
-                let key = LayoutVerified::new_unaligned(&self.0[..key_size])?;
-                let item_size = ChunkItem::struct_size(&self.0[key_size..])?.get();
-                let item = ChunkItem::parse(&self.0[key_size..key_size + item_size])?;
+                let key = LayoutVerified::<_, DiskKey>::new_unaligned(&self.0[..key_size])?;
+                self.0 = &self.0[key_size..];
 
-                self.0 = &self.0[mem::size_of::<DiskKey>() + item_size..];
+                let item_size = ChunkItem::struct_size(&self.0[..ChunkItem::BASE_LEN])?.get();
+                let item = ChunkItem::parse(&self.0[..item_size])?;
+
+                self.0 = &self.0[item_size..];
 
                 Some((key, item))
             }

@@ -317,20 +317,9 @@ mod file_device {
             let mut guard = self.device.lock().unwrap();
 
             let offset = block * u64::from(Self::BLOCK_SIZE);
-            let current_offset = guard.seek(io::SeekFrom::Start(offset))?;
+            let _ = guard.seek(io::SeekFrom::Start(offset))?;
 
-            if current_offset != offset {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    NewOffsetFromSeekMismatch {
-                        requested: offset,
-                        got: current_offset,
-                    },
-                )
-                .into());
-            }
-
-            guard.read(buf)?;
+            guard.read_exact(buf)?;
             // TODO: Check len
             Ok(())
         }
@@ -351,20 +340,9 @@ mod file_device {
             let mut guard = self.device.lock().unwrap();
 
             let offset = block * u64::from(Self::BLOCK_SIZE);
-            let current_offset = guard.seek(io::SeekFrom::Start(offset))?;
+            let _ = guard.seek(io::SeekFrom::Start(offset))?;
 
-            if current_offset != offset {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    NewOffsetFromSeekMismatch {
-                        requested: offset,
-                        got: current_offset,
-                    },
-                )
-                .into());
-            }
-
-            guard.write(buffer)?;
+            guard.write_all(buffer)?;
             Ok(())
         }
     }

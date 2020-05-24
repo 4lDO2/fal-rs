@@ -12,7 +12,7 @@ pub fn read_node_phys<D: fal::DeviceRo>(
     let mut bytes = vec![0u8; superblock.node_size.get() as usize];
     // FIXME
     debug_assert_eq!(u64::from(superblock.node_size.get()) % u64::from(device.disk_info().unwrap().block_size), 0);
-    device.read_blocks(offset, &mut bytes).unwrap();
+    device.read_blocks(offset / u64::from(device.disk_info().unwrap().block_size), &mut bytes).unwrap();
     bytes.into_boxed_slice()
 }
 
@@ -51,12 +51,16 @@ impl<D: fal::Device> Filesystem<D> {
     pub fn mount(mut device: D) -> Self {
         let superblock = Superblock::load(&mut device);
 
+        println!("Superblock: {:?}", superblock);
+
         let mut chunk_map = ChunkMap::read_sys_chunk_array(&superblock);
 
         let chunk_tree = Tree::load(&mut device, &superblock, &chunk_map, superblock.chunk_root.get()).expect("failed to load chunk tree");
         chunk_map.read_chunk_tree(&mut device, &superblock, chunk_tree.as_ref());
 
         let root_tree = Tree::load(&mut device, &superblock, &chunk_map, superblock.root.get()).expect("failed to load root tree");
+        dbg!(&root_tree);
+        println!("Root tree items: {:?}", root_tree.as_ref().pairs(&mut device, &superblock, &chunk_map).collect::<Vec<_>>());
 
         let extent_tree = Self::load_tree(
             &mut device,
