@@ -59,9 +59,10 @@ impl DiskKey {
             .then(self.offset.get().cmp(&other.offset.get()))
     }
     pub fn compare_without_offset(&self, other: &Self) -> Ordering {
-        self.oid.get()
+        self.oid
+            .get()
             .cmp(&other.oid.get())
-            .then((&{self.ty}).cmp(&{other.ty}))
+            .then((&{ self.ty }).cmp(&{ other.ty }))
     }
 }
 
@@ -82,7 +83,6 @@ impl fmt::Debug for DiskKey {
             .field("ty", &DiskKeyType::from_u8(self.ty))
             .field("offset", &self.offset.get())
             .finish()
-
     }
 }
 
@@ -169,17 +169,25 @@ impl Checksum {
     pub const XXHASH_SEED: u64 = 0;
 
     pub fn parse(ty: ChecksumType, bytes: &[u8]) -> Option<Self> {
-        if bytes.len() < 32 { return None }
+        if bytes.len() < 32 {
+            return None;
+        }
 
         Some(match ty {
-            ChecksumType::Crc32c => Self::Crc32c(u32::from_le_bytes(<[u8; 4]>::try_from(&bytes[..4]).ok()?)),
-            ChecksumType::Xxhash => Self::Xxhash(u64::from_le_bytes(<[u8; 8]>::try_from(&bytes[..8]).ok()?)),
+            ChecksumType::Crc32c => {
+                Self::Crc32c(u32::from_le_bytes(<[u8; 4]>::try_from(&bytes[..4]).ok()?))
+            }
+            ChecksumType::Xxhash => {
+                Self::Xxhash(u64::from_le_bytes(<[u8; 8]>::try_from(&bytes[..8]).ok()?))
+            }
             ChecksumType::Sha256 => Self::Sha256(<[u8; 32]>::try_from(&bytes[..32]).ok()?),
             ChecksumType::Blake2 => Self::Sha256(<[u8; 32]>::try_from(&bytes[..32]).ok()?),
         })
     }
     pub fn serialize(&self, bytes: &mut [u8]) -> Option<()> {
-        if bytes.len() < 32 { return None }
+        if bytes.len() < 32 {
+            return None;
+        }
 
         match self {
             &Checksum::Crc32c(hash) => {
@@ -204,7 +212,8 @@ impl Checksum {
         match ty {
             #[cfg(feature = "crc32c")]
             ChecksumType::Crc32c => Some({
-                let mut hasher = crc32::Digest::new_with_initial(crc32::CASTAGNOLI, Self::CRC32C_SEED);
+                let mut hasher =
+                    crc32::Digest::new_with_initial(crc32::CASTAGNOLI, Self::CRC32C_SEED);
                 hasher.write(bytes);
                 Checksum::Crc32c(hasher.sum32())
             }),
@@ -257,17 +266,14 @@ impl Checksum {
         Some(ChecksumType::Crc32c),
         #[cfg(not(feature = "crc32c"))]
         None,
-
         #[cfg(feature = "xxhash")]
         Some(ChecksumType::Xxhash),
         #[cfg(not(feature = "xxhash"))]
         None,
-
         #[cfg(feature = "sha256")]
         Some(ChecksumType::Sha256),
         #[cfg(not(feature = "sha256"))]
         None,
-
         #[cfg(feature = "blake2b")]
         Some(ChecksumType::Blake2),
         #[cfg(not(feature = "blake2b"))]

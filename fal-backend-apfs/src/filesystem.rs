@@ -182,7 +182,14 @@ impl<D: fal::Device> Filesystem<D> {
         debug_assert_eq!(block.len(), superblock.block_size as usize);
         // FIXME
         device
-            .write_blocks(address as u64 * u64::from(Self::phys_blocks_per_block(&device.disk_info().unwrap(), superblock)), &block)
+            .write_blocks(
+                address as u64
+                    * u64::from(Self::phys_blocks_per_block(
+                        &device.disk_info().unwrap(),
+                        superblock,
+                    )),
+                &block,
+            )
             .unwrap();
     }
 }

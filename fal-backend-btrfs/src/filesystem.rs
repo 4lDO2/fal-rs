@@ -1,6 +1,12 @@
 use std::sync::Mutex;
 
-use crate::{chunk_map::ChunkMap, oid, superblock::Superblock, tree::{Tree, TreeOwned}, DiskKey, DiskKeyType, u64_le, u32_le, u16_le};
+use crate::{
+    chunk_map::ChunkMap,
+    oid,
+    superblock::Superblock,
+    tree::{Tree, TreeOwned},
+    u16_le, u32_le, u64_le, DiskKey, DiskKeyType,
+};
 
 pub const FIRST_CHUNK_TREE_OBJECTID: u64 = 256;
 
@@ -11,8 +17,16 @@ pub fn read_node_phys<D: fal::DeviceRo>(
 ) -> Box<[u8]> {
     let mut bytes = vec![0u8; superblock.node_size.get() as usize];
     // FIXME
-    debug_assert_eq!(u64::from(superblock.node_size.get()) % u64::from(device.disk_info().unwrap().block_size), 0);
-    device.read_blocks(offset / u64::from(device.disk_info().unwrap().block_size), &mut bytes).unwrap();
+    debug_assert_eq!(
+        u64::from(superblock.node_size.get()) % u64::from(device.disk_info().unwrap().block_size),
+        0
+    );
+    device
+        .read_blocks(
+            offset / u64::from(device.disk_info().unwrap().block_size),
+            &mut bytes,
+        )
+        .unwrap();
     bytes.into_boxed_slice()
 }
 
@@ -55,12 +69,17 @@ impl<D: fal::Device> Filesystem<D> {
 
         let mut chunk_map = ChunkMap::read_sys_chunk_array(&superblock);
 
-        let chunk_tree = Tree::load(&mut device, &superblock, &chunk_map, superblock.chunk_root.get()).expect("failed to load chunk tree");
+        let chunk_tree = Tree::load(
+            &mut device,
+            &superblock,
+            &chunk_map,
+            superblock.chunk_root.get(),
+        )
+        .expect("failed to load chunk tree");
         chunk_map.read_chunk_tree(&mut device, &superblock, chunk_tree.as_ref());
 
-        let root_tree = Tree::load(&mut device, &superblock, &chunk_map, superblock.root.get()).expect("failed to load root tree");
-        dbg!(&root_tree);
-        println!("Root tree items: {:?}", root_tree.as_ref().pairs(&mut device, &superblock, &chunk_map).collect::<Vec<_>>());
+        let root_tree = Tree::load(&mut device, &superblock, &chunk_map, superblock.root.get())
+            .expect("failed to load root tree");
 
         let extent_tree = Self::load_tree(
             &mut device,
@@ -123,6 +142,10 @@ impl<D: fal::Device> Filesystem<D> {
             root_tree.as_ref(),
             oid::FREE_SPACE_TREE,
         );
+
+        for item in fs_tree.as_ref().pairs(&mut device, &superblock, &chunk_map) {
+            println!("ITEM: {:?}\n", item);
+        }
 
         Self {
             device: Mutex::new(device),

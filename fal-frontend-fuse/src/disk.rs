@@ -1,8 +1,8 @@
 use std::fs::File;
+use std::io;
 use std::io::prelude::*;
 use std::ops::Range;
 use std::thread::ThreadId;
-use std::io;
 
 use fal::DeviceRo as _;
 
@@ -11,8 +11,8 @@ use crossbeam_queue::ArrayQueue;
 use parking_lot::{Mutex, RwLock};
 use thiserror::Error;
 
-use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::fs::{FileExt, FileTypeExt, MetadataExt};
+use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 
 // TODO: io_uring, when async fn works in traits and the io_uring ecosystem gets better.
 
@@ -79,7 +79,11 @@ mod linux_ioctls {
         Ok(value != 0)
     }
 
-    pub unsafe fn basic_discard_range(fd: libc::c_int, base: u64, count: u64) -> Result<(), IoctlError> {
+    pub unsafe fn basic_discard_range(
+        fd: libc::c_int,
+        base: u64,
+        count: u64,
+    ) -> Result<(), IoctlError> {
         let mut array = [base, count];
         match linux_blk_discard_range(fd, &mut array as *const [u64; 2]) {
             Ok(_) => (),
@@ -109,11 +113,13 @@ impl Device {
         })
     }
     fn block_size(&self) -> Result<u32, fal::DeviceError> {
-        Ok(if let &Some(ref info) = &*self.last_cached_disk_info.lock() {
-            info.block_size
-        } else {
-            self.disk_info()?.block_size
-        })
+        Ok(
+            if let &Some(ref info) = &*self.last_cached_disk_info.lock() {
+                info.block_size
+            } else {
+                self.disk_info()?.block_size
+            },
+        )
     }
     fn acquire_lock(&self, start: u64, count: u64) {
         /*let read_guard = self.locked_ranges.read();
@@ -160,7 +166,12 @@ impl Device {
         }*/
         // FIXME: Unpark a single thread that requests this range.
     }
-    fn io<F: FnMut(&File, u64) -> io::Result<usize>>(&self, block: u64, count: u64, mut f: F) -> Result<(), fal::DeviceError> {
+    fn io<F: FnMut(&File, u64) -> io::Result<usize>>(
+        &self,
+        block: u64,
+        count: u64,
+        mut f: F,
+    ) -> Result<(), fal::DeviceError> {
         let block_size = self.block_size()?;
 
         // Lock the entire range so that no other threads can read possibly corrupt or out-of-date
@@ -208,10 +219,18 @@ impl fal::DeviceRo for Device {
         let disk_info = if metadata.file_type().is_block_device() {
             #[cfg(target_os = "linux")]
             fal::DiskInfo {
-                block_size: unsafe { linux_ioctls::get_blocksize(self.file.as_raw_fd() as libc::c_int)? },
+                block_size: unsafe {
+                    linux_ioctls::get_blocksize(self.file.as_raw_fd() as libc::c_int)?
+                },
                 block_count: metadata.len(),
-                sector_size: unsafe { linux_ioctls::get_sectorsize(self.file.as_raw_fd() as libc::c_int).map(Into::into).ok() },
-                is_rotational: unsafe { linux_ioctls::is_rotational(self.file.as_raw_fd() as libc::c_int).ok() },
+                sector_size: unsafe {
+                    linux_ioctls::get_sectorsize(self.file.as_raw_fd() as libc::c_int)
+                        .map(Into::into)
+                        .ok()
+                },
+                is_rotational: unsafe {
+                    linux_ioctls::is_rotational(self.file.as_raw_fd() as libc::c_int).ok()
+                },
             }
         } else if metadata.file_type().is_char_device() {
             todo!("IIRC freebsd uses character devices over block devices")
@@ -223,7 +242,11 @@ impl fal::DeviceRo for Device {
                 is_rotational: None,
             }
         } else {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "backing device is neither a regular file, character device, nor a block device").into());
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "backing device is neither a regular file, character device, nor a block device",
+            )
+            .into());
         };
         if let Some(mut guard) = self.last_cached_disk_info.try_lock() {
             *guard = Some(disk_info);
@@ -252,7 +275,13 @@ impl fal::Device for Device {
     }
     fn discard(&self, start_block: u64, count: u64) -> Result<(), fal::DeviceError> {
         #[cfg(target_os = "linux")]
-        unsafe { linux_ioctls::basic_discard_range(self.file.as_raw_fd() as libc::c_int, start_block, count)? };
+        unsafe {
+            linux_ioctls::basic_discard_range(
+                self.file.as_raw_fd() as libc::c_int,
+                start_block,
+                count,
+            )?
+        };
 
         Ok(())
     }
@@ -279,7 +308,6 @@ impl fal::IoError for IoctlError {
 }
 impl std::fmt::Debug for Device {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Device")
-            .finish()
+        f.debug_struct("Device").finish()
     }
 }

@@ -235,7 +235,10 @@ impl Superblock {
     pub fn load<R: fal::DeviceRo>(device: &mut R) -> Result<Self, LoadSuperblockError> {
         let mut block_bytes = [0u8; 1024];
 
-        device.read_blocks(SUPERBLOCK_OFFSET / u64::from(device.disk_info()?.block_size), &mut block_bytes);
+        device.read_blocks(
+            SUPERBLOCK_OFFSET / u64::from(device.disk_info()?.block_size),
+            &mut block_bytes,
+        );
 
         let this = Self::parse(&block_bytes)?;
 
@@ -329,7 +332,10 @@ impl Superblock {
             fal::write_u32(&mut block_bytes, 1020, ext.superblock_checksum);
         }
 
-        device.write_blocks(SUPERBLOCK_OFFSET / u64::from(device.disk_info()?.block_size), &block_bytes)?;
+        device.write_blocks(
+            SUPERBLOCK_OFFSET / u64::from(device.disk_info()?.block_size),
+            &block_bytes,
+        )?;
 
         Ok(())
     }

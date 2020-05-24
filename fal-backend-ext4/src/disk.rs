@@ -51,10 +51,7 @@ impl<T: fal::DeviceRo> Disk<T> {
     pub fn new(inner: T) -> Result<Self, fal::DeviceError> {
         let info = inner.disk_info()?;
 
-        Ok(Self {
-            inner,
-            info,
-        })
+        Ok(Self { inner, info })
     }
 
     /// Read a block, which is checked for existence in the block group descriptor tables for debug
@@ -66,7 +63,10 @@ impl<T: fal::DeviceRo> Disk<T> {
         block_address: u64,
         buffer: &mut [u8],
     ) -> Result<(), fal::DeviceError> {
-        debug_assert!(block_address * u64::from(self.phys_blocks_per_block(filesystem)) < self.info.block_count);
+        debug_assert!(
+            block_address * u64::from(self.phys_blocks_per_block(filesystem))
+                < self.info.block_count
+        );
         debug_assert!(block_group::block_exists(block_address, filesystem).unwrap_or(false));
         self.read_block_raw(filesystem, kind, block_address, buffer)
     }
