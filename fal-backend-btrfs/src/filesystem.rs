@@ -9,9 +9,9 @@ pub fn read_node_phys<D: fal::DeviceRo>(
     superblock: &Superblock,
     offset: u64,
 ) -> Box<[u8]> {
-    let mut bytes = vec![0u8; superblock.node_size as usize];
+    let mut bytes = vec![0u8; superblock.node_size.get() as usize];
     // FIXME
-    debug_assert_eq!(superblock.node_size % device.disk_info().unwrap().block_size, 0);
+    debug_assert_eq!(superblock.node_size.get() % u64::from(device.disk_info().unwrap().block_size), 0);
     device.read_blocks(offset, &mut bytes).unwrap();
     bytes.into_boxed_slice()
 }
@@ -53,10 +53,10 @@ impl<D: fal::Device> Filesystem<D> {
 
         let mut chunk_map = ChunkMap::read_sys_chunk_array(&superblock);
 
-        let chunk_tree = Tree::load(&mut device, &superblock, &chunk_map, superblock.chunk_root);
+        let chunk_tree = Tree::load(&mut device, &superblock, &chunk_map, superblock.chunk_root.get());
         chunk_map.read_chunk_tree(&mut device, &superblock, &chunk_tree);
 
-        let root_tree = Tree::load(&mut device, &superblock, &chunk_map, superblock.root);
+        let root_tree = Tree::load(&mut device, &superblock, &chunk_map, superblock.root.get());
 
         let extent_tree = Self::load_tree(
             &mut device,

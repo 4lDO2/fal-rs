@@ -1,13 +1,16 @@
+use std::mem;
+
 use crate::{
-    read_timespec,
     superblock::{ChecksumType, Superblock},
     DiskKey, Timespec,
+
+    u64_le, u32_le, u16_le,
 };
-use fal::parsing::{read_u16, read_u32, read_u64, read_u8, read_uuid, skip};
 
 use bitflags::bitflags;
-use enum_primitive::*;
-use uuid::Uuid;
+use num_derive::FromPrimitive;
+use num_traits::FromPrimitive as _;
+use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
 bitflags! {
     /// The type of a block group or chunk.
@@ -26,156 +29,89 @@ bitflags! {
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[repr(packed)]
 pub struct ChunkItem {
-    pub len: u64,
-    pub owner: u64,
+    pub len: u64_le,
+    pub owner: u64_le,
 
-    pub stripe_length: u64,
-    pub ty: BlockGroupType,
+    pub stripe_length: u64_le,
+    pub ty: u64_le,
 
-    pub io_alignment: u32,
-    pub io_width: u32,
+    pub io_alignment: u32_le,
+    pub io_width: u32_le,
 
-    pub sector_size: u32,
-    pub stripe_count: u16,
-    pub sub_stripe_count: u16,
-    pub stripes: Box<[Stripe]>,
+    pub sector_size: u32_le,
+    pub stripe_count: u16_le,
+    pub sub_stripe_count: u16_le,
+    pub stripes: [Stripe],
 }
 
 impl ChunkItem {
-    pub const LEN: usize = 80;
-    pub fn parse(bytes: &[u8]) -> Self {
-        let mut offset = 0;
+    pub const BASE_LEN: usize = 48;
 
-        let len = read_u64(bytes, &mut offset);
-        let owner = read_u64(bytes, &mut offset);
+    pub fn parse<'a>(bytes: &'a [u8]) -> Option<&'a Self> {
+        let stripe_count = u16::from_le_bytes(<[u8; 2]>::from(&bytes[44..56]));
 
-        let stripe_length = read_u64(bytes, &mut offset);
-        let ty = BlockGroupType::from_bits(read_u64(bytes, &mut offset)).unwrap();
+        unsafe {
+            if bytes.len() < Self::BASE_LEN {
+                return None;
+            }
 
-        let io_alignment = read_u32(bytes, &mut offset);
-        let io_width = read_u32(bytes, &mut offset);
+            if Self::BASE_LEN + stripe_count as usize * mem::size_of::<Stripe>() >= bytes.len() {
+                return None;
+            }
 
-        let sector_size = read_u32(bytes, &mut offset);
+            let begin = bytes.as_ptr();
+            let len = stripe_count;
 
-        let stripe_count = read_u16(bytes, &mut offset);
-        let sub_stripe_count = read_u16(bytes, &mut offset);
-
-        let stripes = (0..stripe_count as usize)
-            .map(|i| {
-                Stripe::parse(&bytes[offset + i * Stripe::LEN..offset + (i + 1) * Stripe::LEN])
-            })
-            .collect::<Vec<_>>()
-            .into_boxed_slice(); // FIXME: stripe_count & sub_stripe_count length.
-
-        Self {
-            len,
-            owner,
-            stripe_length,
-            ty,
-            io_alignment,
-            io_width,
-            sector_size,
-            stripe_count,
-            sub_stripe_count,
-            stripes,
+            // I'm amazed this actually works and was allowed by miri when I tested a similar
+            // example. It's a little bizarre to create the slice you first want at the end and
+            // then eventually cast it to the whole struct.
+            Ok(&*(std::slice::from_raw_parts(begin, len) as *const [Stripe] as *const Self))
         }
     }
-    pub fn stripe(&self, superblock: &Superblock) -> &Stripe {
+    pub fn stripe_for_dev(&self, superblock: &Superblock) -> &Stripe {
         self.stripes
             .iter()
-            .find(|stripe| &stripe.device_uuid == &superblock.device_properties.uuid)
+            .find(|stripe| &stripe.device_uuid == &superblock.device_item.uuid)
             .expect("Using the superblock of a different filesystem")
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, AsBytes, FromBytes, Unaligned)]
+#[repr(packed)]
 pub struct Stripe {
-    pub device_id: u64,
-    pub offset: u64,
-    pub device_uuid: uuid::Uuid,
+    pub device_id: u64_le,
+    pub offset: u64_le,
+    pub device_uuid: [u8; 16],
 }
 
-impl Stripe {
-    const LEN: usize = 32;
-
-    pub fn parse(bytes: &[u8]) -> Self {
-        let mut offset = 0;
-        Self {
-            device_id: read_u64(bytes, &mut offset),
-            offset: read_u64(bytes, &mut offset),
-            device_uuid: read_uuid(bytes, &mut offset),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub struct DevItem {
-    device_id: u64,
-    total_bytes: u64,
-    bytes_used: u64,
-    io_alignment: u32,
-    io_width: u32,
-    sector_size: u32,
-    ty: u64,
-    generation: u64,
-    start_offset: u64,
-    device_group: u32,
-    seek_speed: u8,
-    bandwidth: u8,
-    device_uuid: Uuid,
-    fsid: Uuid,
-}
-
-impl DevItem {
-    pub const LEN: usize = 98;
-    pub fn parse(bytes: &[u8]) -> Self {
-        let mut offset = 0;
-
-        Self {
-            device_id: read_u64(bytes, &mut offset),
-            total_bytes: read_u64(bytes, &mut offset),
-            bytes_used: read_u64(bytes, &mut offset),
-            io_alignment: read_u32(bytes, &mut offset),
-            io_width: read_u32(bytes, &mut offset),
-            sector_size: read_u32(bytes, &mut offset),
-            ty: read_u64(bytes, &mut offset),
-            generation: read_u64(bytes, &mut offset),
-            start_offset: read_u64(bytes, &mut offset),
-            device_group: read_u32(bytes, &mut offset),
-            seek_speed: read_u8(bytes, &mut offset),
-            bandwidth: read_u8(bytes, &mut offset),
-            device_uuid: read_uuid(bytes, &mut offset),
-            fsid: read_uuid(bytes, &mut offset),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, AsBytes, FromBytes, Unaligned)]
+#[repr(packed)]
 pub struct RootItem {
     pub inode_item: InodeItem,
-    pub generation: u64,
-    pub root_directory_id: u64,
-    pub addr: u64,
-    pub byte_limit: u64,
-    pub bytes_used: u64,
-    pub last_snapshot: u64,
-    pub flags: RootItemFlags,
-    pub refs: u32,
+    pub generation: u64_le,
+    pub root_directory_id: u64_le,
+    pub addr: u64_le,
+    pub byte_limit: u64_le,
+    pub bytes_used: u64_le,
+    pub last_snapshot: u64_le,
+    pub flags: u64_le,
+    pub refs: u32_le,
 
     pub drop_progress: DiskKey,
     pub drop_level: u8,
     pub level: u8,
 
-    pub generation_v2: u64,
-    pub uuid: Uuid,
-    pub parent_uuid: Uuid,
-    pub received_uuid: Uuid,
+    pub generation_v2: u64_le,
+    pub uuid: [u8; 16],
+    pub parent_uuid: [u8; 16],
+    pub received_uuid: [u8; 16],
 
-    pub c_xid: u64,
-    pub o_xid: u64,
-    pub s_xid: u64,
-    pub r_xid: u64,
+    pub c_xid: u64_le,
+    pub o_xid: u64_le,
+    pub s_xid: u64_le,
+    pub r_xid: u64_le,
 
     pub ctime: Timespec,
     pub otime: Timespec,
@@ -183,22 +119,24 @@ pub struct RootItem {
     pub rtime: Timespec,
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, AsBytes, FromBytes, Unaligned)]
+#[repr(packed)]
 pub struct InodeItem {
-    pub generation: u64,
-    pub transaction_id: u64,
-    pub size: u64,
-    pub byte_count: u64,
-    pub block_group: u64,
-    pub hardlink_count: u32,
-    pub uid: u32,
-    pub gid: u32,
-    pub mode: u32,
-    pub rdev: u64,
-    pub flags: InodeFlags,
-    pub sequence: u64,
+    pub generation: u64_le,
+    pub transaction_id: u64_le,
+    pub size: u64_le,
+    pub byte_count: u64_le,
+    pub block_group: u64_le,
+    pub hardlink_count: u32_le,
+    pub uid: u32_le,
+    pub gid: u32_le,
+    pub mode: u32_le,
+    pub rdev: u64_le,
+    pub flags: u64_le,
+    pub sequence: u64_le,
 
-    // 4 reserved u64s.
+    pub _rsvd: [u64_le; 4],
+
     pub atime: Timespec,
     pub ctime: Timespec,
     pub mtime: Timespec,
@@ -228,245 +166,178 @@ bitflags! {
     }
 }
 
-impl InodeItem {
-    pub const LEN: usize = 160;
-
-    pub fn parse(bytes: &[u8]) -> Self {
-        let mut offset = 0;
-        Self {
-            generation: read_u64(bytes, &mut offset),
-            transaction_id: read_u64(bytes, &mut offset),
-            size: read_u64(bytes, &mut offset),
-            byte_count: read_u64(bytes, &mut offset),
-            block_group: read_u64(bytes, &mut offset),
-            hardlink_count: read_u32(bytes, &mut offset),
-            uid: read_u32(bytes, &mut offset),
-            gid: read_u32(bytes, &mut offset),
-            mode: read_u32(bytes, &mut offset),
-            rdev: read_u64(bytes, &mut offset),
-            flags: InodeFlags::from_bits_truncate(read_u64(bytes, &mut offset)),
-            sequence: read_u64(bytes, &mut offset),
-
-            atime: read_timespec(bytes, skip(&mut offset, 32)),
-            ctime: read_timespec(bytes, &mut offset),
-            mtime: read_timespec(bytes, &mut offset),
-            otime: read_timespec(bytes, &mut offset),
-        }
-    }
-}
-
-impl RootItem {
-    pub fn parse(bytes: &[u8]) -> Self {
-        let mut offset = InodeItem::LEN;
-
-        Self {
-            inode_item: InodeItem::parse(&bytes[..InodeItem::LEN]),
-
-            generation: read_u64(bytes, &mut offset),
-            root_directory_id: read_u64(bytes, &mut offset),
-            addr: read_u64(bytes, &mut offset),
-            byte_limit: read_u64(bytes, &mut offset),
-            bytes_used: read_u64(bytes, &mut offset),
-            last_snapshot: read_u64(bytes, &mut offset),
-            flags: RootItemFlags::from_bits(read_u64(bytes, &mut offset)).unwrap(),
-            refs: read_u32(bytes, &mut offset),
-
-            drop_progress: DiskKey::parse(&bytes[offset..offset + 17]),
-            drop_level: read_u8(bytes, skip(&mut offset, 17)),
-            level: read_u8(bytes, &mut offset),
-
-            generation_v2: read_u64(bytes, &mut offset),
-            uuid: read_uuid(bytes, &mut offset),
-            parent_uuid: read_uuid(bytes, &mut offset),
-            received_uuid: read_uuid(bytes, &mut offset),
-
-            c_xid: read_u64(bytes, &mut offset),
-            o_xid: read_u64(bytes, &mut offset),
-            s_xid: read_u64(bytes, &mut offset),
-            r_xid: read_u64(bytes, &mut offset),
-
-            ctime: read_timespec(bytes, &mut offset),
-            otime: read_timespec(bytes, &mut offset),
-            stime: read_timespec(bytes, &mut offset),
-            rtime: read_timespec(bytes, &mut offset),
-            // 8 reserved u64s
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
+#[repr(packed)]
 pub struct InodeRef {
-    pub index: u64,
-    pub name_len: u16,
-    pub name: Vec<u8>, // TODO: Find a good cross-platform unix OsString lib.
+    pub index: u64_le,
+    pub name_len: u16_le,
+    pub name: [u8],
+}
+impl std::fmt::Debug for InodeRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InodeRef")
+            .field("index", &{self.index})
+            .field("name_len", &{self.name_len})
+            .field("name", &self.name)
+            .finish()
+    }
 }
 impl InodeRef {
-    pub fn parse(bytes: &[u8]) -> Self {
-        let mut offset = 0;
+    pub const BASE_LEN: usize = 10;
 
-        let index = read_u64(bytes, &mut offset);
-        let name_len = read_u16(bytes, &mut offset);
+    pub fn parse<'a>(bytes: &'a [u8]) -> Option<&'a Self> {
+        let name_len = u16::from_le_bytes(<[u8; 2]>::try_from(&bytes[8..10]));
 
-        Self {
-            index,
-            name_len,
-            name: bytes[offset..offset + name_len as usize].to_owned(),
+        unsafe {
+            if bytes.len() < Self::BASE_LEN {
+                return None;
+            }
+
+            if Self::BASE_LEN + name_len as usize >= bytes.len() {
+                return None;
+            }
+
+            let begin = bytes.as_ptr();
+            let len = name_len as usize;
+
+            // I'm amazed this actually works and was allowed by miri when I tested a similar
+            // example. It's a little bizarre to create the slice you first want at the end and
+            // then eventually cast it to the whole struct.
+            Ok(&*(std::slice::from_raw_parts(begin, len) as *const [u8] as *const Self))
         }
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, AsBytes, FromBytes, Unaligned)]
+#[repr(packed)]
 pub struct RootRef {
-    pub subtree_id: u64,
-    pub sequence: u64,
-    pub name_len: u16,
+    pub subtree_id: u64_le,
+    pub sequence: u64_le,
+    pub name_len: u16_le,
 }
 
-impl RootRef {
-    pub const LEN: usize = 18;
-
-    pub fn parse(bytes: &[u8]) -> Self {
-        Self {
-            subtree_id: read_u64(bytes, &mut 0),
-            sequence: read_u64(bytes, &mut 8),
-            name_len: read_u16(bytes, &mut 16),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, AsBytes, FromBytes, Unaligned)]
+#[repr(packed)]
 pub struct DirItem {
     pub location: DiskKey,
-    pub xid: u64,
-    pub data_len: u16,
-    pub name_len: u16,
-    pub ty: Filetype,
+    pub xid: u64_le,
+    pub data_len: u16_le,
+    pub name_len: u16_le,
+    pub ty: u8,
 }
 
-enum_from_primitive! {
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    pub enum Filetype {
-        Unknown = 0,
-        RegularFile = 1,
-        Directory = 2,
-        CharacterDevice = 3,
-        BlockDevice = 4,
-        Fifo = 5,
-        Socket = 6,
-        Symlink = 7,
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, FromPrimitive)]
+pub enum Filetype {
+    Unknown = 0,
+    RegularFile = 1,
+    Directory = 2,
+    CharacterDevice = 3,
+    BlockDevice = 4,
+    Fifo = 5,
+    Socket = 6,
+    Symlink = 7,
 
-        // Only interally used, not user-visible.
-        Xattr = 8,
-    }
+    // Only interally used, not user-visible.
+    Xattr = 8,
 }
 
 impl DirItem {
-    pub const LEN: usize = DiskKey::LEN + 13;
-
-    pub fn parse(bytes: &[u8]) -> Self {
-        let mut offset = DiskKey::LEN;
-        Self {
-            location: DiskKey::parse(&bytes[..DiskKey::LEN]),
-            xid: read_u64(bytes, &mut offset),
-            data_len: read_u16(bytes, &mut offset),
-            name_len: read_u16(bytes, &mut offset),
-            ty: Filetype::from_u8(read_u8(bytes, &mut offset)).unwrap(),
-        }
+    pub fn file_type(&self) -> Option<Filetype> {
+        Filetype::from_u8(self.ty)
     }
 }
 
 #[derive(Clone, Debug)]
+#[repr(packed)]
 pub struct FileExtentItem {
-    pub generation: u64,
-    pub device_size: u64,
+    pub generation: u64_le,
+    pub device_size: u64_le,
     pub compression: u8,
     pub encryption: u8,
-    pub other_encoding: u16,
-    pub ty: FileExtentItemType,
+    pub other_encoding: u16_le,
+    pub ty: u8,
 
-    pub extension: FileExtentItemExtension,
+    /// Either inline data or `FileExtentItemExtOnDisk`.
+    pub rest: [u8],
 }
 
-enum_from_primitive! {
-    #[derive(Clone, Copy, Debug)]
-    pub enum FileExtentItemType {
-        Inline = 0,
-        Reg = 1,
-        Prealloc = 2,
-    }
+#[derive(Clone, Copy, Debug, FromPrimitive)]
+pub enum FileExtentItemType {
+    Inline = 0,
+    Reg = 1,
+    Prealloc = 2,
 }
 
-#[derive(Clone, Debug)]
-pub enum FileExtentItemExtension {
-    OnDisk {
-        disk_bytenr: u64,
-        disk_byte_count: u64,
-        disk_offset: u64,
-        byte_count: u64,
-    },
-    Inline(Vec<u8>),
+pub enum FileExtentItemExt<'a> {
+    Inline(&'a [u8]),
+    OnDisk(LayoutVerified<&'a [u8], FileExtentItemExtOnDisk>)
+}
+
+#[derive(Clone, Copy, Debug, AsBytes, FromBytes, Unaligned)]
+#[repr(packed)]
+pub struct FileExtentItemExtOnDisk {
+    disk_bytenr: u64_le,
+    disk_byte_count: u64_le,
+    disk_offset: u64_le,
+    byte_count: u64_le,
 }
 
 impl FileExtentItem {
-    pub fn parse(bytes: &[u8]) -> Self {
-        let mut offset = 0;
+    pub fn ty(&self) -> Option<FileExtentItemType> {
+        FileExtentItem::from_u8(self.ty)
+    }
+    pub const BASE_LEN: usize = 21;
 
-        let generation = read_u64(bytes, &mut offset);
-        let device_size = read_u64(bytes, &mut offset);
-        let compression = read_u8(bytes, &mut offset);
-        let encryption = read_u8(bytes, &mut offset);
-        let other_encoding = read_u16(bytes, &mut offset);
-        let ty = FileExtentItemType::from_u8(read_u8(bytes, &mut offset)).unwrap();
+    pub fn parse<'a>(bytes: &'a [u8]) -> Option<&'a Self> {
+        let len = match FileExtentItemType::from_u8(bytes[20])? {
+            FileExtentItemType::Inline => {
+                let device_size = u64::from_le_bytes(<[u8; 8]>::try_from(&bytes[8..16]));
+                usize::try_from(device_size).ok()?
+            }
+            FileExtentItemType::Prealloc | FileExtentItemType::Reg => mem::size_of::<FileExtentItemExtOnDisk>(),
+        };
 
-        Self {
-            generation,
-            device_size,
-            compression,
-            encryption,
-            other_encoding,
-            ty,
+        unsafe {
+            if bytes.len() < Self::BASE_LEN {
+                return None;
+            }
 
-            extension: match ty {
-                FileExtentItemType::Reg | FileExtentItemType::Prealloc => {
-                    FileExtentItemExtension::OnDisk {
-                        disk_bytenr: read_u64(bytes, &mut offset),
-                        disk_byte_count: read_u64(bytes, &mut offset),
-                        disk_offset: read_u64(bytes, &mut offset),
-                        byte_count: read_u64(bytes, &mut offset),
-                    }
-                }
-                FileExtentItemType::Inline => FileExtentItemExtension::Inline(
-                    bytes[offset..offset + device_size as usize].to_owned(),
-                ),
-            },
+            if Self::BASE_LEN + len > bytes.len() {
+                return None;
+            }
+
+            let begin = bytes.as_ptr();
+
+            Ok(&*(std::slice::from_raw_parts(begin, len) as *const [u8] as *const Self))
         }
+    }
+    pub fn ext<'a>(&'a self) -> Option<FileExtentItemExt<'a>> {
+        Some(match self.ty()? {
+            FileExtentItemType::Inline => FileExtentItemExt::Inline(&self.rest),
+            FileExtentItemType::Prealloc | FileExtentItemType::Reg => FileExtentItemExt::OnDisk(LayoutVerified::new_unaligned(&self.rest)),
+        })
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, AsBytes, FromBytes, Unaligned)]
+#[repr(packed)]
 pub struct BlockGroupItem {
-    pub bytes_used: u64,
-    pub chunk_oid: u64,
-    pub flags: BlockGroupType,
+    pub bytes_used: u64_le,
+    pub chunk_oid: u64_le,
+    pub flags: u64_le,
 }
 
 impl BlockGroupItem {
-    pub fn parse(bytes: &[u8]) -> Self {
-        let mut offset = 0;
-
-        Self {
-            bytes_used: read_u64(bytes, &mut offset),
-            chunk_oid: read_u64(bytes, &mut offset),
-            flags: BlockGroupType::from_bits(read_u64(bytes, &mut offset)).unwrap(),
-        }
+    pub fn ty(&self) -> Option<BlockGroupType> {
+        BlockGroupType::from_bits(self.flags)
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, AsBytes, FromBytes, Unaligned)]
+#[repr(packed)]
 pub struct ExtentItem {
-    pub reference_count: u64,
-    pub allocation_xid: u64,
-    pub flags: ExtentFlags,
+    pub reference_count: u64_le,
+    pub allocation_xid: u64_le,
+    pub flags: u64_le,
 }
 
 bitflags! {
@@ -478,65 +349,30 @@ bitflags! {
 }
 
 impl ExtentItem {
-    pub fn parse(bytes: &[u8]) -> Self {
-        let mut offset = 0;
-
-        Self {
-            reference_count: read_u64(bytes, &mut offset),
-            allocation_xid: read_u64(bytes, &mut offset),
-            flags: ExtentFlags::from_bits(read_u64(bytes, &mut offset)).unwrap(),
-        }
+    pub fn flags(&self) -> Option<ExtentFlags> {
+        ExtentFlags::from_bits(self.flags)
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, AsBytes, FromBytes, Unaligned)]
+#[repr(packed)]
 pub struct DevStatsItem {
-    pub write_errs: u64,
-    pub read_errs: u64,
-    pub flush_errs: u64,
+    pub write_errs: u64_le,
+    pub read_errs: u64_le,
+    pub flush_errs: u64_le,
 
-    pub corruption_errs: u64,
-    pub generation_errs: u64,
+    pub corruption_errs: u64_le,
+    pub generation_errs: u64_le,
 }
 
-impl DevStatsItem {
-    pub const LEN: usize = 48;
-
-    pub fn parse(bytes: &[u8]) -> Self {
-        let mut offset = 0;
-
-        Self {
-            write_errs: read_u64(bytes, &mut offset),
-            read_errs: read_u64(bytes, &mut offset),
-            flush_errs: read_u64(bytes, &mut offset),
-
-            corruption_errs: read_u64(bytes, &mut offset),
-            generation_errs: read_u64(bytes, &mut offset),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, AsBytes, FromBytes, Unaligned)]
+#[repr(packed)]
 pub struct DevExtent {
-    pub chunk_tree: u64,
-    pub chunk_oid: u64,
-    pub chunk_offset: u64,
-    pub len: u64,
-    pub chunk_tree_uuid: Uuid,
-}
-
-impl DevExtent {
-    pub fn parse(bytes: &[u8]) -> Self {
-        let mut offset = 0;
-
-        Self {
-            chunk_tree: read_u64(bytes, &mut offset),
-            chunk_oid: read_u64(bytes, &mut offset),
-            chunk_offset: read_u64(bytes, &mut offset),
-            len: read_u64(bytes, &mut offset),
-            chunk_tree_uuid: read_uuid(bytes, &mut offset),
-        }
-    }
+    pub chunk_tree: u64_le,
+    pub chunk_oid: u64_le,
+    pub chunk_offset: u64_le,
+    pub len: u64_le,
+    pub chunk_tree_uuid: [u8; 16],
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -559,6 +395,7 @@ impl CsumItem {
                         .map(|i| fal::read_u32(bytes, i * 4))
                         .collect()
                 }),
+                _ => todo!(),
             },
         }
     }
@@ -580,4 +417,23 @@ impl UuidItem {
                 .collect(),
         }
     }
+}
+
+#[derive(Debug, AsBytes, FromBytes, Unaligned)]
+#[repr(packed)]
+pub struct DevItem {
+    pub id: u64_le,
+    pub size: u64_le,
+    pub bytes_used: u64_le,
+    pub io_alignment: u32_le,
+    pub io_width: u32_le,
+    pub sector_size: u32_le,
+    pub type_and_info: u64_le,
+    pub generation: u64_le,
+    pub start_byte: u64_le,
+    pub group: u32_le,
+    pub seek_speed: u8,
+    pub bandwidth: u8,
+    pub uuid: [u8; 16],
+    pub fs_uuid: [u8; 16],
 }

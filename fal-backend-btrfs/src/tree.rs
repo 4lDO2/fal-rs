@@ -1,3 +1,13 @@
+use core::{
+    borrow::Borrow,
+    cmp::Ordering,
+    fmt, mem,
+};
+
+use std::borrow::Cow;
+
+use zerocopy::{AsBytes, ByteSlice, FromBytes, LayoutVerified, Unaligned};
+
 use crate::{
     chunk_map::ChunkMap,
     filesystem,
@@ -7,150 +17,116 @@ use crate::{
     },
     superblock::{ChecksumType, Superblock},
     Checksum, DiskKey, DiskKeyType,
+
+    u64_le, u32_le,
 };
-
-use std::{
-    borrow::{Borrow, Cow},
-    cmp::Ordering,
-};
-
-use fal::{read_u32, read_u64, read_u8, read_uuid};
-
-use uuid::Uuid;
 
 // TODO: Paths are small and smallvec / arrayvec should be used.
 type Path<'a> = Vec<(Cow<'a, Tree>, usize)>;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, AsBytes, FromBytes, Unaligned)]
+#[repr(packed)]
 pub struct Header {
-    pub checksum: Checksum,
-    pub fsid: Uuid,
+    pub checksum: [u8; 32],
+    pub fsid: [u8; 16],
 
-    pub logical_addr: u64,
-    pub flags: u64,
+    pub logical_addr: u64_le,
+    pub flags: u64_le,
 
-    pub chunk_tree_uuid: Uuid,
-    pub generation: u64,
-    pub owner: u64,
-    pub item_count: u32,
+    pub chunk_tree_uuid: [u8; 16],
+    pub generation: u64_le,
+    pub owner: u64_le,
+    pub item_count: u32_le,
     pub level: u8,
 }
 
-impl Header {
-    pub const LEN: usize = 101;
-
-    pub fn parse(checksum_type: ChecksumType, bytes: &[u8]) -> Self {
-        let checksum_bytes = &bytes[..32];
-        let checksum = Checksum::new(checksum_type, checksum_bytes);
-
-        assert_eq!(checksum, Checksum::calculate(checksum_type, &bytes[32..]));
-
-        let fsid = read_uuid(bytes, 32);
-
-        let logical_addr = read_u64(bytes, 48);
-        let flags = read_u64(bytes, 56);
-
-        let chunk_tree_uuid = read_uuid(bytes, 64);
-        let generation = read_u64(bytes, 80);
-        let owner = read_u64(bytes, 88);
-        let item_count = read_u32(bytes, 96);
-        let level = read_u8(bytes, 100);
-
-        Header {
-            checksum,
-            fsid,
-
-            logical_addr,
-            flags,
-
-            chunk_tree_uuid,
-            generation,
-            owner,
-            item_count,
-            level,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
 pub struct Node {
     pub header: Header,
-    pub key_ptrs: Vec<KeyPtr>,
+    pub key_ptrs: [KeyPtr],
+}
+impl fmt::Debug for Node {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+         f.debug_struct("Node")
+             .field("header", &{self.header})
+             .field("key_ptrs", &self.key_ptrs)
+             .finish()
+     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, AsBytes, FromBytes, Unaligned)]
+#[repr(packed)]
 pub struct KeyPtr {
     pub key: DiskKey,
-    pub block_ptr: u64,
-    pub generation: u64,
-}
-
-impl KeyPtr {
-    pub const LEN: usize = 33;
-    pub fn parse(bytes: &[u8]) -> Self {
-        Self {
-            key: DiskKey::parse(&bytes[..17]),
-            block_ptr: read_u64(bytes, 17),
-            generation: read_u64(bytes, 25),
-        }
-    }
+    pub block_ptr: u64_le,
+    pub generation: u64_le,
 }
 
 impl Node {
-    pub fn parse(header: Header, bytes: &[u8]) -> Self {
-        let key_ptrs = (0..header.item_count as usize)
-            .map(|i| KeyPtr::parse(&bytes[i * 33..(i + 1) * 33]))
-            .collect();
+    pub fn parse<'a>(header: &'a Header, bytes: &'a [u8]) -> Option<&'a Self> {
+        let item_count = header.item_count.get();
 
-        Self { header, key_ptrs }
+        unsafe {
+            if bytes.len() < mem::size_of::<Header>() {
+                return None;
+            }
+
+            if mem::size_of::<Header>() + item_count * mem::size_of::<KeyPtr>() >= bytes.len() {
+                return None;
+            }
+
+            let begin = bytes.as_ptr();
+            let len = item_count;
+
+            Ok(&*(std::slice::from_raw_parts(begin, len) as *const [KeyPtr] as *const Self))
+        }
     }
 }
 
-#[derive(Clone, Debug)]
 pub struct Leaf {
     pub header: Header,
-    pub pairs: Vec<(Item, Value)>,
+    pub data: [u8],
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, AsBytes, FromBytes, Unaligned)]
+#[repr(packed)]
 pub struct Item {
     pub key: DiskKey,
-    pub offset: u32,
-    pub size: u32,
+    pub offset: u32_le,
+    pub size: u32_le,
 }
 
 #[derive(Clone, Debug)]
-pub enum Value {
-    BlockGroupItem(BlockGroupItem),
-    Chunk(ChunkItem),
-    Device(DevItem),
-    DevExtent(DevExtent),
-    DirIndex(DirItem),
-    DirItem(DirItem),
-    ExtentCsum(CsumItem),
-    ExtentData(FileExtentItem),
-    ExtentItem(ExtentItem),
-    InodeItem(InodeItem),
-    InodeRef(InodeRef),
-    MetadataItem(ExtentItem),
-    PersistentItem(DevStatsItem), // NOTE: Currently the only persistent item is the dev stats item.
-    Root(RootItem),
-    RootRef(RootRef),
-    RootBackref(RootRef),
-    UuidSubvol(UuidItem),
-    UuidReceivedSubvol(UuidItem),
-    XattrItem(DirItem),
+pub enum Value<'a, B = &'a [u8]> {
+    BlockGroupItem(LayoutVerified<B, BlockGroupItem>),
+    Chunk(&'a ChunkItem),
+    Device(LayoutVerified<B, DevItem>),
+    DevExtent(LayoutVerified<B, DevExtent>),
+    DirIndex(LayoutVerified<B, DirItem>),
+    DirItem(LayoutVerified<B, DirItem>),
+    ExtentCsum(LayoutVerified<B, CsumItem>),
+    ExtentData(&'a FileExtentItem),
+    ExtentItem(LayoutVerified<B, ExtentItem>),
+    InodeItem(LayoutVerified<B, InodeItem>),
+    InodeRef(&'a InodeRef),
+    MetadataItem(LayoutVerified<B, ExtentItem>),
+    PersistentItem(LayoutVerified<B, DevStatsItem>), // NOTE: Currently the only persistent item is the dev stats item.
+    Root(LayoutVerified<B, RootItem>),
+    RootRef(LayoutVerified<B, RootRef>),
+    RootBackref(LayoutVerified<B, RootRef>),
+    UuidSubvol(LayoutVerified<B, UuidItem>),
+    UuidReceivedSubvol(LayoutVerified<B, UuidItem>),
+    XattrItem(LayoutVerified<B, DirItem>),
     Unknown,
 }
 
-impl Value {
-    pub fn into_root_item(self) -> Option<RootItem> {
+impl<'a, B: ByteSlice> Value<'a, B> {
+    pub fn as_root_item(&self) -> Option<LayoutVerified<B, RootItem>> {
         match self {
             Self::Root(item) => Some(item),
             _ => None,
         }
     }
-    pub fn into_chunk_item(self) -> Option<ChunkItem> {
+    pub fn as_chunk_item(self) -> Option<&'a ChunkItem> {
         match self {
             Self::Chunk(item) => Some(item),
             _ => None,
@@ -164,20 +140,8 @@ impl Value {
     }
 }
 
-impl Item {
-    pub const LEN: usize = 25;
-
-    pub fn parse(bytes: &[u8]) -> Self {
-        Self {
-            key: DiskKey::parse(&bytes[..17]),
-            offset: read_u32(bytes, 17),
-            size: read_u32(bytes, 21),
-        }
-    }
-}
-
 impl Leaf {
-    pub fn parse(checksum_type: ChecksumType, header: Header, bytes: &[u8]) -> Self {
+    /*pub fn parse(checksum_type: ChecksumType, header: Header, bytes: &[u8]) -> Self {
         let pairs = (0..header.item_count as usize)
             .map(|i| Item::parse(&bytes[i * 25..(i + 1) * 25]))
             .map(|item: Item| {
@@ -228,6 +192,72 @@ impl Leaf {
 
         Self { header, pairs }
     }
+    */
+    pub fn parse<'a>(checksum_ty: ChecksumType, header: &'a Header, bytes: &'a [u8]) -> Option<&'a Self> {
+        unsafe {
+            if bytes.len() < mem::size_of::<Header>() {
+                return None;
+            }
+
+            let begin = bytes.as_ptr();
+            let len = bytes.len() - mem::size_of::<Header>();
+
+            Ok(&*(std::slice::from_raw_parts(begin, len) as *const [KeyPtr] as *const Self))
+        }
+    }
+    pub fn iter<'a>(&'a self) -> impl Iterator<Item = (&'a Item, Value<'a>)> + 'a {
+        (0..self.header.item_count.get() as usize)
+            .map(|i| LayoutVerified::new_unaligned(&self.data[i * mem::size_of::<Item>()..(i + 1) * mem::size_of::<Item>()]))
+            .map(|item| {
+                let value_bytes = &self.data[item.offset as usize..item.offset as usize + item.size as usize];
+
+                let ty = match item.key.ty() {
+                    Some(ty) => ty,
+                    None => return Value::Unknown, // TODO: Warn
+                };
+
+                let value = match ty {
+                    DiskKeyType::BlockGroupItem => Value::BlockGroupItem(LayoutVerified::new_unaligned(value_bytes)),
+                    DiskKeyType::ChunkItem => Value::ChunkItem(LayoutVerified::new_unaligned(value_bytes)),
+                    DiskKeyType::DevExtent => Value::DevExtent(LayoutVerified::new_unaligned(value_bytes)),
+                    DiskKeyType::DevItem => Value::DevItem(LayoutVerified::new_unaligned(value_bytes)),
+                    DiskKeyType::DirIndex => Value::DirIndex(LayoutVerified::new_unaligned(value_bytes)),
+                    DiskKeyType::DirItem => Value::DirItem(LayoutVerified::new_unaligned(value_bytes)),
+                    DiskKeyType::ExtentCsum => Value::ExtentCsum(LayoutVerified::new_unaligned(value_bytes)),
+                    DiskKeyType::ExtentData => Value::ExtentData(LayoutVerified::new_unaligned(value_bytes)),
+                    DiskKeyType::ExtentItem => Value::ExtentItem(LayoutVerified::new_unaligned(value_bytes)),
+                    DiskKeyType::InodeItem => Value::InodeItem(LayoutVerified::new_unaligned(value_bytes)),
+                    DiskKeyType::InodeRef => Value::InodeRef(LayoutVerified::new_unaligned(value_bytes)),
+                    DiskKeyType::MetadataItem => Value::MetadataItem(LayoutVerified::new_unaligned(value_bytes)),
+                    DiskKeyType::PersistentItem => Value::PersistentItem(LayoutVerified::new_unaligned(value_bytes)),
+                    DiskKeyType::RootBackref => Value::RootBackref(LayoutVerified::new_unaligned(value_bytes)),
+                    DiskKeyType::RootItem => Value::RootItem(LayoutVerified::new_unaligned(value_bytes)),
+                    DiskKeyType::RootRef => Value::RootRef(LayoutVerified::new_unaligned(value_bytes)),
+                    DiskKeyType::UuidSubvol => Value::UuidSubvol(LayoutVerified::new_unaligned(value_bytes)),
+                    DiskKeyType::UuidReceivedSubvol => Value::UuidReceivedSubvol(LayoutVerified::new_unaligned(value_bytes)),
+                    DiskKeyType::XattrItem => Value::XattrItem(LayoutVerified::new_unaligned(value_bytes)),
+                };
+                (item, value)
+            })
+    }
+}
+impl fmt::Debug for Leaf {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        struct Pairs<'a>(&'a Leaf);
+
+        impl<'a> fmt::Debug for Pairs<'a> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.debug_list()
+                    .entries(self.0.iter())
+                    .finish()
+            }
+        }
+
+        f.debug_struct("Leaf")
+            .field("header", &{self.header})
+            .field("pairs", Pairs(self))
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -274,7 +304,7 @@ impl Tree {
         addr: u64,
     ) -> Self {
         let block = filesystem::read_node(device, superblock, chunk_map, addr);
-        Self::parse(superblock.checksum_type, &block)
+        Self::parse(superblock.checksum_ty(), &block)
     }
     fn get_generic<D: fal::Device>(
         &self,

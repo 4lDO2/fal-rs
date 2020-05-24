@@ -1,88 +1,139 @@
-use std::{ffi::CString, io::SeekFrom};
-
 use crate::{
-    items::{BlockGroupType, ChunkItem},
+    items::{BlockGroupType, DevItem, ChunkItem},
     sizes, Checksum, DiskKey, DiskKeyType,
+
+    u64_le, u32_le, u16_le,
 };
 
 use bitflags::bitflags;
-use enum_primitive::*;
-use fal::{read_u16, read_u32, read_u64, read_u8, read_uuid, write_u64, write_u8};
+use num_derive::FromPrimitive;
+use num_traits::FromPrimitive as _;
+use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
 const SUPERBLOCK_OFFSETS: [u64; 4] = [64 * sizes::K, 64 * sizes::M, 256 * sizes::G, 1 * sizes::P];
 const CHECKSUM_SIZE: usize = 32;
 const MAGIC: u64 = 0x4D5F53665248425F; // ASCII for "_BHRfS_M"
 
-#[derive(Debug)]
+#[derive(Debug, AsBytes, FromBytes, Unaligned)]
+#[repr(packed)]
 pub struct Superblock {
-    pub checksum: Checksum,
-    pub fs_id: uuid::Uuid,
-    pub byte_number: u64,
-    pub flags: SuperblockFlags,
-    pub magic: u64,
-    pub generation: u64,
-    pub root: u64,
-    pub chunk_root: u64,
-    pub log_root: u64,
+    pub checksum: [u8; 32],
+    pub fs_id: [u8; 16],
+    pub byte_number: u64_le,
+    pub flags: u64_le,
+    pub magic: u64_le,
+    pub generation: u64_le,
+    pub root: u64_le,
+    pub chunk_root: u64_le,
+    pub log_root: u64_le,
 
-    pub log_root_transid: u64,
-    pub total_byte_count: u64,
-    pub total_bytes_used: u64,
-    pub root_dir_objectid: u64,
-    pub device_count: u64,
+    pub log_root_transid: u64_le,
+    pub total_byte_count: u64_le,
+    pub total_bytes_used: u64_le,
+    pub root_dir_objectid: u64_le,
+    pub device_count: u64_le,
 
-    pub sector_size: u32,
-    pub node_size: u32,
-    pub unused_leaf_size: u32,
-    pub stripe_size: u32,
-    pub system_chunk_array_size: u32,
-    pub chunk_root_gen: u64,
+    pub sector_size: u32_le,
+    pub node_size: u32_le,
+    pub unused_leaf_size: u32_le,
+    pub stripe_size: u32_le,
+    pub system_chunk_array_size: u32_le,
+    pub chunk_root_gen: u64_le,
 
-    pub optional_flags: u64,
-    pub flags_for_write_support: u64,
-    pub required_flags: u64,
+    pub optional_flags: u64_le,
+    pub flags_for_write_support: u64_le,
+    pub required_flags: u64_le,
 
-    pub checksum_type: ChecksumType,
+    pub checksum_type: u8,
 
     pub root_level: u8,
     pub chunk_root_level: u8,
     pub log_root_level: u8,
 
-    pub device_properties: DeviceProperties,
-    pub device_label: CString, // TODO: Is this really a C string?
+    pub device_item: DevItem,
+    //pub device_label: [u8; 256],
+    pub device_label: DeviceLabel,
 
     pub cache_generation: u8,
     pub uuid_tree_generation: u8,
-    pub metadata_uuid: uuid::Uuid,
+    pub metadata_uuid: [u8; 16],
+    //pub system_chunk_array: [u8; 2048],
     pub system_chunk_array: SystemChunkArray,
     pub root_backups: [RootBackup; 4],
 }
-#[derive(Debug)]
-pub struct SystemChunkArray(pub Vec<(DiskKey, ChunkItem)>);
+//#[derive(Debug)]
+//pub struct SystemChunkArray(pub Vec<(DiskKey, ChunkItem)>);
 
-#[derive(Debug)]
-pub struct DeviceProperties {
-    pub id: u64,
-    pub size: u64,
-    pub bytes_used: u64,
-    pub io_alignment: u32,
-    pub io_width: u32,
-    pub sector_size: u32,
-    pub type_and_info: u64,
-    pub generation: u64,
-    pub start_byte: u64,
-    pub group: u32,
-    pub seek_speed: u8,
-    pub bandwidth: u8,
-    pub uuid: uuid::Uuid,
-    pub fs_uuid: uuid::Uuid,
+#[repr(packed)]
+pub struct DeviceLabel([u8; 256]);
+
+// XXX: Const generics; for some obscure reason, only arrays with length of up to 32 bytes actually
+// support basic traits.
+
+unsafe impl zerocopy::FromBytes for DeviceLabel {
+    // "Ironic"
+    fn only_derive_is_allowed_to_implement_this_trait()
+where Self: Sized {}
+}
+unsafe impl zerocopy::AsBytes for DeviceLabel {
+    fn only_derive_is_allowed_to_implement_this_trait()
+where Self: Sized {}
+}
+unsafe impl zerocopy::Unaligned for DeviceLabel {
+    fn only_derive_is_allowed_to_implement_this_trait()
+where Self: Sized {}
 }
 
-enum_from_primitive! {
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-    pub enum ChecksumType {
-        Crc32 = 0,
+impl std::fmt::Display for DeviceLabel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let bytes = if let Some(zero_idx) = self.0.iter().copied().position(|b| b == 0) {
+            &self.0[..zero_idx]
+        } else {
+            &self.0[..]
+        };
+        write!(f, "{}", String::from_utf8_lossy(bytes))
     }
+}
+impl std::fmt::Debug for DeviceLabel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "\"")?;
+        std::fmt::Display::fmt(self, f)?;
+        write!(f, "\"")
+    }
+}
+
+#[repr(packed)]
+pub struct SystemChunkArray([u8; 2048]);
+
+unsafe impl zerocopy::FromBytes for SystemChunkArray {
+    fn only_derive_is_allowed_to_implement_this_trait()
+where Self: Sized {}
+}
+unsafe impl zerocopy::AsBytes for SystemChunkArray {
+    fn only_derive_is_allowed_to_implement_this_trait()
+where Self: Sized {}
+}
+unsafe impl zerocopy::Unaligned for SystemChunkArray {
+    fn only_derive_is_allowed_to_implement_this_trait()
+where Self: Sized {}
+}
+impl std::fmt::Debug for SystemChunkArray {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list()
+            .entries(self.0.iter().copied())
+            .finish()
+    }
+}
+
+#[derive(Debug)]
+pub struct InvalidChecksum;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, FromPrimitive)]
+pub enum ChecksumType {
+    Crc32 = 0,
+    Xxhash = 1,
+    Sha256 = 2,
+    Blake2 = 3,
 }
 
 impl Superblock {
@@ -100,168 +151,53 @@ impl Superblock {
             .map(|offset| {
                 device.read_blocks(offset / u64::from(disk_info.block_size), &mut block).unwrap();
 
-                Self::parse(&block)
+                *Self::parse(&block).unwrap()
             })
-            .max_by_key(|sb| sb.generation)
+            .max_by_key(|sb| sb.generation.get())
             .unwrap()
     }
-    pub fn parse(block: &[u8]) -> Self {
-        let mut checksum = [0u8; CHECKSUM_SIZE];
-        checksum.copy_from_slice(&block[..32]);
+    pub fn parse<'a>(block: &'a [u8]) -> Result<LayoutVerified<&'a [u8], Self>, InvalidChecksum> {
+        let reference = LayoutVerified::<&'a [u8], Self>::new_unaligned(block).expect("calling btrfs::Superblock::parse with insufficient bytes");
+        let checksum = reference.calculate_checksum(block);
 
-        let fs_id = read_uuid(&block, 32);
-
-        let byte_number = read_u64(&block, 48);
-        let flags = SuperblockFlags::from_bits(read_u64(&block, 56)).unwrap();
-        let magic = read_u64(&block, 64);
-        assert_eq!(magic, MAGIC);
-        let generation = read_u64(&block, 72);
-        let root = read_u64(&block, 80);
-        let chunk_root = read_u64(&block, 88);
-        let log_root = read_u64(&block, 96);
-
-        let log_root_transid = read_u64(&block, 104);
-        let total_byte_count = read_u64(&block, 112);
-        let total_bytes_used = read_u64(&block, 120);
-        let root_dir_objectid = read_u64(&block, 128);
-        let device_count = read_u64(&block, 136);
-
-        let sector_size = read_u32(&block, 144);
-        let node_size = read_u32(&block, 148);
-        let unused_leaf_size = read_u32(&block, 152);
-        let stripe_size = read_u32(&block, 156);
-        let system_chunk_array_size = read_u32(&block, 160);
-        let chunk_root_gen = read_u64(&block, 164);
-
-        let optional_flags = read_u64(&block, 172);
-        let flags_for_write_support = read_u64(&block, 180);
-        let required_flags = read_u64(&block, 188);
-
-        let checksum_type = ChecksumType::from_u16(read_u16(&block, 196)).unwrap();
-
-        let root_level = read_u8(&block, 198);
-        let chunk_root_level = read_u8(&block, 199);
-        let log_root_level = read_u8(&block, 200);
-
-        let device_properties = {
-            let id = read_u64(&block, 201);
-            let size = read_u64(&block, 209);
-            let bytes_used = read_u64(&block, 217);
-            let io_alignment = read_u32(&block, 225);
-            let io_width = read_u32(&block, 229);
-            let sector_size = read_u32(&block, 233);
-            let type_and_info = read_u64(&block, 237);
-            let generation = read_u64(&block, 245);
-            let start_byte = read_u64(&block, 253);
-            let group = read_u32(&block, 261);
-            let seek_speed = read_u8(&block, 265);
-            let bandwidth = read_u8(&block, 266);
-            let device_uuid = read_uuid(&block, 267);
-            let fs_uuid = read_uuid(&block, 283);
-
-            assert_eq!(fs_uuid, fs_id);
-
-            DeviceProperties {
-                id,
-                size,
-                bytes_used,
-                io_alignment,
-                io_width,
-                sector_size,
-                type_and_info,
-                generation,
-                start_byte,
-                group,
-                seek_speed,
-                bandwidth,
-                fs_uuid,
-                uuid: device_uuid,
-            }
-        };
-
-        let device_label = {
-            let label_bytes = &block[299..=554];
-            let nul_position = label_bytes
-                .iter()
-                .copied()
-                .position(|byte| byte == 0)
-                .unwrap();
-            let label_bytes_to_nul = &label_bytes[..nul_position];
-            CString::new(label_bytes_to_nul).unwrap()
-        };
-
-        let cache_generation = read_u8(&block, 555);
-        let uuid_tree_generation = read_u8(&block, 556);
-        let metadata_uuid = read_uuid(&block, 557);
-
-        let system_chunk_array = &block[811..=2858];
-
-        let mut root_backups = [Default::default(); 4];
-        for (index, backup) in root_backups.iter_mut().enumerate() {
-            *backup = RootBackup::from_raw(
-                &block[2859 + index * RootBackup::RAW_SIZE
-                    ..2859 + (index + 1) * RootBackup::RAW_SIZE],
-            );
+        if checksum == reference.checksum {
+            Ok(reference)
+        } else {
+            Err(InvalidChecksum)
         }
-
-        Self {
-            checksum: Checksum::new(checksum_type, &checksum),
-            fs_id,
-            byte_number,
-            flags,
-            magic,
-            generation,
-            root,
-            chunk_root,
-            log_root,
-            log_root_transid,
-            total_byte_count,
-            total_bytes_used,
-            root_dir_objectid,
-            device_count,
-            sector_size,
-            node_size,
-            unused_leaf_size,
-            stripe_size,
-            system_chunk_array_size,
-            chunk_root_gen,
-            optional_flags,
-            flags_for_write_support,
-            required_flags,
-            checksum_type,
-            root_level,
-            chunk_root_level,
-            log_root_level,
-            device_properties,
-            device_label,
-            cache_generation,
-            uuid_tree_generation,
-            metadata_uuid,
-            system_chunk_array: SystemChunkArray::parse(
-                &system_chunk_array[..system_chunk_array_size as usize],
-            ),
-            root_backups,
+    }
+    pub fn calculate_checksum(&self, block: &[u8]) -> [u8; 32] {
+        match self.checksum_ty() {
+            ChecksumType::Crc32 => todo!(),
+            ChecksumType::Xxhash => todo!(),
+            ChecksumType::Sha256 => todo!(),
+            ChecksumType::Blake2 => todo!(),
         }
+    }
+    /// Panics if the checksum_ty field has been set to something else after validation.
+    pub fn checksum_ty(&self) -> ChecksumType {
+        ChecksumType::from_u8(self.checksum_type).expect("checksum_ty has been set to invalid value")
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, AsBytes, FromBytes, Unaligned)]
+#[repr(packed)]
 pub struct RootBackup {
-    pub tree_root: u64,
-    pub tree_root_generation: u64,
-    pub chunk_root: u64,
-    pub chunk_root_generation: u64,
-    pub extent_root: u64,
-    pub extent_root_generation: u64,
-    pub filesystem_root: u64,
-    pub filesystem_root_generation: u64,
-    pub device_root: u64,
-    pub device_root_generation: u64,
-    pub checksum_root: u64,
-    pub checksum_root_generation: u64,
-    pub total_bytes: u64,
-    pub bytes_used: u64,
-    pub device_count: u64,
+    pub tree_root: u64_le,
+    pub tree_root_generation: u64_le,
+    pub chunk_root: u64_le,
+    pub chunk_root_generation: u64_le,
+    pub extent_root: u64_le,
+    pub extent_root_generation: u64_le,
+    pub filesystem_root: u64_le,
+    pub filesystem_root_generation: u64_le,
+    pub device_root: u64_le,
+    pub device_root_generation: u64_le,
+    pub checksum_root: u64_le,
+    pub checksum_root_generation: u64_le,
+    pub total_bytes: u64_le,
+    pub bytes_used: u64_le,
+    pub device_count: u64_le,
     pub tree_root_level: u8,
     pub chunk_root_level: u8,
     pub extent_root_level: u8,
@@ -270,73 +206,12 @@ pub struct RootBackup {
     pub checksum_root_level: u8,
 }
 
-impl RootBackup {
-    pub const RAW_SIZE: usize = 168;
-
-    pub fn from_raw(bytes: &[u8]) -> Self {
-        assert!(bytes.len() >= Self::RAW_SIZE);
-
-        Self {
-            tree_root: read_u64(bytes, 0),
-            tree_root_generation: read_u64(bytes, 8),
-            chunk_root: read_u64(bytes, 16),
-            chunk_root_generation: read_u64(bytes, 24),
-            extent_root: read_u64(bytes, 32),
-            extent_root_generation: read_u64(bytes, 40),
-            filesystem_root: read_u64(bytes, 48),
-            filesystem_root_generation: read_u64(bytes, 56),
-            device_root: read_u64(bytes, 64),
-            device_root_generation: read_u64(bytes, 72),
-            checksum_root: read_u64(bytes, 80),
-            checksum_root_generation: read_u64(bytes, 88),
-            total_bytes: read_u64(bytes, 96),
-            bytes_used: read_u64(bytes, 104),
-            device_count: read_u64(bytes, 112),
-            // 120..=151 unused
-            tree_root_level: read_u8(bytes, 152),
-            chunk_root_level: read_u8(bytes, 153),
-            extent_root_level: read_u8(bytes, 154),
-            filesystem_root_level: read_u8(bytes, 155),
-            device_root_level: read_u8(bytes, 156),
-            checksum_root_level: read_u8(bytes, 157),
-            // 158..=167 unused
-        }
-    }
-    pub fn to_raw(this: Self, bytes: &mut [u8]) {
-        assert!(bytes.len() >= Self::RAW_SIZE);
-
-        write_u64(bytes, 0, this.tree_root);
-        write_u64(bytes, 8, this.tree_root_generation);
-        write_u64(bytes, 16, this.chunk_root);
-        write_u64(bytes, 24, this.chunk_root_generation);
-        write_u64(bytes, 32, this.extent_root);
-        write_u64(bytes, 40, this.extent_root_generation);
-        write_u64(bytes, 48, this.filesystem_root);
-        write_u64(bytes, 56, this.filesystem_root_generation);
-        write_u64(bytes, 64, this.device_root);
-        write_u64(bytes, 72, this.device_root_generation);
-        write_u64(bytes, 80, this.checksum_root);
-        write_u64(bytes, 88, this.checksum_root_generation);
-        write_u64(bytes, 96, this.total_bytes);
-        write_u64(bytes, 104, this.bytes_used);
-        write_u64(bytes, 112, this.device_count);
-        // 120..=151 unused
-        write_u8(bytes, 152, this.tree_root_level);
-        write_u8(bytes, 153, this.chunk_root_level);
-        write_u8(bytes, 154, this.extent_root_level);
-        write_u8(bytes, 155, this.filesystem_root_level);
-        write_u8(bytes, 156, this.device_root_level);
-        write_u8(bytes, 157, this.checksum_root_level);
-        // 158..=167 unused
-    }
-}
-
 impl SystemChunkArray {
-    pub fn parse(bytes: &[u8]) -> Self {
+    pub fn iter<'a>(bytes: &'a [u8]) -> impl Iterator<Item = (DiskKey, crate::items::ChunkItem)> + 'a {
         let stride = DiskKey::LEN + ChunkItem::LEN;
 
-        let pairs = (0..bytes.len() / stride)
-            .map(|i| {
+        (0..bytes.len() / stride)
+            .map(move |i| {
                 let key_bytes = &bytes[i * stride..i * stride + DiskKey::LEN];
                 let chunk_bytes = &bytes[i * stride + DiskKey::LEN..(i + 1) * stride];
 
@@ -360,9 +235,6 @@ impl SystemChunkArray {
 
                 (key, chunk)
             })
-            .collect();
-
-        Self(pairs)
     }
 }
 

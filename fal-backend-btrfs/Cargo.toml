@@ -8,7 +8,13 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 fal = { path = "../fal", version = "0.1" }
 
+blake2 = "0.8"
 crc = "1"
 bitflags = "1.2"
-enum_primitive = "0.1"
+byteorder = "1.3"
+num-derive = "0.3"
+num-traits = "0.2"
+twox-hash = "1.5"
+sha2 = "0.8"
 uuid = "0.8"
+zerocopy = "0.3"

@@ -8,9 +8,25 @@ use std::cmp::Ordering;
 
 use bitflags::bitflags;
 use crc::{crc32, Hasher32};
-use enum_primitive::*;
+use num_derive::FromPrimitive;
+use num_traits::FromPrimitive as _;
+use zerocopy::{AsBytes, FromBytes, Unaligned};
 
 use fal::{read_u32, read_u64, read_u8};
+
+#[allow(non_camel_case_types)]
+type u64_le = zerocopy::byteorder::U64<byteorder::LittleEndian>;
+#[allow(non_camel_case_types)]
+type u32_le = zerocopy::byteorder::U32<byteorder::LittleEndian>;
+#[allow(non_camel_case_types)]
+type u16_le = zerocopy::byteorder::U16<byteorder::LittleEndian>;
+
+#[allow(non_camel_case_types)]
+type i64_le = zerocopy::byteorder::I64<byteorder::LittleEndian>;
+#[allow(non_camel_case_types)]
+type i32_le = zerocopy::byteorder::I32<byteorder::LittleEndian>;
+#[allow(non_camel_case_types)]
+type i16_le = zerocopy::byteorder::I16<byteorder::LittleEndian>;
 
 mod sizes {
     pub const K: u64 = 1024;
@@ -20,31 +36,26 @@ mod sizes {
     pub const P: u64 = T * K;
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, AsBytes, FromBytes, Unaligned)]
+#[repr(packed)]
 pub struct DiskKey {
-    pub oid: u64,
-    pub ty: DiskKeyType,
-    pub offset: u64,
+    pub oid: u64_le,
+    pub ty: u8,
+    pub offset: u64_le,
 }
 
 impl DiskKey {
-    const LEN: usize = 17;
-
-    pub fn parse(bytes: &[u8]) -> Self {
-        Self {
-            oid: read_u64(bytes, 0),
-            ty: DiskKeyType::from_u8(read_u8(bytes, 8)).unwrap(),
-            offset: read_u64(bytes, 9),
-        }
+    pub fn ty(&self) -> Option<DiskKeyType> {
+        DiskKeyType::from_u8(self.ty)
     }
     fn compare(&self, other: &Self) -> Ordering {
         self.compare_without_offset(other)
-            .then(self.offset.cmp(&other.offset))
+            .then(self.offset.get().cmp(&other.offset.get()))
     }
     pub fn compare_without_offset(&self, other: &Self) -> Ordering {
-        self.oid
-            .cmp(&other.oid)
-            .then((&(self.ty as u8)).cmp(&(other.ty as u8)))
+        self.oid.get()
+            .cmp(&other.oid.get())
+            .then((&{self.ty}).cmp(&{other.ty}))
     }
 }
 
@@ -59,49 +70,47 @@ impl Ord for DiskKey {
     }
 }
 
-enum_from_primitive! {
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    pub enum DiskKeyType {
-        Unknown = 0,
-        InodeItem = 1,
-        InodeRef = 12,
-        InodeExtref = 13,
-        XattrItem = 24,
-        OrphanItem = 48,
-        DirLogItem = 60,
-        DirLogIndex = 72,
-        DirItem = 84,
-        DirIndex = 96,
-        ExtentData = 108,
-        ExtentCsum = 128,
-        RootItem = 132,
-        RootBackref = 144,
-        RootRef = 156,
-        ExtentItem = 168,
-        MetadataItem = 169,
-        TreeBlockRef = 176,
-        ExtentDataRef = 178,
-        ExtentRefV0 = 180,
-        SharedBlockRef = 182,
-        SharedDataRef = 184,
-        BlockGroupItem = 192,
-        FreeSpaceInfo = 198,
-        FreeSpaceExtent = 199,
-        FreeSpaceBitmap = 200,
-        DevExtent = 204,
-        DevItem = 216,
-        ChunkItem = 228,
-        QgroupStatus = 240,
-        QgroupInfo = 242,
-        QgroupLimit = 244,
-        QgroupRelation = 246,
-        TemporaryItem = 248,
-        PersistentItem = 249,
-        DevReplace = 250,
-        UuidSubvol = 251,
-        UuidReceivedSubvol = 252,
-        StringItem = 253,
-    }
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, FromPrimitive)]
+pub enum DiskKeyType {
+    Unknown = 0,
+    InodeItem = 1,
+    InodeRef = 12,
+    InodeExtref = 13,
+    XattrItem = 24,
+    OrphanItem = 48,
+    DirLogItem = 60,
+    DirLogIndex = 72,
+    DirItem = 84,
+    DirIndex = 96,
+    ExtentData = 108,
+    ExtentCsum = 128,
+    RootItem = 132,
+    RootBackref = 144,
+    RootRef = 156,
+    ExtentItem = 168,
+    MetadataItem = 169,
+    TreeBlockRef = 176,
+    ExtentDataRef = 178,
+    ExtentRefV0 = 180,
+    SharedBlockRef = 182,
+    SharedDataRef = 184,
+    BlockGroupItem = 192,
+    FreeSpaceInfo = 198,
+    FreeSpaceExtent = 199,
+    FreeSpaceBitmap = 200,
+    DevExtent = 204,
+    DevItem = 216,
+    ChunkItem = 228,
+    QgroupStatus = 240,
+    QgroupInfo = 242,
+    QgroupLimit = 244,
+    QgroupRelation = 246,
+    TemporaryItem = 248,
+    PersistentItem = 249,
+    DevReplace = 250,
+    UuidSubvol = 251,
+    UuidReceivedSubvol = 252,
+    StringItem = 253,
 }
 
 bitflags! {
@@ -133,27 +142,11 @@ impl Checksum {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, AsBytes, FromBytes, Unaligned)]
+#[repr(packed)]
 pub struct Timespec {
-    pub sec: i64,
-    pub nsec: u32,
-}
-
-impl Timespec {
-    pub const LEN: usize = 12;
-
-    pub fn parse(bytes: &[u8]) -> Self {
-        Self {
-            sec: read_u64(bytes, 0) as i64,
-            nsec: read_u32(bytes, 8),
-        }
-    }
-}
-
-pub fn read_timespec(bytes: &[u8], offset: &mut usize) -> Timespec {
-    let ret = Timespec::parse(&bytes[*offset..*offset + Timespec::LEN]);
-    *offset += Timespec::LEN;
-    ret
+    pub sec: i64_le,
+    pub nsec: u32_le,
 }
 
 pub mod oid {
