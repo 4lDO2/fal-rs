@@ -1,14 +1,17 @@
-use crate::{
-    items::{BlockGroupType, DevItem, ChunkItem},
-    sizes, Checksum, DiskKey, DiskKeyType,
-
-    u64_le, u32_le, u16_le,
-};
+use core::{fmt, mem};
 
 use bitflags::bitflags;
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive as _;
+use thiserror::Error;
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
+
+use crate::{
+    items::{BlockGroupType, DevItem, ChunkItem},
+    sizes, Checksum, DiskKey, DiskKeyType, InvalidChecksum,
+
+    u64_le, u32_le, u16_le,
+};
 
 const SUPERBLOCK_OFFSETS: [u64; 4] = [64 * sizes::K, 64 * sizes::M, 256 * sizes::G, 1 * sizes::P];
 const CHECKSUM_SIZE: usize = 32;
@@ -84,8 +87,8 @@ unsafe impl zerocopy::Unaligned for DeviceLabel {
 where Self: Sized {}
 }
 
-impl std::fmt::Display for DeviceLabel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for DeviceLabel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let bytes = if let Some(zero_idx) = self.0.iter().copied().position(|b| b == 0) {
             &self.0[..zero_idx]
         } else {
@@ -94,10 +97,10 @@ impl std::fmt::Display for DeviceLabel {
         write!(f, "{}", String::from_utf8_lossy(bytes))
     }
 }
-impl std::fmt::Debug for DeviceLabel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for DeviceLabel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "\"")?;
-        std::fmt::Display::fmt(self, f)?;
+        fmt::Display::fmt(self, f)?;
         write!(f, "\"")
     }
 }
@@ -117,23 +120,31 @@ unsafe impl zerocopy::Unaligned for SystemChunkArray {
     fn only_derive_is_allowed_to_implement_this_trait()
 where Self: Sized {}
 }
-impl std::fmt::Debug for SystemChunkArray {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for SystemChunkArray {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_list()
             .entries(self.0.iter().copied())
             .finish()
     }
 }
 
-#[derive(Debug)]
-pub struct InvalidChecksum;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, FromPrimitive)]
 pub enum ChecksumType {
-    Crc32 = 0,
+    Crc32c = 0,
     Xxhash = 1,
     Sha256 = 2,
     Blake2 = 3,
+}
+impl ChecksumType {
+    pub fn size(self) -> usize {
+        match self {
+            Self::Crc32c => 4,
+            Self::Xxhash => 8,
+            Self::Sha256 => 32,
+            Self::Blake2 => 32,
+        }
+    }
 }
 
 impl Superblock {
@@ -156,28 +167,33 @@ impl Superblock {
             .max_by_key(|sb| sb.generation.get())
             .unwrap()
     }
-    pub fn parse<'a>(block: &'a [u8]) -> Result<LayoutVerified<&'a [u8], Self>, InvalidChecksum> {
-        let reference = LayoutVerified::<&'a [u8], Self>::new_unaligned(block).expect("calling btrfs::Superblock::parse with insufficient bytes");
-        let checksum = reference.calculate_checksum(block);
+    pub fn parse<'a>(block: &'a [u8]) -> Result<LayoutVerified<&'a [u8], Self>, SuperblockParseError> {
+        let superblock = LayoutVerified::<&'a [u8], Self>::new_unaligned(block).expect("calling btrfs::Superblock::parse with insufficient bytes");
 
-        if checksum == reference.checksum {
-            Ok(reference)
+        let checksum_ty = ChecksumType::from_u8(superblock.checksum_type).ok_or(SuperblockParseError::UnrecognizedChecksumTy(superblock.checksum_type))?;
+
+        let stored_checksum = Checksum::parse(checksum_ty, &block[..32]).ok_or(InvalidChecksum::UnsupportedChecksum(checksum_ty))?;
+        let calculated_checksum = Checksum::calculate(checksum_ty, &block[32..]).ok_or(InvalidChecksum::UnsupportedChecksum(checksum_ty))?;
+
+        if calculated_checksum == stored_checksum {
+            Ok(superblock)
         } else {
-            Err(InvalidChecksum)
-        }
-    }
-    pub fn calculate_checksum(&self, block: &[u8]) -> [u8; 32] {
-        match self.checksum_ty() {
-            ChecksumType::Crc32 => todo!(),
-            ChecksumType::Xxhash => todo!(),
-            ChecksumType::Sha256 => todo!(),
-            ChecksumType::Blake2 => todo!(),
+            Err(InvalidChecksum::Mismatch.into())
         }
     }
     /// Panics if the checksum_ty field has been set to something else after validation.
     pub fn checksum_ty(&self) -> ChecksumType {
         ChecksumType::from_u8(self.checksum_type).expect("checksum_ty has been set to invalid value")
     }
+}
+
+#[derive(Debug, Error)]
+pub enum SuperblockParseError {
+    #[error("unrecognized checksum type: {0}")]
+    UnrecognizedChecksumTy(u8),
+    
+    #[error("invalid checksum: {0}")]
+    InvalidChecksum(#[from] InvalidChecksum),
 }
 
 #[derive(Clone, Copy, Debug, Default, AsBytes, FromBytes, Unaligned)]
@@ -207,8 +223,32 @@ pub struct RootBackup {
 }
 
 impl SystemChunkArray {
-    pub fn iter<'a>(bytes: &'a [u8]) -> impl Iterator<Item = (DiskKey, crate::items::ChunkItem)> + 'a {
-        let stride = DiskKey::LEN + ChunkItem::LEN;
+    pub fn iter<'a>(&'a self, sys_chunk_array_size: usize) -> impl Iterator<Item = (LayoutVerified<&'a [u8], DiskKey>, &'a ChunkItem)> + 'a {
+        struct Iter<'a>(&'a [u8]);
+
+        impl<'a> Iterator for Iter<'a> {
+            type Item = (LayoutVerified<&'a [u8], DiskKey>, &'a ChunkItem);
+
+            fn next(&mut self) -> Option<Self::Item> {
+                let key_size = mem::size_of::<DiskKey>();
+
+                if self.0.len() < key_size {
+                    return None;
+                }
+
+                // TODO: Verify that types are correct etc.
+
+                let key = LayoutVerified::new_unaligned(&self.0[..key_size])?;
+                let item_size = ChunkItem::struct_size(&self.0[key_size..])?.get();
+                let item = ChunkItem::parse(&self.0[key_size..key_size + item_size])?;
+
+                self.0 = &self.0[mem::size_of::<DiskKey>() + item_size..];
+
+                Some((key, item))
+            }
+        }
+
+        /*let stride = mem::size_of::<DiskKey>() + mem::size_of::<ChunkItem>();
 
         (0..bytes.len() / stride)
             .map(move |i| {
@@ -235,6 +275,8 @@ impl SystemChunkArray {
 
                 (key, chunk)
             })
+        */
+        Iter(&self.0[..sys_chunk_array_size])
     }
 }
 

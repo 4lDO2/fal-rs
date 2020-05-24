@@ -6,7 +6,8 @@ use std::collections::BTreeMap;
 /// virtualized because of RAID.
 #[derive(Debug)]
 pub struct ChunkMap {
-    map: BTreeMap<u64, ChunkItem>,
+    // TODO: Remove box
+    map: BTreeMap<u64, Box<ChunkItem>>,
 }
 
 impl ChunkMap {

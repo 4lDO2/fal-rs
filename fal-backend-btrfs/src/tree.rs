@@ -16,7 +16,7 @@ use crate::{
         FileExtentItem, InodeItem, InodeRef, RootItem, RootRef, UuidItem,
     },
     superblock::{ChecksumType, Superblock},
-    Checksum, DiskKey, DiskKeyType,
+    Checksum, DiskKey, DiskKeyType, InvalidChecksum,
 
     u64_le, u32_le,
 };
@@ -40,6 +40,20 @@ pub struct Header {
     pub level: u8,
 }
 
+impl Header {
+    pub fn parse<'a>(checksum_ty: ChecksumType, bytes: &'a [u8]) -> Result<LayoutVerified<&'a [u8], Self>, InvalidChecksum> {
+        let this = LayoutVerified::new_unaligned(bytes).unwrap();
+
+        let stored_checksum = Checksum::parse(checksum_ty, &bytes[..32]).ok_or(InvalidChecksum::UnsupportedChecksum(checksum_ty))?;
+        let checksum = Checksum::calculate(checksum_ty, &bytes[32..]).ok_or(InvalidChecksum::UnsupportedChecksum(checksum_ty))?;
+
+        if stored_checksum != checksum {
+            return Err(InvalidChecksum::Mismatch);
+        }
+        Ok(this)
+    }
+}
+
 pub struct Node {
     pub header: Header,
     pub key_ptrs: [KeyPtr],
@@ -48,7 +62,7 @@ impl fmt::Debug for Node {
      fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
          f.debug_struct("Node")
              .field("header", &{self.header})
-             .field("key_ptrs", &self.key_ptrs)
+             .field("key_ptrs", &&self.key_ptrs)
              .finish()
      }
 }
@@ -70,14 +84,14 @@ impl Node {
                 return None;
             }
 
-            if mem::size_of::<Header>() + item_count * mem::size_of::<KeyPtr>() >= bytes.len() {
+            if mem::size_of::<Header>() + item_count as usize * mem::size_of::<KeyPtr>() >= bytes.len() {
                 return None;
             }
 
-            let begin = bytes.as_ptr();
-            let len = item_count;
+            let begin = bytes.as_ptr() as *const KeyPtr;
+            let len = item_count as usize;
 
-            Ok(&*(std::slice::from_raw_parts(begin, len) as *const [KeyPtr] as *const Self))
+            Some(&*(std::slice::from_raw_parts(begin, len) as *const [KeyPtr] as *const Self))
         }
     }
 }
@@ -95,15 +109,15 @@ pub struct Item {
     pub size: u32_le,
 }
 
-#[derive(Clone, Debug)]
-pub enum Value<'a, B = &'a [u8]> {
+#[derive(Debug)]
+pub enum Value<'a, B: ByteSlice = &'a [u8]> {
     BlockGroupItem(LayoutVerified<B, BlockGroupItem>),
     Chunk(&'a ChunkItem),
     Device(LayoutVerified<B, DevItem>),
     DevExtent(LayoutVerified<B, DevExtent>),
     DirIndex(LayoutVerified<B, DirItem>),
     DirItem(LayoutVerified<B, DirItem>),
-    ExtentCsum(LayoutVerified<B, CsumItem>),
+    ExtentCsum(&'a CsumItem),
     ExtentData(&'a FileExtentItem),
     ExtentItem(LayoutVerified<B, ExtentItem>),
     InodeItem(LayoutVerified<B, InodeItem>),
@@ -113,8 +127,8 @@ pub enum Value<'a, B = &'a [u8]> {
     Root(LayoutVerified<B, RootItem>),
     RootRef(LayoutVerified<B, RootRef>),
     RootBackref(LayoutVerified<B, RootRef>),
-    UuidSubvol(LayoutVerified<B, UuidItem>),
-    UuidReceivedSubvol(LayoutVerified<B, UuidItem>),
+    UuidSubvol(&'a UuidItem),
+    UuidReceivedSubvol(&'a UuidItem),
     XattrItem(LayoutVerified<B, DirItem>),
     Unknown,
 }
@@ -122,19 +136,19 @@ pub enum Value<'a, B = &'a [u8]> {
 impl<'a, B: ByteSlice> Value<'a, B> {
     pub fn as_root_item(&self) -> Option<LayoutVerified<B, RootItem>> {
         match self {
-            Self::Root(item) => Some(item),
+            &Self::Root(item) => Some(item),
             _ => None,
         }
     }
-    pub fn as_chunk_item(self) -> Option<&'a ChunkItem> {
+    pub fn as_chunk_item(&self) -> Option<&'a ChunkItem> {
         match self {
-            Self::Chunk(item) => Some(item),
+            &Self::Chunk(item) => Some(item),
             _ => None,
         }
     }
     pub fn is_chunk_item(&self) -> bool {
         match self {
-            Self::Chunk(_) => true,
+            &Self::Chunk(_) => true,
             _ => false,
         }
     }
@@ -199,45 +213,45 @@ impl Leaf {
                 return None;
             }
 
-            let begin = bytes.as_ptr();
+            let begin = bytes.as_ptr() as *const KeyPtr;
             let len = bytes.len() - mem::size_of::<Header>();
 
-            Ok(&*(std::slice::from_raw_parts(begin, len) as *const [KeyPtr] as *const Self))
+            Some(&*(std::slice::from_raw_parts(begin, len) as *const [KeyPtr] as *const Self))
         }
     }
-    pub fn iter<'a>(&'a self) -> impl Iterator<Item = (&'a Item, Value<'a>)> + 'a {
+    pub fn iter<'a>(&'a self) -> impl Iterator<Item = (LayoutVerified<&'a [u8], Item>, Value<'a>)> + 'a {
         (0..self.header.item_count.get() as usize)
-            .map(|i| LayoutVerified::new_unaligned(&self.data[i * mem::size_of::<Item>()..(i + 1) * mem::size_of::<Item>()]))
-            .map(|item| {
-                let value_bytes = &self.data[item.offset as usize..item.offset as usize + item.size as usize];
+            .map_while(|i| LayoutVerified::new_unaligned(&self.data[i * mem::size_of::<Item>()..(i + 1) * mem::size_of::<Item>()]))
+            .map_while(|item: LayoutVerified<&'a [u8], Item>| -> Option<_> {
+                let value_bytes = &self.data[item.offset.get() as usize..item.offset.get() as usize + item.size.get() as usize];
 
                 let ty = match item.key.ty() {
                     Some(ty) => ty,
-                    None => return Value::Unknown, // TODO: Warn
+                    None => return Some(Value::Unknown), // TODO: Warn
                 };
 
-                let value = match ty {
-                    DiskKeyType::BlockGroupItem => Value::BlockGroupItem(LayoutVerified::new_unaligned(value_bytes)),
-                    DiskKeyType::ChunkItem => Value::ChunkItem(LayoutVerified::new_unaligned(value_bytes)),
-                    DiskKeyType::DevExtent => Value::DevExtent(LayoutVerified::new_unaligned(value_bytes)),
-                    DiskKeyType::DevItem => Value::DevItem(LayoutVerified::new_unaligned(value_bytes)),
-                    DiskKeyType::DirIndex => Value::DirIndex(LayoutVerified::new_unaligned(value_bytes)),
-                    DiskKeyType::DirItem => Value::DirItem(LayoutVerified::new_unaligned(value_bytes)),
-                    DiskKeyType::ExtentCsum => Value::ExtentCsum(LayoutVerified::new_unaligned(value_bytes)),
-                    DiskKeyType::ExtentData => Value::ExtentData(LayoutVerified::new_unaligned(value_bytes)),
-                    DiskKeyType::ExtentItem => Value::ExtentItem(LayoutVerified::new_unaligned(value_bytes)),
-                    DiskKeyType::InodeItem => Value::InodeItem(LayoutVerified::new_unaligned(value_bytes)),
-                    DiskKeyType::InodeRef => Value::InodeRef(LayoutVerified::new_unaligned(value_bytes)),
-                    DiskKeyType::MetadataItem => Value::MetadataItem(LayoutVerified::new_unaligned(value_bytes)),
-                    DiskKeyType::PersistentItem => Value::PersistentItem(LayoutVerified::new_unaligned(value_bytes)),
-                    DiskKeyType::RootBackref => Value::RootBackref(LayoutVerified::new_unaligned(value_bytes)),
-                    DiskKeyType::RootItem => Value::RootItem(LayoutVerified::new_unaligned(value_bytes)),
-                    DiskKeyType::RootRef => Value::RootRef(LayoutVerified::new_unaligned(value_bytes)),
-                    DiskKeyType::UuidSubvol => Value::UuidSubvol(LayoutVerified::new_unaligned(value_bytes)),
-                    DiskKeyType::UuidReceivedSubvol => Value::UuidReceivedSubvol(LayoutVerified::new_unaligned(value_bytes)),
-                    DiskKeyType::XattrItem => Value::XattrItem(LayoutVerified::new_unaligned(value_bytes)),
+                let value: Value::<'a> = match ty {
+                    DiskKeyType::BlockGroupItem => Value::BlockGroupItem(LayoutVerified::new_unaligned(value_bytes)?),
+                    DiskKeyType::ChunkItem => Value::Chunk(ChunkItem::parse(value_bytes)?),
+                    DiskKeyType::DevExtent => Value::DevExtent(LayoutVerified::new_unaligned(value_bytes)?),
+                    DiskKeyType::DevItem => Value::Device(LayoutVerified::new_unaligned(value_bytes)?),
+                    DiskKeyType::DirIndex => Value::DirIndex(LayoutVerified::new_unaligned(value_bytes)?),
+                    DiskKeyType::DirItem => Value::DirItem(LayoutVerified::new_unaligned(value_bytes)?),
+                    DiskKeyType::ExtentCsum => Value::ExtentCsum(CsumItem::parse(value_bytes)),
+                    DiskKeyType::ExtentData => Value::ExtentData(FileExtentItem::parse(value_bytes)?),
+                    DiskKeyType::ExtentItem => Value::ExtentItem(LayoutVerified::new_unaligned(value_bytes)?),
+                    DiskKeyType::InodeItem => Value::InodeItem(LayoutVerified::new_unaligned(value_bytes)?),
+                    DiskKeyType::InodeRef => Value::InodeRef(InodeRef::parse(value_bytes)?),
+                    DiskKeyType::MetadataItem => Value::MetadataItem(LayoutVerified::new_unaligned(value_bytes)?),
+                    DiskKeyType::PersistentItem => Value::PersistentItem(LayoutVerified::new_unaligned(value_bytes)?),
+                    DiskKeyType::RootBackref => Value::RootBackref(LayoutVerified::new_unaligned(value_bytes)?),
+                    DiskKeyType::RootItem => Value::Root(LayoutVerified::new_unaligned(value_bytes)?),
+                    DiskKeyType::RootRef => Value::RootRef(LayoutVerified::new_unaligned(value_bytes)?),
+                    DiskKeyType::UuidSubvol => Value::UuidSubvol(UuidItem::parse(value_bytes)),
+                    DiskKeyType::UuidReceivedSubvol => Value::UuidReceivedSubvol(UuidItem::parse(value_bytes)),
+                    DiskKeyType::XattrItem => Value::XattrItem(LayoutVerified::new_unaligned(value_bytes)?),
                 };
-                (item, value)
+                Some((item, value))
             })
     }
 }
@@ -255,22 +269,22 @@ impl fmt::Debug for Leaf {
 
         f.debug_struct("Leaf")
             .field("header", &{self.header})
-            .field("pairs", Pairs(self))
+            .field("pairs", &Pairs(self))
             .finish()
     }
 }
 
-#[derive(Clone, Debug)]
-pub enum Tree {
-    Internal(Node),
-    Leaf(Leaf),
+#[derive(Clone, Copy, Debug)]
+pub enum Tree<'a> {
+    Internal(&'a Node),
+    Leaf(&'a Leaf),
 }
 
 fn always_equal<'b>(_: &'b DiskKey, _: &'b DiskKey) -> Ordering {
     Ordering::Equal
 }
 
-impl Tree {
+impl<'a> Tree<'a> {
     pub fn as_leaf(&self) -> Option<&Leaf> {
         match self {
             Self::Leaf(l) => Some(l),
@@ -289,20 +303,20 @@ impl Tree {
             Self::Leaf(leaf) => &leaf.header,
         }
     }
-    pub fn parse(checksum_type: ChecksumType, bytes: &[u8]) -> Self {
-        let header = Header::parse(checksum_type, &bytes);
+    pub fn parse(checksum_type: ChecksumType, bytes: &'a [u8]) -> Result<&'a Self, InvalidChecksum> {
+        let header = Header::parse(checksum_type, &bytes)?;
 
-        match header.level {
-            0 => Self::Leaf(Leaf::parse(checksum_type, header, &bytes[Header::LEN..])),
-            _ => Self::Internal(Node::parse(header, &bytes[Header::LEN..])),
-        }
+        Ok(match header.level {
+            0 => Self::Leaf(Leaf::parse(checksum_type, header, &bytes[mem::size_of::<Header>()..])),
+            _ => Self::Internal(Node::parse(header, &bytes[mem::size_of::<Header>()..])),
+        })
     }
-    pub fn load<D: fal::Device>(
+    pub fn load<D: fal::DeviceRo>(
         device: &mut D,
         superblock: &Superblock,
         chunk_map: &ChunkMap,
         addr: u64,
-    ) -> Self {
+    ) -> owning_ref::BoxRef<[u8]> {
         let block = filesystem::read_node(device, superblock, chunk_map, addr);
         Self::parse(superblock.checksum_ty(), &block)
     }

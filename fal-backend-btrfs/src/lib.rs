@@ -1,18 +1,22 @@
+#![feature(iter_map_while)]
+
 pub mod chunk_map;
 pub mod filesystem;
 pub mod items;
 pub mod superblock;
 pub mod tree;
 
-use std::cmp::Ordering;
+use core::cmp::Ordering;
+use core::convert::TryFrom;
 
 use bitflags::bitflags;
 use crc::{crc32, Hasher32};
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive as _;
+use thiserror::Error;
 use zerocopy::{AsBytes, FromBytes, Unaligned};
 
-use fal::{read_u32, read_u64, read_u8};
+use crate::superblock::ChecksumType;
 
 #[allow(non_camel_case_types)]
 type u64_le = zerocopy::byteorder::U64<byteorder::LittleEndian>;
@@ -122,23 +126,130 @@ bitflags! {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Checksum {
-    Crc32(u32),
+    Crc32c(u32),
+    Xxhash(u64),
+    Sha256([u8; 32]),
+    Blake2([u8; 32]),
+}
+
+#[derive(Debug, Error)]
+pub enum InvalidChecksum {
+    #[error("checksum mismatch")]
+    Mismatch,
+
+    #[error("unsupported (disabled at compile-time) checksum: {0:?}. supported checksums: {:?}", Checksum::supported_checksums().collect::<Vec<_>>())]
+    UnsupportedChecksum(ChecksumType),
 }
 
 impl Checksum {
-    pub fn new(ty: superblock::ChecksumType, bytes: &[u8]) -> Self {
+    pub const CRC32C_SEED: u32 = 0;
+    pub const XXHASH_SEED: u64 = 0;
+
+    pub fn parse(ty: ChecksumType, bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < 32 { return None }
+
+        Some(match ty {
+            ChecksumType::Crc32c => Self::Crc32c(u32::from_le_bytes(<[u8; 4]>::try_from(&bytes[..4]).ok()?)),
+            ChecksumType::Xxhash => Self::Xxhash(u64::from_le_bytes(<[u8; 8]>::try_from(&bytes[..8]).ok()?)),
+            ChecksumType::Sha256 => Self::Sha256(<[u8; 32]>::try_from(&bytes[..32]).ok()?),
+            ChecksumType::Blake2 => Self::Sha256(<[u8; 32]>::try_from(&bytes[..32]).ok()?),
+        })
+    }
+    pub fn serialize(&self, bytes: &mut [u8]) -> Option<()> {
+        if bytes.len() < 32 { return None }
+
+        match self {
+            &Checksum::Crc32c(hash) => {
+                bytes[..4].copy_from_slice(&u32::to_le_bytes(hash));
+                for byte in &mut bytes[4..] {
+                    *byte = 0;
+                }
+            }
+            &Checksum::Xxhash(hash) => {
+                bytes[..8].copy_from_slice(&u64::to_le_bytes(hash));
+                for byte in &mut bytes[8..] {
+                    *byte = 0;
+                }
+            }
+            &Checksum::Sha256(ref hash) => bytes[..32].copy_from_slice(hash),
+            &Checksum::Blake2(ref hash) => bytes[..32].copy_from_slice(hash),
+        }
+
+        Some(())
+    }
+    pub fn calculate(ty: superblock::ChecksumType, bytes: &[u8]) -> Option<Self> {
         match ty {
-            superblock::ChecksumType::Crc32 => Self::Crc32(read_u32(bytes, 0)),
+            #[cfg(feature = "crc")]
+            ChecksumType::Crc32c => Some({
+                use crc::crc64::Hasher64;
+
+                let mut hasher = crc32::Digest::new_with_initial(crc32::CASTAGNOLI, Self::CRC32C_SEED);
+                hasher.write(bytes);
+                Checksum::Crc32c(hasher.sum32())
+            }),
+            #[cfg(feature = "twox_hash")]
+            ChecksumType::Xxhash => Some({
+                use core::hash::Hasher;
+
+                let mut hasher = twox_hash::Xxhash64::with_seed(Self, Self::XXHASH_SEED);
+                hasher.write(bytes);
+                Checksum::Xxhash(hasher.finish())
+            }),
+            #[cfg(feature = "sha2")]
+            ChecksumType::Sha256 => Some({
+                use sha2::digest::{FixedOutput, Input};
+
+                let mut hasher = sha2::Sha256::default();
+                hasher.input(bytes);
+                Checksum::Sha256(hasher.fixed_result().into())
+            }),
+            #[cfg(feature = "blake")]
+            ChecksumType::Blake2 => Some({
+                use blake2::digest::{FixedOutput, Input};
+
+                let mut hasher = blake2::Blake2b::default();
+                hasher.input(bytes);
+                Checksum::Blake2(hasher.fixed_result().into())
+            }),
+
+            _ => None,
         }
     }
-    pub fn calculate(ty: superblock::ChecksumType, bytes: &[u8]) -> Self {
-        match ty {
-            superblock::ChecksumType::Crc32 => {
-                let mut hasher = crc32::Digest::new_with_initial(crc32::CASTAGNOLI, 0);
-                hasher.write(bytes);
-                Checksum::Crc32(hasher.sum32())
-            }
+    pub fn ty(&self) -> ChecksumType {
+        match self {
+            &Self::Crc32c(_) => ChecksumType::Crc32c,
+            &Self::Xxhash(_) => ChecksumType::Xxhash,
+            &Self::Sha256(_) => ChecksumType::Sha256,
+            &Self::Blake2(_) => ChecksumType::Blake2,
         }
+    }
+    pub fn size(&self) -> usize {
+        self.ty().size()
+    }
+
+    const SUPPORTED_CHECKSUMS: [Option<ChecksumType>; 4] = [
+        #[cfg(feature = "crc")]
+        Some(ChecksumType::Crc32c),
+        #[cfg(not(feature = "crc"))]
+        None,
+
+        #[cfg(feature = "twox_hash")]
+        Some(ChecksumType::Xxhash),
+        #[cfg(not(feature = "twox_hash"))]
+        None,
+
+        #[cfg(feature = "sha2")]
+        Some(ChecksumType::Sha256),
+        #[cfg(not(feature = "sha2"))]
+        None,
+
+        #[cfg(feature = "blake2")]
+        Some(ChecksumType::Blake2),
+        #[cfg(not(feature = "blake2"))]
+        None,
+    ];
+    pub fn supported_checksums() -> impl Iterator<Item = ChecksumType> + 'static {
+        Self::SUPPORTED_CHECKSUMS.iter().copied().filter_map(|c| c)
     }
 }
 

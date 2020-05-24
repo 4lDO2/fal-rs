@@ -1,4 +1,6 @@
-use std::mem;
+use core::{fmt, mem, slice};
+use core::convert::TryFrom;
+use core::num::NonZeroUsize;
 
 use crate::{
     superblock::{ChecksumType, Superblock},
@@ -28,7 +30,7 @@ bitflags! {
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Eq, Hash, PartialEq)]
 #[repr(packed)]
 pub struct ChunkItem {
     pub len: u64_le,
@@ -49,8 +51,16 @@ pub struct ChunkItem {
 impl ChunkItem {
     pub const BASE_LEN: usize = 48;
 
+    pub fn struct_size(bytes: &[u8]) -> Option<NonZeroUsize> {
+        if bytes.len() < Self::BASE_LEN {
+            return None;
+        }
+        let stripe_count = u16::from_le_bytes(<[u8; 2]>::try_from(&bytes[46..48]).ok()?);
+        Self::BASE_LEN + stripe_count as usize * mem::size_of::<Stripe>();
+    }
+
     pub fn parse<'a>(bytes: &'a [u8]) -> Option<&'a Self> {
-        let stripe_count = u16::from_le_bytes(<[u8; 2]>::from(&bytes[44..56]));
+        let stripe_count = u16::from_le_bytes(<[u8; 2]>::try_from(&bytes[44..56]).ok()?);
 
         unsafe {
             if bytes.len() < Self::BASE_LEN {
@@ -61,13 +71,13 @@ impl ChunkItem {
                 return None;
             }
 
-            let begin = bytes.as_ptr();
-            let len = stripe_count;
+            let begin = bytes.as_ptr() as *const Stripe;
+            let len = stripe_count as usize;
 
             // I'm amazed this actually works and was allowed by miri when I tested a similar
             // example. It's a little bizarre to create the slice you first want at the end and
             // then eventually cast it to the whole struct.
-            Ok(&*(std::slice::from_raw_parts(begin, len) as *const [Stripe] as *const Self))
+            Some(&*(slice::from_raw_parts(begin, len) as *const [Stripe] as *const Self))
         }
     }
     pub fn stripe_for_dev(&self, superblock: &Superblock) -> &Stripe {
@@ -75,6 +85,22 @@ impl ChunkItem {
             .iter()
             .find(|stripe| &stripe.device_uuid == &superblock.device_item.uuid)
             .expect("Using the superblock of a different filesystem")
+    }
+}
+impl fmt::Debug for ChunkItem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ChunkItem")
+            .field("len", &self.len.get())
+            .field("owner", &self.owner.get())
+            .field("stripe_length", &self.stripe_length.get())
+            .field("ty", &BlockGroupType::from_bits_truncate(self.ty.get()))
+            .field("io_alignment", &self.io_alignment.get())
+            .field("io_width", &self.io_width.get())
+            .field("sector_size", &self.sector_size.get())
+            .field("stripe_count", &self.stripe_count.get())
+            .field("sub_stripe_count", &self.sub_stripe_count.get())
+            .field("stripes", &&self.stripes)
+            .finish()
     }
 }
 
@@ -172,8 +198,8 @@ pub struct InodeRef {
     pub name_len: u16_le,
     pub name: [u8],
 }
-impl std::fmt::Debug for InodeRef {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for InodeRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("InodeRef")
             .field("index", &{self.index})
             .field("name_len", &{self.name_len})
@@ -202,7 +228,7 @@ impl InodeRef {
             // I'm amazed this actually works and was allowed by miri when I tested a similar
             // example. It's a little bizarre to create the slice you first want at the end and
             // then eventually cast it to the whole struct.
-            Ok(&*(std::slice::from_raw_parts(begin, len) as *const [u8] as *const Self))
+            Ok(&*(slice::from_raw_parts(begin, len) as *const [u8] as *const Self))
         }
     }
 }
@@ -246,7 +272,6 @@ impl DirItem {
     }
 }
 
-#[derive(Clone, Debug)]
 #[repr(packed)]
 pub struct FileExtentItem {
     pub generation: u64_le,
@@ -307,7 +332,7 @@ impl FileExtentItem {
 
             let begin = bytes.as_ptr();
 
-            Ok(&*(std::slice::from_raw_parts(begin, len) as *const [u8] as *const Self))
+            Ok(&*(slice::from_raw_parts(begin, len) as *const [u8] as *const Self))
         }
     }
     pub fn ext<'a>(&'a self) -> Option<FileExtentItemExt<'a>> {
@@ -375,47 +400,53 @@ pub struct DevExtent {
     pub chunk_tree_uuid: [u8; 16],
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Eq, Hash, PartialEq)]
+#[repr(packed)]
 pub struct CsumItem {
-    checksums: Checksums,
-}
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub enum Checksums {
-    Crc32(Vec<u32>),
+    pub data: [u8],
 }
 
 impl CsumItem {
-    pub fn parse(checksum_type: ChecksumType, bytes: &[u8]) -> Self {
-        Self {
-            checksums: match checksum_type {
-                ChecksumType::Crc32 => Checksums::Crc32({
-                    assert_eq!(bytes.len() % std::mem::size_of::<u32>(), 0);
-                    (0..bytes.len() / 4)
-                        .map(|i| fal::read_u32(bytes, i * 4))
-                        .collect()
-                }),
-                _ => todo!(),
-            },
+    pub fn parse<'a>(bytes: &'a [u8]) -> &'a Self {
+        unsafe {
+            let begin = bytes.as_ptr();
+            let len = bytes.len();
+
+            &*(std::slice::from_raw_parts(begin, len) as *const [u8] as *const Self)
         }
     }
 }
+impl fmt::Debug for CsumItem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CsumItem")
+            .field("data", &&self.data)
+            .finish()
+    }
+}
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Eq, Hash, PartialEq)]
+#[repr(packed)]
 pub struct UuidItem {
     // Based on print-io.c from the btrfs source code. It seems like UUID items are simply an array
     // of subvolume ids.
-    pub subvolumes: Vec<u64>,
+    pub subvolumes: [u64],
 }
 
 impl UuidItem {
-    pub fn parse(bytes: &[u8]) -> Self {
-        assert_eq!(bytes.len() % std::mem::size_of::<u64>(), 0);
-        Self {
-            subvolumes: (0..bytes.len() / 8)
-                .map(|i| fal::read_u64(bytes, i))
-                .collect(),
+    pub fn parse<'a>(bytes: &'a [u8]) -> &'a Self {
+        unsafe {
+            let begin = bytes.as_ptr() as *const u64;
+            let len = bytes.len() / mem::size_of::<u64>();
+
+            &*(std::slice::from_raw_parts(begin, len) as *const [u64] as *const Self)
         }
+    }
+}
+impl fmt::Debug for UuidItem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("UuidItem")
+            .field("submodules", &&self.subvolumes)
+            .finish()
     }
 }
 
