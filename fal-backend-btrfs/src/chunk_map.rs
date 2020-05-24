@@ -15,10 +15,8 @@ impl ChunkMap {
         Self {
             map: superblock
                 .system_chunk_array
-                .0
-                .iter()
-                .cloned()
-                .map(|(disk_key, chunk_item)| (disk_key.offset, chunk_item))
+                .iter(superblock.system_chunk_array_size.get() as usize)
+                .map(|(disk_key, chunk_item)| (disk_key.offset.get(), chunk_item.to_box()))
                 .collect(),
         }
     }
@@ -26,12 +24,12 @@ impl ChunkMap {
         // TODO: Create a new/modify the existing BTreeMap to support getting the highest item
         // below the searched item (used to retrieve which range an address belongs to).
 
-        // Use the suboptimal O(n) approach.
+        // Don't use the suboptimal O(n) approach.
         self.map
             .iter()
             .filter(|(key, _)| *key <= &virt)
             .max_by_key(|(k, _)| *k)
-            .map(|(&k, v)| (k, v))
+            .map(|(&k, v)| (k, v.as_ref()))
     }
     pub fn get(&self, superblock: &Superblock, virt: u64) -> Option<u64> {
         // TODO: RAID (multiple stripes)
@@ -41,20 +39,20 @@ impl ChunkMap {
         };
 
         let offset = virt - key;
-        if offset >= chunk_item.len {
+        if offset >= chunk_item.len.get() {
             return None;
         }
-        Some(chunk_item.stripe(superblock).offset + offset)
+        Some(chunk_item.stripe_for_dev(superblock).offset.get() + offset)
     }
     pub fn read_chunk_tree<D: fal::Device>(
         &mut self,
         device: &mut D,
         superblock: &Superblock,
-        tree: &Tree,
+        tree: Tree,
     ) {
         let new_pairs = tree
             .pairs(device, superblock, self)
-            .filter_map(|(k, v)| v.into_chunk_item().map(|v| (k.offset, v)))
+            .filter_map(|(k, v)| v.as_chunk_item().map(|v| (k.offset.get(), v.to_box())))
             .collect::<Vec<_>>();
         self.map.extend(new_pairs)
     }

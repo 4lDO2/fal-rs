@@ -56,7 +56,7 @@ impl ChunkItem {
             return None;
         }
         let stripe_count = u16::from_le_bytes(<[u8; 2]>::try_from(&bytes[46..48]).ok()?);
-        Self::BASE_LEN + stripe_count as usize * mem::size_of::<Stripe>();
+        Some(NonZeroUsize::new(Self::BASE_LEN + stripe_count as usize * mem::size_of::<Stripe>()).unwrap())
     }
 
     pub fn parse<'a>(bytes: &'a [u8]) -> Option<&'a Self> {
@@ -80,11 +80,35 @@ impl ChunkItem {
             Some(&*(slice::from_raw_parts(begin, len) as *const [Stripe] as *const Self))
         }
     }
+    pub fn serialize(&self, bytes: &mut [u8]) {
+        // TODO: More unsafe magic
+        bytes[..8].copy_from_slice(&u64::to_le_bytes(self.len.get()));
+        bytes[8..16].copy_from_slice(&u64::to_le_bytes(self.len.get()));
+        bytes[16..24].copy_from_slice(&u64::to_le_bytes(self.len.get()));
+        bytes[24..32].copy_from_slice(&u64::to_le_bytes(self.len.get()));
+        bytes[32..36].copy_from_slice(&u64::to_le_bytes(self.len.get()));
+        bytes[36..40].copy_from_slice(&u64::to_le_bytes(self.len.get()));
+        bytes[40..44].copy_from_slice(&u64::to_le_bytes(self.len.get()));
+        bytes[44..46].copy_from_slice(&u64::to_le_bytes(self.len.get()));
+        bytes[46..48].copy_from_slice(&u64::to_le_bytes(self.len.get()));
+
+        for (i, stripe) in self.stripes.iter().enumerate() {
+            bytes[48 + i * mem::size_of::<Stripe>()..48 + (i + 1) * mem::size_of::<Stripe>()].copy_from_slice(stripe.as_bytes());
+        }
+    }
+    pub fn size_in_bytes(&self) -> usize {
+        Self::BASE_LEN + self.stripes.len() * mem::size_of::<Stripe>()
+    }
     pub fn stripe_for_dev(&self, superblock: &Superblock) -> &Stripe {
         self.stripes
             .iter()
             .find(|stripe| &stripe.device_uuid == &superblock.device_item.uuid)
             .expect("Using the superblock of a different filesystem")
+    }
+    pub fn to_box(&self) -> Box<Self> {
+        let mut b = vec! [0u8; self.size_in_bytes()].into_boxed_slice();
+        self.serialize(&mut b);
+        unsafe { Box::from_raw(Box::into_raw(b) as *mut Self) }
     }
 }
 impl fmt::Debug for ChunkItem {
@@ -203,7 +227,7 @@ impl fmt::Debug for InodeRef {
         f.debug_struct("InodeRef")
             .field("index", &{self.index})
             .field("name_len", &{self.name_len})
-            .field("name", &self.name)
+            .field("name", &&self.name)
             .finish()
     }
 }
@@ -211,7 +235,7 @@ impl InodeRef {
     pub const BASE_LEN: usize = 10;
 
     pub fn parse<'a>(bytes: &'a [u8]) -> Option<&'a Self> {
-        let name_len = u16::from_le_bytes(<[u8; 2]>::try_from(&bytes[8..10]));
+        let name_len = u16::from_le_bytes(<[u8; 2]>::try_from(&bytes[8..10]).ok()?);
 
         unsafe {
             if bytes.len() < Self::BASE_LEN {
@@ -225,10 +249,7 @@ impl InodeRef {
             let begin = bytes.as_ptr();
             let len = name_len as usize;
 
-            // I'm amazed this actually works and was allowed by miri when I tested a similar
-            // example. It's a little bizarre to create the slice you first want at the end and
-            // then eventually cast it to the whole struct.
-            Ok(&*(slice::from_raw_parts(begin, len) as *const [u8] as *const Self))
+            Some(&*(slice::from_raw_parts(begin, len) as *const [u8] as *const Self))
         }
     }
 }
@@ -292,6 +313,7 @@ pub enum FileExtentItemType {
     Prealloc = 2,
 }
 
+#[derive(Debug)]
 pub enum FileExtentItemExt<'a> {
     Inline(&'a [u8]),
     OnDisk(LayoutVerified<&'a [u8], FileExtentItemExtOnDisk>)
@@ -308,14 +330,14 @@ pub struct FileExtentItemExtOnDisk {
 
 impl FileExtentItem {
     pub fn ty(&self) -> Option<FileExtentItemType> {
-        FileExtentItem::from_u8(self.ty)
+        FileExtentItemType::from_u8(self.ty)
     }
     pub const BASE_LEN: usize = 21;
 
     pub fn parse<'a>(bytes: &'a [u8]) -> Option<&'a Self> {
         let len = match FileExtentItemType::from_u8(bytes[20])? {
             FileExtentItemType::Inline => {
-                let device_size = u64::from_le_bytes(<[u8; 8]>::try_from(&bytes[8..16]));
+                let device_size = u64::from_le_bytes(<[u8; 8]>::try_from(&bytes[8..16]).ok()?);
                 usize::try_from(device_size).ok()?
             }
             FileExtentItemType::Prealloc | FileExtentItemType::Reg => mem::size_of::<FileExtentItemExtOnDisk>(),
@@ -332,14 +354,28 @@ impl FileExtentItem {
 
             let begin = bytes.as_ptr();
 
-            Ok(&*(slice::from_raw_parts(begin, len) as *const [u8] as *const Self))
+            Some(&*(slice::from_raw_parts(begin, len) as *const [u8] as *const Self))
         }
     }
     pub fn ext<'a>(&'a self) -> Option<FileExtentItemExt<'a>> {
         Some(match self.ty()? {
             FileExtentItemType::Inline => FileExtentItemExt::Inline(&self.rest),
-            FileExtentItemType::Prealloc | FileExtentItemType::Reg => FileExtentItemExt::OnDisk(LayoutVerified::new_unaligned(&self.rest)),
+            FileExtentItemType::Prealloc | FileExtentItemType::Reg => FileExtentItemExt::OnDisk(LayoutVerified::new_unaligned(&self.rest)?),
         })
+    }
+}
+
+impl fmt::Debug for FileExtentItem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FileExtentItem")
+            .field("generation", &{self.generation})
+            .field("device_size", &{self.device_size})
+            .field("compression", &{self.compression})
+            .field("encryption", &{self.encryption})
+            .field("other_encoding", &{self.other_encoding})
+            .field("ty", &self.ty())
+            .field("ext", &self.ext())
+            .finish()
     }
 }
 
@@ -353,7 +389,7 @@ pub struct BlockGroupItem {
 
 impl BlockGroupItem {
     pub fn ty(&self) -> Option<BlockGroupType> {
-        BlockGroupType::from_bits(self.flags)
+        BlockGroupType::from_bits(self.flags.get())
     }
 }
 
@@ -375,7 +411,7 @@ bitflags! {
 
 impl ExtentItem {
     pub fn flags(&self) -> Option<ExtentFlags> {
-        ExtentFlags::from_bits(self.flags)
+        ExtentFlags::from_bits(self.flags.get())
     }
 }
 

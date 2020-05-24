@@ -1,4 +1,5 @@
 #![feature(iter_map_while)]
+#![feature(new_uninit)]
 
 pub mod chunk_map;
 pub mod filesystem;
@@ -14,7 +15,7 @@ use crc::{crc32, Hasher32};
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive as _;
 use thiserror::Error;
-use zerocopy::{AsBytes, FromBytes, Unaligned};
+use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
 use crate::superblock::ChecksumType;
 

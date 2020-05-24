@@ -1,10 +1,8 @@
 use core::{
     borrow::Borrow,
     cmp::Ordering,
-    fmt, mem,
+    fmt, mem, ops,
 };
-
-use std::borrow::Cow;
 
 use zerocopy::{AsBytes, ByteSlice, FromBytes, LayoutVerified, Unaligned};
 
@@ -22,9 +20,24 @@ use crate::{
 };
 
 // TODO: Paths are small and smallvec / arrayvec should be used.
-type Path<'a> = Vec<(Cow<'a, Tree>, usize)>;
 
-#[derive(Clone, Copy, Debug, AsBytes, FromBytes, Unaligned)]
+enum OwnedOrBorrowedTree<'a> {
+    Owned(TreeOwned),
+    Borrowed(Tree<'a>),
+}
+
+impl<'a> OwnedOrBorrowedTree<'a> {
+    pub fn as_ref(&'a self) -> Tree<'a> {
+        match self {
+            &Self::Owned(ref owned) => owned.as_ref(),
+            &Self::Borrowed(borrowed) => borrowed,
+        }
+    }
+}
+
+pub type Path<'a> = Vec<(OwnedOrBorrowedTree<'a>, usize)>;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, AsBytes, FromBytes, Unaligned)]
 #[repr(packed)]
 pub struct Header {
     pub checksum: [u8; 32],
@@ -54,6 +67,7 @@ impl Header {
     }
 }
 
+#[derive(Eq, Hash, PartialEq)]
 pub struct Node {
     pub header: Header,
     pub key_ptrs: [KeyPtr],
@@ -67,7 +81,7 @@ impl fmt::Debug for Node {
      }
 }
 
-#[derive(Clone, Copy, Debug, AsBytes, FromBytes, Unaligned)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, AsBytes, FromBytes, Unaligned)]
 #[repr(packed)]
 pub struct KeyPtr {
     pub key: DiskKey,
@@ -96,6 +110,7 @@ impl Node {
     }
 }
 
+#[derive(Eq, Hash, PartialEq)]
 pub struct Leaf {
     pub header: Header,
     pub data: [u8],
@@ -109,32 +124,32 @@ pub struct Item {
     pub size: u32_le,
 }
 
-#[derive(Debug)]
-pub enum Value<'a, B: ByteSlice = &'a [u8]> {
-    BlockGroupItem(LayoutVerified<B, BlockGroupItem>),
+#[derive(Clone, Copy, Debug)]
+pub enum Value<'a> {
+    BlockGroupItem(&'a BlockGroupItem),
     Chunk(&'a ChunkItem),
-    Device(LayoutVerified<B, DevItem>),
-    DevExtent(LayoutVerified<B, DevExtent>),
-    DirIndex(LayoutVerified<B, DirItem>),
-    DirItem(LayoutVerified<B, DirItem>),
+    Device(&'a DevItem),
+    DevExtent(&'a DevExtent),
+    DirIndex(&'a DirItem),
+    DirItem(&'a DirItem),
     ExtentCsum(&'a CsumItem),
     ExtentData(&'a FileExtentItem),
-    ExtentItem(LayoutVerified<B, ExtentItem>),
-    InodeItem(LayoutVerified<B, InodeItem>),
+    ExtentItem(&'a ExtentItem),
+    InodeItem(&'a InodeItem),
     InodeRef(&'a InodeRef),
-    MetadataItem(LayoutVerified<B, ExtentItem>),
-    PersistentItem(LayoutVerified<B, DevStatsItem>), // NOTE: Currently the only persistent item is the dev stats item.
-    Root(LayoutVerified<B, RootItem>),
-    RootRef(LayoutVerified<B, RootRef>),
-    RootBackref(LayoutVerified<B, RootRef>),
+    MetadataItem(&'a ExtentItem),
+    PersistentItem(&'a DevStatsItem), // NOTE: Currently the only persistent item is the dev stats item.
+    Root(&'a RootItem),
+    RootRef(&'a RootRef),
+    RootBackref(&'a RootRef),
     UuidSubvol(&'a UuidItem),
     UuidReceivedSubvol(&'a UuidItem),
-    XattrItem(LayoutVerified<B, DirItem>),
+    XattrItem(&'a DirItem),
     Unknown,
 }
 
-impl<'a, B: ByteSlice> Value<'a, B> {
-    pub fn as_root_item(&self) -> Option<LayoutVerified<B, RootItem>> {
+impl<'a> Value<'a> {
+    pub fn as_root_item(&self) -> Option<&'a RootItem> {
         match self {
             &Self::Root(item) => Some(item),
             _ => None,
@@ -207,7 +222,7 @@ impl Leaf {
         Self { header, pairs }
     }
     */
-    pub fn parse<'a>(checksum_ty: ChecksumType, header: &'a Header, bytes: &'a [u8]) -> Option<&'a Self> {
+    pub fn parse<'a>(header: &'a Header, bytes: &'a [u8]) -> Option<&'a Self> {
         unsafe {
             if bytes.len() < mem::size_of::<Header>() {
                 return None;
@@ -221,35 +236,35 @@ impl Leaf {
     }
     pub fn iter<'a>(&'a self) -> impl Iterator<Item = (LayoutVerified<&'a [u8], Item>, Value<'a>)> + 'a {
         (0..self.header.item_count.get() as usize)
-            .map_while(|i| LayoutVerified::new_unaligned(&self.data[i * mem::size_of::<Item>()..(i + 1) * mem::size_of::<Item>()]))
-            .map_while(|item: LayoutVerified<&'a [u8], Item>| -> Option<_> {
+            .map_while(move |i| LayoutVerified::new_unaligned(&self.data[i * mem::size_of::<Item>()..(i + 1) * mem::size_of::<Item>()]))
+            .map_while(move |item: LayoutVerified<&'a [u8], Item>| -> Option<(_, _)> {
                 let value_bytes = &self.data[item.offset.get() as usize..item.offset.get() as usize + item.size.get() as usize];
 
                 let ty = match item.key.ty() {
                     Some(ty) => ty,
-                    None => return Some(Value::Unknown), // TODO: Warn
+                    None => return Some((item, Value::Unknown)), // TODO: Warn
                 };
 
                 let value: Value::<'a> = match ty {
-                    DiskKeyType::BlockGroupItem => Value::BlockGroupItem(LayoutVerified::new_unaligned(value_bytes)?),
+                    DiskKeyType::BlockGroupItem => Value::BlockGroupItem(LayoutVerified::<_, BlockGroupItem>::new_unaligned(value_bytes)?.into_ref()),
                     DiskKeyType::ChunkItem => Value::Chunk(ChunkItem::parse(value_bytes)?),
-                    DiskKeyType::DevExtent => Value::DevExtent(LayoutVerified::new_unaligned(value_bytes)?),
-                    DiskKeyType::DevItem => Value::Device(LayoutVerified::new_unaligned(value_bytes)?),
-                    DiskKeyType::DirIndex => Value::DirIndex(LayoutVerified::new_unaligned(value_bytes)?),
-                    DiskKeyType::DirItem => Value::DirItem(LayoutVerified::new_unaligned(value_bytes)?),
+                    DiskKeyType::DevExtent => Value::DevExtent(LayoutVerified::<_, DevExtent>::new_unaligned(value_bytes)?.into_ref()),
+                    DiskKeyType::DevItem => Value::Device(LayoutVerified::<_, DevItem>::new_unaligned(value_bytes)?.into_ref()),
+                    DiskKeyType::DirIndex => Value::DirIndex(LayoutVerified::<_, DirItem>::new_unaligned(value_bytes)?.into_ref()),
+                    DiskKeyType::DirItem => Value::DirItem(LayoutVerified::<_, DirItem>::new_unaligned(value_bytes)?.into_ref()),
                     DiskKeyType::ExtentCsum => Value::ExtentCsum(CsumItem::parse(value_bytes)),
                     DiskKeyType::ExtentData => Value::ExtentData(FileExtentItem::parse(value_bytes)?),
-                    DiskKeyType::ExtentItem => Value::ExtentItem(LayoutVerified::new_unaligned(value_bytes)?),
-                    DiskKeyType::InodeItem => Value::InodeItem(LayoutVerified::new_unaligned(value_bytes)?),
+                    DiskKeyType::ExtentItem => Value::ExtentItem(LayoutVerified::<_, ExtentItem>::new_unaligned(value_bytes)?.into_ref()),
+                    DiskKeyType::InodeItem => Value::InodeItem(LayoutVerified::<_, InodeItem>::new_unaligned(value_bytes)?.into_ref()),
                     DiskKeyType::InodeRef => Value::InodeRef(InodeRef::parse(value_bytes)?),
-                    DiskKeyType::MetadataItem => Value::MetadataItem(LayoutVerified::new_unaligned(value_bytes)?),
-                    DiskKeyType::PersistentItem => Value::PersistentItem(LayoutVerified::new_unaligned(value_bytes)?),
-                    DiskKeyType::RootBackref => Value::RootBackref(LayoutVerified::new_unaligned(value_bytes)?),
-                    DiskKeyType::RootItem => Value::Root(LayoutVerified::new_unaligned(value_bytes)?),
-                    DiskKeyType::RootRef => Value::RootRef(LayoutVerified::new_unaligned(value_bytes)?),
+                    DiskKeyType::MetadataItem => Value::MetadataItem(LayoutVerified::<_, ExtentItem>::new_unaligned(value_bytes)?.into_ref()),
+                    DiskKeyType::PersistentItem => Value::PersistentItem(LayoutVerified::<_, DevStatsItem>::new_unaligned(value_bytes)?.into_ref()),
+                    DiskKeyType::RootBackref => Value::RootBackref(LayoutVerified::<_, RootRef>::new_unaligned(value_bytes)?.into_ref()),
+                    DiskKeyType::RootItem => Value::Root(LayoutVerified::<_, RootItem>::new_unaligned(value_bytes)?.into_ref()),
+                    DiskKeyType::RootRef => Value::RootRef(LayoutVerified::<_, RootRef>::new_unaligned(value_bytes)?.into_ref()),
                     DiskKeyType::UuidSubvol => Value::UuidSubvol(UuidItem::parse(value_bytes)),
                     DiskKeyType::UuidReceivedSubvol => Value::UuidReceivedSubvol(UuidItem::parse(value_bytes)),
-                    DiskKeyType::XattrItem => Value::XattrItem(LayoutVerified::new_unaligned(value_bytes)?),
+                    DiskKeyType::XattrItem => Value::XattrItem(LayoutVerified::<_, DirItem>::new_unaligned(value_bytes)?.into_ref()),
                 };
                 Some((item, value))
             })
@@ -274,10 +289,25 @@ impl fmt::Debug for Leaf {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Tree<'a> {
     Internal(&'a Node),
     Leaf(&'a Leaf),
+}
+#[derive(Clone)]
+pub struct TreeOwned {
+    block: Box<[u8]>,
+}
+impl TreeOwned {
+    pub fn as_ref<'a>(&'a self) -> Tree<'a> {
+        let header = LayoutVerified::<&'a [u8], Header>::new_unaligned(&self.block[..mem::size_of::<Header>()]).unwrap();
+        Tree::parse_inner(&*header, &self.block)
+    }
+}
+impl fmt::Debug for TreeOwned {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.as_ref(), f)
+    }
 }
 
 fn always_equal<'b>(_: &'b DiskKey, _: &'b DiskKey) -> Ordering {
@@ -303,43 +333,45 @@ impl<'a> Tree<'a> {
             Self::Leaf(leaf) => &leaf.header,
         }
     }
-    pub fn parse(checksum_type: ChecksumType, bytes: &'a [u8]) -> Result<&'a Self, InvalidChecksum> {
-        let header = Header::parse(checksum_type, &bytes)?;
-
-        Ok(match header.level {
-            0 => Self::Leaf(Leaf::parse(checksum_type, header, &bytes[mem::size_of::<Header>()..])),
-            _ => Self::Internal(Node::parse(header, &bytes[mem::size_of::<Header>()..])),
-        })
+    fn parse_inner(header: &'a Header, bytes: &'a [u8]) -> Self {
+        match header.level {
+            0 => Self::Leaf(Leaf::parse(header, &bytes[mem::size_of::<Header>()..]).unwrap()),
+            _ => Self::Internal(Node::parse(header, &bytes[mem::size_of::<Header>()..]).unwrap()),
+        }
     }
+    pub fn parse(checksum_type: ChecksumType, bytes: &'a [u8]) -> Result<Self, InvalidChecksum> {
+        let header = Header::parse(checksum_type, &bytes)?;
+        Ok(Self::parse_inner(&*header, bytes))
+    }
+
     pub fn load<D: fal::DeviceRo>(
         device: &mut D,
         superblock: &Superblock,
         chunk_map: &ChunkMap,
         addr: u64,
-    ) -> owning_ref::BoxRef<[u8]> {
+    ) -> Result<TreeOwned, InvalidChecksum> {
         let block = filesystem::read_node(device, superblock, chunk_map, addr);
-        Self::parse(superblock.checksum_ty(), &block)
+        let _ = Header::parse(superblock.checksum_ty(), &block)?;
+        Ok(TreeOwned { block })
     }
     fn get_generic<D: fal::Device>(
-        &self,
+        &'a self,
         device: &mut D,
         superblock: &Superblock,
         chunk_map: &ChunkMap,
         key: &DiskKey,
         compare: fn(k1: &DiskKey, k2: &DiskKey) -> Ordering,
-    ) -> Option<((DiskKey, Value), Path)> {
-        let mut path = Vec::with_capacity(self.header().level as usize);
-
-        path.push((Cow::Borrowed(self), 0));
+    ) -> Option<((DiskKey, &'a Value<'a>), Path)> {
+        let mut path = Vec::with_capacity(self.header().level.into());
+        path.push((OwnedOrBorrowedTree::Borrowed(*self), 0));
 
         let item_index = loop {
-            match path.last().map(|(tree, _)| tree).unwrap().borrow() {
+            match path.last().map(|(tree, _)| tree).unwrap().as_ref() {
                 Self::Leaf(leaf) => {
                     assert_eq!(leaf.header.level, 0);
 
                     // Leaf nodes are guaranteed to contain the key and the value, if they exist.
                     break leaf
-                        .pairs
                         .iter()
                         .position(|(item, _)| compare(&item.key, key) == Ordering::Equal);
                 }
@@ -360,8 +392,8 @@ impl<'a> Tree<'a> {
                         None => return None,
                     };
 
-                    let subtree = Self::load(device, superblock, chunk_map, key_ptr.block_ptr);
-                    path.push((Cow::Owned(subtree), i));
+                    let subtree = Self::load(device, superblock, chunk_map, key_ptr.block_ptr.get()).unwrap();
+                    path.push((OwnedOrBorrowedTree::Owned(subtree), i));
                     continue;
                 }
             }
@@ -370,49 +402,51 @@ impl<'a> Tree<'a> {
             path.last_mut().unwrap().1 = i;
             let (key, ref value) = path
                 .last()
-                .map(|(node, _)| node.as_leaf().unwrap())
+                .map(|(node, _)| node.as_ref().as_leaf().unwrap())
                 .unwrap()
-                .pairs[i];
-            ((key.key, value.clone()), path)
+                .iter().nth(i).unwrap();
+            ((key.key, value), path)
         })
     }
     pub fn get<D: fal::Device>(
-        &self,
+        &'a self,
         device: &mut D,
         superblock: &Superblock,
         chunk_map: &ChunkMap,
         key: &DiskKey,
-    ) -> Option<Value> {
+    ) -> Option<&'a Value> {
         self.get_with_path(device, superblock, chunk_map, key)
             .map(|(value, _)| value)
     }
     pub fn get_with_path<D: fal::Device>(
-        &self,
+        &'a self,
         device: &mut D,
         superblock: &Superblock,
         chunk_map: &ChunkMap,
         key: &DiskKey,
-    ) -> Option<(Value, Path)> {
+    ) -> Option<(&'a Value, Path)> {
         self.get_generic(device, superblock, chunk_map, key, Ord::cmp)
             .map(|((_, value), path)| (value, path))
     }
-    pub fn pairs<'a, D: fal::Device>(
+    pub fn pairs<D: fal::Device>(
         &'a self,
         device: &'a mut D,
         superblock: &'a Superblock,
         chunk_map: &'a ChunkMap,
     ) -> Pairs<'a, D> {
+        let path = vec! [(OwnedOrBorrowedTree::Borrowed(*self), 0) ];
+
         Pairs {
             chunk_map,
             device,
             superblock,
-            path: vec![(Cow::Borrowed(self), 0)],
+            path,
             previous_key: None,
             function: Box::new(always_equal),
         }
     }
     /// Find similar pairs, i.e. pairs which key have the same oid and type, but possibly different offsets.
-    pub fn similar_pairs<'a, D: fal::Device>(
+    pub fn similar_pairs<D: fal::Device>(
         &'a self,
         device: &'a mut D,
         superblock: &'a Superblock,
@@ -446,14 +480,16 @@ pub struct Pairs<'a, D: fal::Device> {
     device: &'a mut D,
     superblock: &'a Superblock,
     chunk_map: &'a ChunkMap,
-    path: Vec<(Cow<'a, Tree>, usize)>,
+    // XXX: We could theoretically store the Path inside this struct, however there isn't any GAT
+    // support yet... Another possibility might be to simply make Value clonable again.
+    path: Path<'a>,
 
     function: Box<for<'b> fn(k1: &'b DiskKey, k2: &'b DiskKey) -> Ordering>,
     previous_key: Option<DiskKey>,
 }
 
 impl<'a, D: fal::Device> Iterator for Pairs<'a, D> {
-    type Item = (DiskKey, Value);
+    type Item = (DiskKey, Value<'a>);
 
     fn next(&mut self) -> Option<Self::Item> {
         // Only used to escape the borrow checker while retaining logic.
@@ -467,9 +503,9 @@ impl<'a, D: fal::Device> Iterator for Pairs<'a, D> {
             None => return None,
         };
 
-        let action = match (*current_tree).borrow() {
-            Tree::Leaf(leaf) => match leaf.pairs.get(*current_index) {
-                Some((item, value)) => {
+        let action = match (*current_tree).as_ref() {
+            Tree::Leaf(leaf) => match leaf.iter().nth(*current_index) {
+                Some((item, ref value)) => {
                     // If there is a pair available, just yield it and continue.
                     if let Some(previous_key) = self.previous_key {
                         let function = &self.function;
@@ -479,7 +515,7 @@ impl<'a, D: fal::Device> Iterator for Pairs<'a, D> {
                         self.previous_key = Some(item.key);
                     }
                     *current_index += 1;
-                    return Some((item.key, value.clone()));
+                    return Some((item.key, *value));
                 }
                 None => {
                     // When there are no more elements in the current node, we need to go one node
@@ -505,12 +541,12 @@ impl<'a, D: fal::Device> Iterator for Pairs<'a, D> {
 
         match action {
             Action::ClimbUp(key_ptr) => self.path.push((
-                Cow::Owned(Tree::load(
+                OwnedOrBorrowedTree::Owned(Tree::load(
                     self.device,
                     self.superblock,
                     self.chunk_map,
-                    key_ptr.block_ptr,
-                )),
+                    key_ptr.block_ptr.get(),
+                ).unwrap()),
                 0,
             )),
             Action::ClimbDown => {

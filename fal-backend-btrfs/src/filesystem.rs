@@ -1,6 +1,6 @@
 use std::sync::Mutex;
 
-use crate::{chunk_map::ChunkMap, oid, superblock::Superblock, tree::Tree, DiskKey, DiskKeyType};
+use crate::{chunk_map::ChunkMap, oid, superblock::Superblock, tree::{Tree, TreeOwned}, DiskKey, DiskKeyType, u64_le, u32_le, u16_le};
 
 pub const FIRST_CHUNK_TREE_OBJECTID: u64 = 256;
 
@@ -11,7 +11,7 @@ pub fn read_node_phys<D: fal::DeviceRo>(
 ) -> Box<[u8]> {
     let mut bytes = vec![0u8; superblock.node_size.get() as usize];
     // FIXME
-    debug_assert_eq!(superblock.node_size.get() % u64::from(device.disk_info().unwrap().block_size), 0);
+    debug_assert_eq!(u64::from(superblock.node_size.get()) % u64::from(device.disk_info().unwrap().block_size), 0);
     device.read_blocks(offset, &mut bytes).unwrap();
     bytes.into_boxed_slice()
 }
@@ -36,15 +36,15 @@ pub struct Filesystem<D: fal::DeviceRo> {
 
     pub chunk_map: ChunkMap,
 
-    pub root_tree: Tree,
-    pub chunk_tree: Tree,
-    pub extent_tree: Tree,
-    pub dev_tree: Tree,
-    pub fs_tree: Tree,
-    pub csum_tree: Tree,
-    pub quota_tree: Option<Tree>,
-    pub uuid_tree: Tree,
-    pub free_space_tree: Option<Tree>,
+    pub root_tree: TreeOwned,
+    pub chunk_tree: TreeOwned,
+    pub extent_tree: TreeOwned,
+    pub dev_tree: TreeOwned,
+    pub fs_tree: TreeOwned,
+    pub csum_tree: TreeOwned,
+    pub quota_tree: Option<TreeOwned>,
+    pub uuid_tree: TreeOwned,
+    pub free_space_tree: Option<TreeOwned>,
 }
 
 impl<D: fal::Device> Filesystem<D> {
@@ -53,16 +53,16 @@ impl<D: fal::Device> Filesystem<D> {
 
         let mut chunk_map = ChunkMap::read_sys_chunk_array(&superblock);
 
-        let chunk_tree = Tree::load(&mut device, &superblock, &chunk_map, superblock.chunk_root.get());
-        chunk_map.read_chunk_tree(&mut device, &superblock, &chunk_tree);
+        let chunk_tree = Tree::load(&mut device, &superblock, &chunk_map, superblock.chunk_root.get()).expect("failed to load chunk tree");
+        chunk_map.read_chunk_tree(&mut device, &superblock, chunk_tree.as_ref());
 
-        let root_tree = Tree::load(&mut device, &superblock, &chunk_map, superblock.root.get());
+        let root_tree = Tree::load(&mut device, &superblock, &chunk_map, superblock.root.get()).expect("failed to load root tree");
 
         let extent_tree = Self::load_tree(
             &mut device,
             &superblock,
             &chunk_map,
-            &root_tree,
+            root_tree.as_ref(),
             oid::EXTENT_TREE,
         )
         .unwrap();
@@ -70,7 +70,7 @@ impl<D: fal::Device> Filesystem<D> {
             &mut device,
             &superblock,
             &chunk_map,
-            &root_tree,
+            root_tree.as_ref(),
             oid::DEV_TREE,
         )
         .unwrap();
@@ -78,7 +78,7 @@ impl<D: fal::Device> Filesystem<D> {
             &mut device,
             &superblock,
             &chunk_map,
-            &root_tree,
+            root_tree.as_ref(),
             oid::FS_TREE,
         )
         .unwrap();
@@ -86,7 +86,7 @@ impl<D: fal::Device> Filesystem<D> {
             &mut device,
             &superblock,
             &chunk_map,
-            &root_tree,
+            root_tree.as_ref(),
             oid::CSUM_TREE,
         )
         .unwrap();
@@ -97,7 +97,7 @@ impl<D: fal::Device> Filesystem<D> {
             &mut device,
             &superblock,
             &chunk_map,
-            &root_tree,
+            root_tree.as_ref(),
             oid::QUOTA_TREE,
         );
 
@@ -105,7 +105,7 @@ impl<D: fal::Device> Filesystem<D> {
             &mut device,
             &superblock,
             &chunk_map,
-            &root_tree,
+            root_tree.as_ref(),
             oid::UUID_TREE,
         )
         .unwrap();
@@ -116,7 +116,7 @@ impl<D: fal::Device> Filesystem<D> {
             &mut device,
             &superblock,
             &chunk_map,
-            &root_tree,
+            root_tree.as_ref(),
             oid::FREE_SPACE_TREE,
         );
 
@@ -141,24 +141,24 @@ impl<D: fal::Device> Filesystem<D> {
         device: &mut D,
         superblock: &Superblock,
         chunk_map: &ChunkMap,
-        tree: &Tree,
+        tree: Tree,
         oid: u64,
-    ) -> Option<Tree> {
+    ) -> Option<TreeOwned> {
         let value = match tree.get(
             device,
             superblock,
             chunk_map,
             &DiskKey {
-                oid,
-                ty: DiskKeyType::RootItem,
-                offset: 0,
+                oid: u64_le::new(oid),
+                ty: DiskKeyType::RootItem as u8,
+                offset: u64_le::new(0),
             },
         ) {
             Some(v) => v,
             None => return None,
         };
-        let root_item = value.into_root_item().unwrap();
+        let root_item = value.as_root_item().unwrap();
 
-        Some(Tree::load(device, superblock, chunk_map, root_item.addr))
+        Some(Tree::load(device, superblock, chunk_map, root_item.addr.get()).unwrap())
     }
 }
