@@ -7,13 +7,12 @@ use thiserror::Error;
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
 use crate::{
-    items::{BlockGroupType, ChunkItem, DevItem},
-    sizes, u16_le, u32_le, u64_le, Checksum, DiskKey, DiskKeyType, InvalidChecksum, PackedUuid,
+    items::{ChunkItem, DevItem},
+    sizes, u16_le, u32_le, u64_le, Checksum, DiskKey, InvalidChecksum, PackedUuid,
 };
 
 const SUPERBLOCK_OFFSETS: [u64; 4] = [64 * sizes::K, 64 * sizes::M, 256 * sizes::G, 1 * sizes::P];
-const CHECKSUM_SIZE: usize = 32;
-const MAGIC: u64 = 0x4D5F53665248425F; // ASCII for "_BHRfS_M"
+const MAGIC: u64 = 0x4D5F_5366_5248_425F; // ASCII for "_BHRfS_M"
 
 #[derive(Clone, Copy, Debug, AsBytes, FromBytes, Unaligned)]
 #[repr(packed)]
@@ -214,6 +213,10 @@ impl Superblock {
             LayoutVerified::<&'a [u8], Self>::new_unaligned(&block[..mem::size_of::<Superblock>()])
                 .expect("calling btrfs::Superblock::parse with insufficient bytes");
 
+        if superblock.magic.get() != MAGIC {
+            return Err(SuperblockParseError::BadMagicNumber);
+        }
+
         let checksum_ty = ChecksumType::from_u16(superblock.checksum_type.get()).ok_or(
             SuperblockParseError::UnrecognizedChecksumTy(superblock.checksum_type.get()),
         )?;
@@ -237,6 +240,9 @@ impl Superblock {
 
 #[derive(Debug, Error)]
 pub enum SuperblockParseError {
+    #[error("bad magic number")]
+    BadMagicNumber,
+
     #[error("unrecognized checksum type: {0}")]
     UnrecognizedChecksumTy(u16),
 

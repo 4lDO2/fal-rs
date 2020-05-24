@@ -1,8 +1,8 @@
 use std::borrow::Cow;
 
-use core::{borrow::Borrow, cmp::Ordering, fmt, mem, ops};
+use core::{borrow::Borrow, cmp::Ordering, fmt, mem};
 
-use zerocopy::{AsBytes, ByteSlice, FromBytes, LayoutVerified, Unaligned};
+use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
 use crate::{
     chunk_map::ChunkMap,

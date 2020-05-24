@@ -3,7 +3,7 @@ use core::num::NonZeroUsize;
 use core::{fmt, mem, slice};
 
 use crate::{
-    superblock::{ChecksumType, Superblock},
+    superblock::Superblock,
     u16_le, u32_le, u64_le, DiskKey, PackedUuid, Timespec,
 };
 
@@ -210,7 +210,7 @@ bitflags! {
         const NOATIME = 0x200;
         const SYNCHRONOUS_DIR_OPS = 0x400;
         const COMPRESS = 0x800;
-        const ROOT_ITEM_INIT = 0x80000000;
+        const ROOT_ITEM_INIT = 0x8000_0000;
     }
 }
 bitflags! {

@@ -1,5 +1,4 @@
 #![feature(iter_map_while)]
-#![feature(new_uninit)]
 
 pub mod chunk_map;
 pub mod filesystem;
@@ -16,23 +15,23 @@ use crc::{crc32, Hasher32};
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive as _;
 use thiserror::Error;
-use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
+use zerocopy::{AsBytes, FromBytes, Unaligned};
 
 use crate::superblock::ChecksumType;
 
 #[allow(non_camel_case_types)]
-type u64_le = zerocopy::byteorder::U64<byteorder::LittleEndian>;
+pub type u64_le = zerocopy::byteorder::U64<byteorder::LittleEndian>;
 #[allow(non_camel_case_types)]
-type u32_le = zerocopy::byteorder::U32<byteorder::LittleEndian>;
+pub type u32_le = zerocopy::byteorder::U32<byteorder::LittleEndian>;
 #[allow(non_camel_case_types)]
-type u16_le = zerocopy::byteorder::U16<byteorder::LittleEndian>;
+pub type u16_le = zerocopy::byteorder::U16<byteorder::LittleEndian>;
 
 #[allow(non_camel_case_types)]
-type i64_le = zerocopy::byteorder::I64<byteorder::LittleEndian>;
+pub type i64_le = zerocopy::byteorder::I64<byteorder::LittleEndian>;
 #[allow(non_camel_case_types)]
-type i32_le = zerocopy::byteorder::I32<byteorder::LittleEndian>;
+pub type i32_le = zerocopy::byteorder::I32<byteorder::LittleEndian>;
 #[allow(non_camel_case_types)]
-type i16_le = zerocopy::byteorder::I16<byteorder::LittleEndian>;
+pub type i16_le = zerocopy::byteorder::I16<byteorder::LittleEndian>;
 
 mod sizes {
     pub const K: u64 = 1024;
