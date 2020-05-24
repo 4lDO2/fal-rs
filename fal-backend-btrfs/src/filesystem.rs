@@ -5,7 +5,7 @@ use crate::{
     oid,
     superblock::Superblock,
     tree::{Tree, TreeOwned},
-    u16_le, u32_le, u64_le, DiskKey, DiskKeyType,
+    u64_le, DiskKey, DiskKeyType,
 };
 
 pub const FIRST_CHUNK_TREE_OBJECTID: u64 = 256;
@@ -144,7 +144,7 @@ impl<D: fal::Device> Filesystem<D> {
         );
 
         for item in fs_tree.as_ref().pairs(&mut device, &superblock, &chunk_map) {
-            println!("ITEM: {:?}\n", item);
+            println!("FS ITEM: {:?}\n", item);
         }
 
         Self {

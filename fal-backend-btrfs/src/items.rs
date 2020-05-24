@@ -220,6 +220,7 @@ bitflags! {
 }
 
 #[repr(packed)]
+#[derive(Eq, Hash, PartialEq)]
 pub struct InodeRef {
     pub index: u64_le,
     pub name_len: u16_le,
@@ -277,7 +278,6 @@ impl ToOwned for InodeRef {
         let mut b = vec![0u8; self.size_in_bytes()].into_boxed_slice();
         b.copy_from_slice(self.as_bytes());
 
-        // TODO: Add a miri test for this
         let ptr: *mut [u8] = Box::into_raw(b);
         unsafe {
             Box::from_raw(
@@ -296,6 +296,7 @@ pub struct RootRef {
     pub name_len: u16_le,
 }
 
+#[derive(Eq, PartialEq)]
 #[repr(packed)]
 pub struct DirItem {
     pub location: DiskKey,
@@ -643,8 +644,17 @@ pub struct DevItem {
 
 #[cfg(test)]
 mod tests {
+    macro_rules! check_parsing(
+        ( $ty:ident, $bytes:expr ) => {{
+            let value: &$ty = $ty::parse($bytes).unwrap();
+            assert_eq!(&$bytes[..], value.as_bytes());
+            let boxed: Box<$ty> = value.to_owned();
+            assert_eq!(&($bytes)[..], boxed.as_bytes());
+            assert_eq!(&*boxed, value);
+        }}
+    );
     #[test]
-    fn unsafe_magic() {
+    fn chunk_item_parsing() {
         use super::ChunkItem;
 
         let bytes = [
@@ -655,10 +665,30 @@ mod tests {
             0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0xbd, 0x87, 0x14, 0x30, 0xc6, 0x33,
             0x45, 0xea, 0xa6, 0x53, 0xe8, 0x07, 0x28, 0x08, 0x2d, 0xf8,
         ];
-        let chunk_item: &ChunkItem = ChunkItem::parse(&bytes).unwrap();
-        assert_eq!(&bytes[..], chunk_item.as_bytes());
-        let boxed: Box<ChunkItem> = chunk_item.to_owned();
-        assert_eq!(&bytes[..], boxed.as_bytes());
-        assert_eq!(&*boxed, chunk_item);
+        check_parsing!(ChunkItem, &bytes)
+    }
+    #[test]
+    fn inode_ref_parsing() {
+        use super::InodeRef;
+
+        let bytes = [
+            0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x0A, 0x00, 0x73, 0x75, 0x62, 0x73, 0x75, 0x62,
+            0x66, 0x69, 0x6C, 0x65,
+        ];
+        check_parsing!(InodeRef, &bytes)
+    }
+    #[test]
+    fn dir_item_parsing() {
+        use super::DirItem;
+
+        let bytes = [
+            0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x0A, 0x00, 0x01, 0x73, 0x75,
+            0x62, 0x73, 0x75, 0x62, 0x66, 0x69, 0x6C, 0x65,
+        ];
+        check_parsing!(DirItem, &bytes)
     }
 }
