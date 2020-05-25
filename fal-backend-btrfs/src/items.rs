@@ -487,7 +487,16 @@ impl ToOwned for FileExtentItem {
     type Owned = Box<Self>;
 
     fn to_owned(&self) -> Self::Owned {
-        todo!()
+        let mut b = vec![0u8; self.size_in_bytes()].into_boxed_slice();
+        b.copy_from_slice(self.as_bytes());
+
+        let ptr: *mut [u8] = Box::into_raw(b);
+        unsafe {
+            Box::from_raw(slice::from_raw_parts(
+                ptr as *const u8,
+                self.rest.len(),
+            ) as *const [u8] as *const Self as *mut Self)
+        }
     }
 }
 
@@ -518,6 +527,13 @@ impl FileExtentItem {
         FileExtentItemType::from_u8(self.ty)
     }
     pub const BASE_LEN: usize = 21;
+
+    pub fn size_in_bytes(&self) -> usize {
+        Self::BASE_LEN + self.rest.len()
+    }
+    pub fn as_bytes(&self) -> &[u8] {
+        unsafe { slice::from_raw_parts(self as *const Self as *const u8, self.size_in_bytes()) }
+    }
 
     pub fn parse<'a>(bytes: &'a [u8]) -> Option<&'a Self> {
         let len = match FileExtentItemType::from_u8(bytes[20])? {
@@ -770,40 +786,80 @@ impl ToOwned for CsumItem {
     type Owned = Box<Self>;
 
     fn to_owned(&self) -> Self::Owned {
-        todo!()
+        let b = self.data.to_vec().into_boxed_slice();
+
+        let ptr: *mut [u8] = Box::into_raw(b);
+        unsafe {
+            Box::from_raw(slice::from_raw_parts(
+                ptr as *const u8,
+                self.data.len(),
+            ) as *const [u8] as *const Self as *mut Self)
+        }
     }
 }
 
-#[derive(Eq, Hash, PartialEq)]
+#[repr(packed)]
+pub struct NoAlign<T>(T);
+
 #[repr(packed)]
 pub struct UuidItem {
     // Based on print-io.c from the btrfs source code. It seems like UUID items are simply an array
     // of subvolume ids.
-    pub subvolumes: [u64_le],
+    pub subvolumes: [NoAlign<u64_le>],
 }
 
 impl UuidItem {
     pub fn parse<'a>(bytes: &'a [u8]) -> &'a Self {
         unsafe {
-            let begin = bytes.as_ptr() as *const u64;
-            let len = bytes.len() / mem::size_of::<u64>();
+            let begin = bytes.as_ptr() as *const NoAlign<u64_le>;
+            let len = bytes.len() / mem::size_of::<NoAlign<u64_le>>();
 
-            &*(std::slice::from_raw_parts(begin, len) as *const [u64] as *const Self)
+            &*(std::slice::from_raw_parts(begin, len) as *const [NoAlign<u64_le>] as *const Self)
         }
+    }
+    pub fn size_in_bytes(&self) -> usize {
+        self.subvolumes.len() * mem::size_of::<NoAlign<u64_le>>()
+    }
+    pub fn as_bytes(&self) -> &[u8] {
+        unsafe { slice::from_raw_parts(self as *const Self as *const u8, self.size_in_bytes()) }
     }
 }
 impl fmt::Debug for UuidItem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        struct List<'a>(&'a [NoAlign<u64_le>]);
+
+        impl fmt::Debug for List<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.debug_list()
+                    .entries(self.0.iter().map(|NoAlign(val)| val.get()))
+                    .finish()
+            }
+        }
+
         f.debug_struct("UuidItem")
-            .field("submodules", &&self.subvolumes)
+            .field("submodules", &List(&self.subvolumes))
             .finish()
     }
+}
+impl PartialEq for UuidItem {
+     fn eq(&self, other: &Self) -> bool {
+         self.subvolumes.iter().map(|NoAlign(val)| val.get()).eq(other.subvolumes.iter().map(|NoAlign(val)| val.get()))
+     }
 }
 impl ToOwned for UuidItem {
     type Owned = Box<Self>;
 
     fn to_owned(&self) -> Self::Owned {
-        todo!()
+        let mut b = vec![0u8; self.size_in_bytes()].into_boxed_slice();
+        b.copy_from_slice(self.as_bytes());
+
+        let ptr: *mut [u8] = Box::into_raw(b);
+        unsafe {
+            Box::from_raw(slice::from_raw_parts(
+                ptr as *const u8 as *const NoAlign<u64_le>,
+                self.subvolumes.len(),
+            ) as *const [NoAlign<u64_le>] as *const Self as *mut Self)
+        }
     }
 }
 

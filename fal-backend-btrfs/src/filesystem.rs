@@ -124,21 +124,6 @@ impl<D: fal::Device> Filesystem<D> {
             oid::FS_TREE,
         )
         .unwrap();
-        for item in chunk_tree.as_ref().pairs(&mut device, &superblock, &chunk_map) {
-            println!("CHUNK ITEM: {:?}\n", item);
-        }
-        for item in fs_tree.as_ref().pairs(&mut device, &superblock, &chunk_map) {
-            println!("FS ITEM: {:?}\n", item);
-        }
-        for item in dev_tree.as_ref().pairs(&mut device, &superblock, &chunk_map) {
-            println!("DEV ITEM: {:?}\n", item);
-        }
-        for item in root_tree.as_ref().pairs(&mut device, &superblock, &chunk_map) {
-            println!("ROOT ITEM: {:?}\n", item);
-        }
-        for item in extent_tree.as_ref().pairs(&mut device, &superblock, &chunk_map) {
-            println!("EXTENT ITEM: {:?}\n", item);
-        }
 
         let csum_tree = Self::load_tree(
             &mut device,
@@ -168,8 +153,7 @@ impl<D: fal::Device> Filesystem<D> {
         )
         .unwrap();
 
-        // The existence of the free space tree also seems optional. It's possibly located in the
-        // fs tree, right?
+        // TODO: BTRFS_FEATURE_ROCOMPAT_FREESPACETREE{,VALID}
         let free_space_tree = Self::load_tree(
             &mut device,
             &superblock,
@@ -177,6 +161,28 @@ impl<D: fal::Device> Filesystem<D> {
             root_tree.as_ref(),
             oid::FREE_SPACE_TREE,
         );
+
+        for item in chunk_tree.as_ref().pairs(&mut device, &superblock, &chunk_map) {
+            println!("CHUNK ITEM: {:?}\n", item);
+        }
+        for item in fs_tree.as_ref().pairs(&mut device, &superblock, &chunk_map) {
+            println!("FS ITEM: {:?}\n", item);
+        }
+        for item in dev_tree.as_ref().pairs(&mut device, &superblock, &chunk_map) {
+            println!("DEV ITEM: {:?}\n", item);
+        }
+        for item in root_tree.as_ref().pairs(&mut device, &superblock, &chunk_map) {
+            println!("ROOT ITEM: {:?}\n", item);
+        }
+        for item in extent_tree.as_ref().pairs(&mut device, &superblock, &chunk_map) {
+            println!("EXTENT ITEM: {:?}\n", item);
+        }
+        for item in csum_tree.as_ref().pairs(&mut device, &superblock, &chunk_map) {
+            println!("CSUM ITEM: {:?}\n", item);
+        }
+        for item in uuid_tree.as_ref().pairs(&mut device, &superblock, &chunk_map) {
+            println!("UUID ITEM: {:?}\n", item);
+        }
 
         Self {
             device: Mutex::new(device),
