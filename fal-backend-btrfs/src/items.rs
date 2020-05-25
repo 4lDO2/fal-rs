@@ -1,9 +1,12 @@
+use core::borrow::Borrow;
 use core::convert::TryFrom;
 use core::num::NonZeroUsize;
 use core::{fmt, mem, slice};
 
+use alloc::borrow::Cow;
+
 use crate::{
-    superblock::Superblock,
+    superblock::{IncompatFlags, Superblock},
     u16_le, u32_le, u64_le, DiskKey, PackedUuid, Timespec,
 };
 
@@ -237,8 +240,8 @@ impl fmt::Debug for InodeRef {
         let name = String::from_utf8_lossy(&self.name[..zero_pos]).into_owned();
 
         f.debug_struct("InodeRef")
-            .field("index", &{ self.index })
-            .field("name_len", &{ self.name_len })
+            .field("index", &self.index.get())
+            .field("name_len", &self.name_len.get())
             .field("name", &name)
             .finish()
     }
@@ -288,12 +291,75 @@ impl ToOwned for InodeRef {
     }
 }
 
-#[derive(Clone, Debug, AsBytes, FromBytes, Unaligned)]
+#[derive(Eq, PartialEq)]
 #[repr(packed)]
 pub struct RootRef {
     pub subtree_id: u64_le,
     pub sequence: u64_le,
     pub name_len: u16_le,
+    pub name: [u8],
+}
+impl fmt::Debug for RootRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let zero_pos = self
+            .name
+            .iter()
+            .copied()
+            .position(|c| c == 0)
+            .unwrap_or(self.name.len());
+        let name = String::from_utf8_lossy(&self.name[..zero_pos]).into_owned();
+
+        f.debug_struct("RootRef")
+            .field("subtree_id", &self.subtree_id.get())
+            .field("sequence", &self.sequence.get())
+            .field("name_len", &self.name_len.get())
+            .field("name", &name)
+            .finish()
+    }
+}
+impl RootRef {
+    pub const BASE_LEN: usize = 18;
+
+    pub fn parse<'a>(bytes: &'a [u8]) -> Option<&'a Self> {
+        let name_len = u16::from_le_bytes(<[u8; 2]>::try_from(&bytes[16..18]).ok()?);
+
+        unsafe {
+            if bytes.len() < Self::BASE_LEN {
+                return None;
+            }
+
+            if Self::BASE_LEN + name_len as usize > bytes.len() {
+                return None;
+            }
+
+            let begin = bytes.as_ptr();
+            let len = name_len as usize;
+
+            Some(&*(slice::from_raw_parts(begin, len) as *const [u8] as *const Self))
+        }
+    }
+    pub fn size_in_bytes(&self) -> usize {
+        Self::BASE_LEN + self.name.len()
+    }
+    pub fn as_bytes(&self) -> &[u8] {
+        unsafe { slice::from_raw_parts(self as *const Self as *const u8, self.size_in_bytes()) }
+    }
+}
+impl ToOwned for RootRef {
+    type Owned = Box<Self>;
+
+    fn to_owned(&self) -> Self::Owned {
+        let mut b = vec![0u8; self.size_in_bytes()].into_boxed_slice();
+        b.copy_from_slice(self.as_bytes());
+
+        let ptr: *mut [u8] = Box::into_raw(b);
+        unsafe {
+            Box::from_raw(
+                slice::from_raw_parts(ptr as *const u8, self.name.len()) as *const [u8]
+                    as *const Self as *mut Self,
+            )
+        }
+    }
 }
 
 #[derive(Eq, PartialEq)]
@@ -523,6 +589,124 @@ pub struct ExtentItem {
     pub allocation_xid: u64_le,
     pub flags: u64_le,
 }
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, AsBytes, FromBytes, Unaligned)]
+#[repr(packed)]
+pub struct ExtentInlineRef {
+    pub ty: u8,
+    pub offset: u64_le,
+}
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, AsBytes, FromBytes, Unaligned)]
+#[repr(packed)]
+pub struct TreeBlockInfo {
+    pub key: DiskKey,
+    pub level: u8,
+}
+
+#[repr(packed)]
+pub struct ExtentItemFull {
+    pub base: ExtentItem,
+    pub rest: [u8],
+}
+impl ExtentItemFull {
+    pub const BASE_LEN: usize = mem::size_of::<ExtentItem>();
+
+    pub fn struct_size(bytes: &[u8]) -> Option<NonZeroUsize> {
+        if bytes.len() < Self::BASE_LEN {
+            return None;
+        }
+        let count = bytes.len() - Self::BASE_LEN;
+
+        Some(
+            NonZeroUsize::new(Self::BASE_LEN + count)
+                .unwrap(),
+        )
+    }
+
+    pub fn parse<'a>(bytes: &'a [u8]) -> Option<&'a Self> {
+        let base = LayoutVerified::<_, ExtentItem>::new_unaligned(&bytes[..mem::size_of::<ExtentItem>()])?.into_ref();
+
+        if base.flags()?.contains(ExtentFlags::DATA) && base.flags()?.contains(ExtentFlags::TREE_BLOCK) {
+            todo!("handle invalid flag combination")
+        }
+        if !base.flags()?.contains(ExtentFlags::DATA) && !base.flags()?.contains(ExtentFlags::TREE_BLOCK) {
+            todo!("handle invalid flag combination")
+        }
+        if base.flags()?.contains(ExtentFlags::DATA) && base.flags()?.contains(ExtentFlags::FULL_BACKREF) {
+            todo!("handle invalid flag combination")
+        }
+        unsafe {
+            if bytes.len() < Self::BASE_LEN {
+                return None;
+            }
+            let size = Self::struct_size(bytes)?.get();
+
+            if size > bytes.len() {
+                return None;
+            }
+
+            let begin = bytes.as_ptr();
+            let len = size - Self::BASE_LEN;
+
+            Some(&*(slice::from_raw_parts(begin, len) as *const [u8] as *const Self))
+        }
+    }
+    pub fn size_in_bytes(&self) -> usize {
+        Self::BASE_LEN + self.rest.len()
+    }
+    pub fn as_bytes(&self) -> &[u8] {
+        unsafe { slice::from_raw_parts(self as *const Self as *const u8, self.size_in_bytes()) }
+    }
+}
+impl ToOwned for ExtentItemFull {
+    type Owned = Box<Self>;
+
+    fn to_owned(&self) -> Self::Owned {
+        let mut b = vec![0u8; self.size_in_bytes()].into_boxed_slice();
+        b.copy_from_slice(self.as_bytes());
+
+        let ptr: *mut [u8] = Box::into_raw(b);
+        unsafe {
+            Box::from_raw(slice::from_raw_parts(
+                ptr as *const u8,
+                self.rest.len(),
+            ) as *const [u8] as *const Self as *mut Self)
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct ExtentItemFullWrapper<'a>(pub Cow<'a, ExtentItemFull>, pub IncompatFlags);
+
+impl<'a> ExtentItemFullWrapper<'a> {
+    pub fn to_static(self) -> ExtentItemFullWrapper<'static> {
+        ExtentItemFullWrapper(Cow::<'static>::Owned(self.0.into_owned()), self.1)
+    }
+    pub fn tree_block_info(&'a self) -> Option<&'a TreeBlockInfo> {
+        if self.1.contains(IncompatFlags::SKINNY_METADATA) || self.0.base.flags()?.contains(ExtentFlags::DATA) {
+            return None;
+        }
+        let reference: LayoutVerified<&'a [u8], TreeBlockInfo> = LayoutVerified::new_unaligned(&self.0.rest[..mem::size_of::<TreeBlockInfo>()])?;
+        Some(reference.into_ref())
+    }
+    pub fn refs(&'a self) -> Option<&'a [ExtentInlineRef]> {
+        let slice = if self.0.base.flags()?.contains(ExtentFlags::DATA) || self.1.contains(IncompatFlags::SKINNY_METADATA) {
+            &self.0.rest
+        } else {
+            &self.0.rest[mem::size_of::<TreeBlockInfo>()..]
+        };
+        Some(LayoutVerified::new_slice_unaligned(&self.0.rest)?.into_slice())
+    }
+}
+
+impl fmt::Debug for ExtentItemFullWrapper<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExtentItemFull")
+            .field("base", &self.0.base)
+            .field("tree_block_info", &self.tree_block_info())
+            .field("refs", &self.refs())
+            .finish()
+    }
+}
 
 bitflags! {
     pub struct ExtentFlags: u64 {
@@ -690,5 +874,17 @@ mod tests {
             0x62, 0x73, 0x75, 0x62, 0x66, 0x69, 0x6C, 0x65,
         ];
         check_parsing!(DirItem, &bytes)
+    }
+    #[test]
+    fn root_ref_parsing() {
+        use super::RootRef;
+
+        let bytes = [
+            0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x0A, 0x00, 0x66, 0x61, 0x6C, 0x2D, 0x73, 0x75,
+            0x6C,
+        ];
+        check_parsing!(RootRef, &bytes);
     }
 }

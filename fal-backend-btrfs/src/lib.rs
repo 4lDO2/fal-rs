@@ -1,5 +1,7 @@
 #![feature(iter_map_while)]
 
+extern crate alloc;
+
 pub mod chunk_map;
 pub mod filesystem;
 pub mod items;
@@ -295,7 +297,7 @@ pub mod oid {
     pub const EXTENT_TREE: u64 = 2;
     pub const CHUNK_TREE: u64 = 3;
     pub const DEV_TREE: u64 = 4;
-    pub const FS_TREE: u64 = 5;
+    pub const FS_TREE: u64 = 5; // 5 also happens to be the default subvolume ID
     pub const CSUM_TREE: u64 = 7;
     pub const QUOTA_TREE: u64 = 8;
     pub const UUID_TREE: u64 = 9;
@@ -303,4 +305,7 @@ pub mod oid {
 
     pub const ROOT_TREE_DIR: u64 = 6;
     pub const DEV_STATS: u64 = 0;
+
+    pub const FIRST_USER_OBJECTID: u64 = 256;
+    pub const LAST_USER_OBJECTID: u64 = (-256i64) as u64;
 }

@@ -1,11 +1,13 @@
 use std::sync::Mutex;
+use core::convert::{TryFrom, TryInto};
 
 use crate::{
     chunk_map::ChunkMap,
+    items::{Filetype, InodeItem},
     oid,
     superblock::Superblock,
     tree::{Tree, TreeOwned},
-    u64_le, DiskKey, DiskKeyType,
+    u64_le, DiskKey, DiskKeyType, Timespec,
 };
 
 pub const FIRST_CHUNK_TREE_OBJECTID: u64 = 256;
@@ -67,6 +69,23 @@ impl<D: fal::Device> Filesystem<D> {
 
         println!("Superblock: {:?}", superblock);
 
+        let (ro_compat_flags, readonly) = match superblock.ro_compat_flags() {
+            Ok(f) => (f, false),
+            Err((f, rest)) => {
+                eprintln!("Features potentially from the future: {:#0x} (mask)", rest);
+                (f, true)
+            }
+        };
+        let incompat_flags = match superblock.incompat_flags() {
+            Ok(f) => f,
+            Err(rest) => {
+                panic!("Incompat flags were found: {:#0x} (mask)", rest);
+            }
+        };
+
+        println!("Superblock RO compat flags: {:?}, can mount write: {}", ro_compat_flags, !readonly);
+        println!("Superblock incompat flags: {:?}", incompat_flags);
+
         let mut chunk_map = ChunkMap::read_sys_chunk_array(&superblock);
 
         let chunk_tree = Tree::load(
@@ -105,6 +124,22 @@ impl<D: fal::Device> Filesystem<D> {
             oid::FS_TREE,
         )
         .unwrap();
+        for item in chunk_tree.as_ref().pairs(&mut device, &superblock, &chunk_map) {
+            println!("CHUNK ITEM: {:?}\n", item);
+        }
+        for item in fs_tree.as_ref().pairs(&mut device, &superblock, &chunk_map) {
+            println!("FS ITEM: {:?}\n", item);
+        }
+        for item in dev_tree.as_ref().pairs(&mut device, &superblock, &chunk_map) {
+            println!("DEV ITEM: {:?}\n", item);
+        }
+        for item in root_tree.as_ref().pairs(&mut device, &superblock, &chunk_map) {
+            println!("ROOT ITEM: {:?}\n", item);
+        }
+        for item in extent_tree.as_ref().pairs(&mut device, &superblock, &chunk_map) {
+            println!("EXTENT ITEM: {:?}\n", item);
+        }
+
         let csum_tree = Self::load_tree(
             &mut device,
             &superblock,
@@ -142,10 +177,6 @@ impl<D: fal::Device> Filesystem<D> {
             root_tree.as_ref(),
             oid::FREE_SPACE_TREE,
         );
-
-        for item in fs_tree.as_ref().pairs(&mut device, &superblock, &chunk_map) {
-            println!("FS ITEM: {:?}\n", item);
-        }
 
         Self {
             device: Mutex::new(device),
@@ -187,5 +218,187 @@ impl<D: fal::Device> Filesystem<D> {
         let root_item = value.as_root_item().unwrap();
 
         Some(Tree::load(device, superblock, chunk_map, root_item.addr.get()).unwrap())
+    }
+}
+
+impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
+    type InodeAddr = u64;
+    type InodeStruct = Inode;
+    type Options = ();
+
+    fn root_inode(&self) -> Self::InodeAddr {
+        todo!()
+    }
+    fn mount(device: D, general_options: fal::Options, fs_specific_options: Self::Options, path: &[u8]) -> Self {
+        Self::mount(device)
+    }
+    fn unmount(self) {
+    }
+    fn load_inode(&mut self, address: Self::InodeAddr) -> fal::Result<Self::InodeStruct> {
+        let inner = todo!();
+
+        Ok(Inode {
+            inner,
+            addr: address,
+            node_size: self.superblock.node_size.get(),
+        })
+    }
+    fn store_inode(&mut self, inode: &Self::InodeStruct) -> fal::Result<()> {
+        todo!()
+    }
+    fn open_file(&mut self, inode: Self::InodeAddr) -> fal::Result<u64> {
+        todo!()
+    }
+    fn read(&mut self, fh: u64, offset: u64, buffer: &mut [u8]) -> fal::Result<usize> {
+        todo!()
+    }
+    fn write(&mut self, fh: u64, offset: u64, buffer: &[u8]) -> fal::Result<u64> {
+        todo!()
+    }
+    fn open_directory(&mut self, address: Self::InodeAddr) -> fal::Result<u64> {
+        todo!()
+    }
+    fn read_directory(&mut self, directory: u64, offset: i64) -> fal::Result<Option<fal::DirectoryEntry<Self::InodeAddr>>> {
+        todo!()
+    }
+    fn lookup_direntry(&mut self, parent: Self::InodeAddr, name: &[u8]) -> fal::Result<fal::DirectoryEntry<Self::InodeAddr>> {
+        #[cfg(feature = "crc32c")]
+        {
+            let name_hash = crc::crc32::update(!0, &crc::crc32::CASTAGNOLI_TABLE, name);
+            todo!()
+        }
+        #[cfg(not(feature = "crc32c"))]
+        {
+            todo!()
+        }
+    }
+    fn readlink(&mut self, inode: Self::InodeAddr) -> fal::Result<Box<[u8]>> {
+        todo!()
+    }
+    fn fh_inode(&self, fh: u64) -> Self::InodeStruct {
+        todo!()
+    }
+    fn fh_offset(&self, fh: u64) -> u64 {
+        todo!()
+    }
+    fn set_fh_offset(&mut self, fh: u64, offset: u64) {
+        todo!()
+    }
+    fn filesystem_attrs(&self) -> fal::FsAttributes {
+        todo!()
+    }
+    fn close(&mut self, file: u64) -> fal::Result<()> {
+        todo!()
+    }
+    fn unlink(&mut self, parent: Self::InodeAddr, name: &[u8]) -> fal::Result<()> {
+        todo!()
+    }
+    fn get_xattr(&mut self, inode: &Self::InodeStruct, name: &[u8]) -> fal::Result<Vec<u8>> {
+        todo!()
+    }
+    fn list_xattrs(&mut self, inode: &Self::InodeStruct) -> fal::Result<Vec<Vec<u8>>> {
+        todo!()
+    }
+}
+#[derive(Clone)]
+pub struct Inode {
+    inner: InodeItem,
+    addr: u64,
+    node_size: u32,
+}
+impl Filetype {
+    pub fn try_into_fal(self) -> Option<fal::FileType> {
+        Some(match self {
+            Self::RegularFile => fal::FileType::RegularFile,
+            Self::Directory => fal::FileType::Directory,
+            Self::BlockDevice => fal::FileType::BlockDevice,
+            Self::Symlink => fal::FileType::Symlink,
+            Self::Fifo => fal::FileType::NamedPipe,
+            Self::Socket => fal::FileType::Socket,
+            Self::CharacterDevice => fal::FileType::CharacterDevice,
+
+            Self::Unknown | Self::Xattr => return None,
+        })
+    }
+}
+impl From<Timespec> for fal::Timespec {
+    fn from(tm: Timespec) -> Self {
+        let mut sec = tm.sec.get();
+        let nsec = tm.nsec.get();
+        // TODO: Shouldn't fal use unsigned nanoseconds?
+        let nsec = i32::try_from(nsec).unwrap_or_else(|_| {
+            const NSECS_PER_SEC: u32 = 1_000_000_000;
+            sec += i64::from(nsec / NSECS_PER_SEC);
+            let new_nsec = nsec % NSECS_PER_SEC;
+            i32::try_from(new_nsec).unwrap_or(i32::max_value())
+        }); // TODO
+
+        Self {
+            sec,
+            nsec,
+        }
+    }
+}
+
+impl fal::Inode for Inode {
+    type InodeAddr = u64;
+
+    fn generation_number(&self) -> Option<u64> {
+        Some(self.inner.generation.get())
+    }
+    fn addr(&self) -> Self::InodeAddr {
+        self.addr
+    }
+    fn attrs(&self) -> fal::Attributes<Self::InodeAddr> {
+        const S_IFMT: u32 = 0o170000;
+
+        const S_IFSOCK: u32 = 0o140000;
+        const S_IFLNK: u32 = 0o120000;
+        const S_IFREG: u32 = 0o100000;
+        const S_IFBLK: u32 = 0o060000;
+        const S_IFDIR: u32 = 0o040000;
+        const S_IFCHR: u32 = 0o020000;
+        const S_IFIFO: u32 = 0o010000;
+
+        fal::Attributes {
+            filetype: match self.inner.mode.get() & S_IFMT {
+                S_IFSOCK => fal::FileType::Socket,
+                S_IFLNK => fal::FileType::Symlink,
+                S_IFREG => fal::FileType::RegularFile,
+                S_IFBLK => fal::FileType::BlockDevice,
+                S_IFDIR => fal::FileType::Directory,
+                S_IFCHR => fal::FileType::CharacterDevice,
+                S_IFFIFO => fal::FileType::NamedPipe,
+            },
+            access_time: self.inner.atime.into(),
+            change_time: self.inner.ctime.into(),
+            modification_time: self.inner.mtime.into(),
+            creation_time: self.inner.otime.into(),
+
+            block_count: self.inner.byte_count.get() / u64::from(self.node_size),
+            flags: self.inner.flags.get().try_into().unwrap(),
+
+            hardlink_count: self.inner.hardlink_count.get().into(),
+            inode: self.addr,
+
+            permissions: (self.inner.mode.get() & 0o7777) as u16,
+            rdev: self.inner.rdev.get(),
+            size: self.inner.size.get(),
+
+            user_id: self.inner.uid.get(),
+            group_id: self.inner.gid.get(),
+        }
+    }
+    fn set_gid(&mut self, gid: u32) {
+        self.inner.gid.set(gid);
+    }
+    fn set_uid(&mut self, uid: u32) {
+        self.inner.uid.set(uid);
+    }
+    fn set_perm(&mut self, permissions: u16) {
+        let mut mode = self.inner.mode.get();
+        mode &= 0o170000;
+        assert_eq!(permissions & 0o7777, permissions);
+        mode |= u32::from(permissions);
     }
 }

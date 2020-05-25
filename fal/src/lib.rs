@@ -215,8 +215,6 @@ pub trait DeviceRo: std::fmt::Debug {
     // TODO: Add support for querying bad sectors etc (or perhaps that's done via simply checking
     // if the block can actually be written to successfully, when its data was invalid (e.g. a
     // checksum)).
-    // TODO: Concurrent I/O.
-    // TODO: Trimming.
     // TODO: Async/await.
 
     /// Read blocks from the device at a specific offset. All blocks have to be read.
@@ -237,7 +235,6 @@ pub trait DeviceRo: std::fmt::Debug {
 pub trait Device: DeviceRo {
     /// Write blocks to the device at a specific offset. Unlike std's Write trait, this will error
     /// if all blocks weren't written.
-    #[must_use]
     fn write_blocks(&self, block: u64, buf: &[u8]) -> Result<(), DeviceError>;
 
     // TODO: Flushing
@@ -384,7 +381,7 @@ pub struct Attributes<InodeAddr: Into<u64>> {
     pub permissions: u16,
     pub user_id: u32,
     pub group_id: u32,
-    pub rdev: u32,
+    pub rdev: u64,
     pub inode: InodeAddr,
 
     pub creation_time: Timespec,

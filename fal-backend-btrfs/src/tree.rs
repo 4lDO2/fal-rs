@@ -8,10 +8,10 @@ use crate::{
     chunk_map::ChunkMap,
     filesystem,
     items::{
-        BlockGroupItem, ChunkItem, CsumItem, DevExtent, DevItem, DevStatsItem, DirItem, ExtentItem,
-        FileExtentItem, InodeItem, InodeRef, RootItem, RootRef, UuidItem,
+        BlockGroupItem, ChunkItem, CsumItem, DevExtent, DevItem, DevStatsItem, DirItem, ExtentItemFull,
+        ExtentItemFullWrapper, FileExtentItem, InodeItem, InodeRef, RootItem, RootRef, UuidItem,
     },
-    superblock::{ChecksumType, Superblock},
+    superblock::{ChecksumType, IncompatFlags, Superblock},
     u32_le, u64_le, Checksum, DiskKey, DiskKeyType, InvalidChecksum, PackedUuid,
 };
 
@@ -137,10 +137,10 @@ pub enum Value<'a> {
     DirItem(Cow<'a, DirItem>),
     ExtentCsum(Cow<'a, CsumItem>),
     ExtentData(Cow<'a, FileExtentItem>),
-    ExtentItem(Cow<'a, ExtentItem>),
+    ExtentItem(ExtentItemFullWrapper<'a>),
     InodeItem(Cow<'a, InodeItem>),
     InodeRef(Cow<'a, InodeRef>),
-    MetadataItem(Cow<'a, ExtentItem>),
+    MetadataItem(ExtentItemFullWrapper<'a>),
     PersistentItem(Cow<'a, DevStatsItem>), // NOTE: Currently the only persistent item is the dev stats item.
     Root(Cow<'a, RootItem>),
     RootRef(Cow<'a, RootRef>),
@@ -176,13 +176,13 @@ impl<'a> Value<'a> {
             Self::Device(i) => Value::Device(Cow::<'static>::Owned(i.into_owned())),
             Self::DevExtent(i) => Value::DevExtent(Cow::<'static>::Owned(i.into_owned())),
             Self::DirIndex(i) => Value::DirIndex(Cow::<'static>::Owned(i.into_owned())),
-            Self::DirItem(i) => Value::DirIndex(Cow::<'static>::Owned(i.into_owned())),
+            Self::DirItem(i) => Value::DirItem(Cow::<'static>::Owned(i.into_owned())),
             Self::ExtentCsum(i) => Value::ExtentCsum(Cow::<'static>::Owned(i.into_owned())),
             Self::ExtentData(i) => Value::ExtentData(Cow::<'static>::Owned(i.into_owned())),
-            Self::ExtentItem(i) => Value::ExtentItem(Cow::<'static>::Owned(i.into_owned())),
+            Self::ExtentItem(i) => Value::ExtentItem(i.to_static()),
             Self::InodeItem(i) => Value::InodeItem(Cow::<'static>::Owned(i.into_owned())),
             Self::InodeRef(i) => Value::InodeRef(Cow::<'static>::Owned(i.into_owned())),
-            Self::MetadataItem(i) => Value::MetadataItem(Cow::<'static>::Owned(i.into_owned())),
+            Self::MetadataItem(i) => Value::MetadataItem(i.to_static()),
             Self::PersistentItem(i) => Value::PersistentItem(Cow::<'static>::Owned(i.into_owned())),
             Self::Root(i) => Value::Root(Cow::<'static>::Owned(i.into_owned())),
             Self::RootRef(i) => Value::RootRef(Cow::<'static>::Owned(i.into_owned())),
@@ -264,6 +264,7 @@ impl Leaf {
     }
     pub fn iter<'a>(
         &'a self,
+        incompat_flags: IncompatFlags,
     ) -> impl Iterator<Item = (LayoutVerified<&'a [u8], Item>, Value<'a>)> + 'a {
         (0..self.header.item_count.get() as usize)
             .map_while(move |i| {
@@ -273,6 +274,10 @@ impl Leaf {
             })
             .map_while(
                 move |item: LayoutVerified<&'a [u8], Item>| -> Option<(_, _)> {
+                    // Sometimes, parsing may fail. For now we print out dbg statements where there
+                    // so that nothing is silently discarded.
+                    macro_rules! dbg_none ( ( $value:expr ) => {{ if $value.is_none() { dbg!(); $value } else { $value } }} );
+
                     let value_bytes = &self.data[item.offset.get() as usize
                         ..item.offset.get() as usize + item.size.get() as usize];
 
@@ -283,54 +288,56 @@ impl Leaf {
 
                     let value: Value<'a> = match ty {
                         DiskKeyType::BlockGroupItem => Value::BlockGroupItem(Cow::Borrowed(
-                            LayoutVerified::<_, BlockGroupItem>::new_unaligned(value_bytes)?
+                            dbg_none!(LayoutVerified::<_, BlockGroupItem>::new_unaligned(value_bytes))?
                                 .into_ref(),
                         )),
                         DiskKeyType::ChunkItem => {
-                            Value::Chunk(Cow::Borrowed(ChunkItem::parse(value_bytes)?))
+                            Value::Chunk(Cow::Borrowed(dbg_none!(ChunkItem::parse(value_bytes))?))
                         }
                         DiskKeyType::DevExtent => Value::DevExtent(Cow::Borrowed(
-                            LayoutVerified::<_, DevExtent>::new_unaligned(value_bytes)?.into_ref(),
+                            dbg_none!(LayoutVerified::<_, DevExtent>::new_unaligned(value_bytes))?.into_ref(),
                         )),
                         DiskKeyType::DevItem => Value::Device(Cow::Borrowed(
-                            LayoutVerified::<_, DevItem>::new_unaligned(value_bytes)?.into_ref(),
+                            dbg_none!(LayoutVerified::<_, DevItem>::new_unaligned(value_bytes))?.into_ref(),
                         )),
                         DiskKeyType::DirIndex => {
-                            Value::DirIndex(Cow::Borrowed(DirItem::parse(value_bytes)?))
+                            Value::DirIndex(Cow::Borrowed(dbg_none!(DirItem::parse(value_bytes))?))
                         }
                         DiskKeyType::DirItem => {
-                            Value::DirItem(Cow::Borrowed(DirItem::parse(value_bytes)?))
+                            Value::DirItem(Cow::Borrowed(dbg_none!(DirItem::parse(value_bytes))?))
                         }
                         DiskKeyType::ExtentCsum => {
                             Value::ExtentCsum(Cow::Borrowed(CsumItem::parse(value_bytes)))
                         }
                         DiskKeyType::ExtentData => {
-                            Value::ExtentData(Cow::Borrowed(FileExtentItem::parse(value_bytes)?))
+                            Value::ExtentData(Cow::Borrowed(dbg_none!(FileExtentItem::parse(value_bytes))?))
                         }
-                        DiskKeyType::ExtentItem => Value::ExtentItem(Cow::Borrowed(
-                            LayoutVerified::<_, ExtentItem>::new_unaligned(value_bytes)?.into_ref(),
+                        DiskKeyType::ExtentItem => Value::ExtentItem(ExtentItemFullWrapper(
+                            Cow::Borrowed(dbg_none!(ExtentItemFull::parse(value_bytes))?),
+                            incompat_flags,
                         )),
                         DiskKeyType::InodeItem => Value::InodeItem(Cow::Borrowed(
-                            LayoutVerified::<_, InodeItem>::new_unaligned(value_bytes)?.into_ref(),
+                            dbg_none!(LayoutVerified::<_, InodeItem>::new_unaligned(value_bytes))?.into_ref(),
                         )),
                         DiskKeyType::InodeRef => {
-                            Value::InodeRef(Cow::Borrowed(InodeRef::parse(value_bytes)?))
+                            Value::InodeRef(Cow::Borrowed(dbg_none!(InodeRef::parse(value_bytes))?))
                         }
-                        DiskKeyType::MetadataItem => Value::MetadataItem(Cow::Borrowed(
-                            LayoutVerified::<_, ExtentItem>::new_unaligned(value_bytes)?.into_ref(),
+                        DiskKeyType::MetadataItem => Value::MetadataItem(ExtentItemFullWrapper(
+                            Cow::Borrowed(dbg_none!(ExtentItemFull::parse(value_bytes))?),
+                            incompat_flags,
                         )),
                         DiskKeyType::PersistentItem => Value::PersistentItem(Cow::Borrowed(
-                            LayoutVerified::<_, DevStatsItem>::new_unaligned(value_bytes)?
+                            dbg_none!(LayoutVerified::<_, DevStatsItem>::new_unaligned(value_bytes))?
                                 .into_ref(),
                         )),
                         DiskKeyType::RootBackref => Value::RootBackref(Cow::Borrowed(
-                            LayoutVerified::<_, RootRef>::new_unaligned(value_bytes)?.into_ref(),
+                            dbg_none!(RootRef::parse(value_bytes))?,
                         )),
                         DiskKeyType::RootItem => Value::Root(Cow::Borrowed(
-                            LayoutVerified::<_, RootItem>::new_unaligned(value_bytes)?.into_ref(),
+                            dbg_none!(LayoutVerified::<_, RootItem>::new_unaligned(value_bytes))?.into_ref(),
                         )),
                         DiskKeyType::RootRef => Value::RootRef(Cow::Borrowed(
-                            LayoutVerified::<_, RootRef>::new_unaligned(value_bytes)?.into_ref(),
+                            dbg_none!(RootRef::parse(value_bytes))?,
                         )),
                         DiskKeyType::UuidSubvol => {
                             Value::UuidSubvol(Cow::Borrowed(UuidItem::parse(value_bytes)))
@@ -339,7 +346,7 @@ impl Leaf {
                             Value::UuidReceivedSubvol(Cow::Borrowed(UuidItem::parse(value_bytes)))
                         }
                         DiskKeyType::XattrItem => {
-                            Value::XattrItem(Cow::Borrowed(DirItem::parse(value_bytes)?))
+                            Value::XattrItem(Cow::Borrowed(dbg_none!(DirItem::parse(value_bytes))?))
                         }
                         DiskKeyType::Unknown => panic!(),
                         _ => Value::Unknown,
@@ -355,7 +362,8 @@ impl fmt::Debug for Leaf {
 
         impl<'a> fmt::Debug for Pairs<'a> {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.debug_list().entries(self.0.iter()).finish()
+                // FIXME
+                f.debug_list().entries(self.0.iter(IncompatFlags::empty())).finish()
             }
         }
 
@@ -452,7 +460,7 @@ impl<'a> Tree<'a> {
 
                     // Leaf nodes are guaranteed to contain the key and the value, if they exist.
                     break leaf
-                        .iter()
+                        .iter(superblock.incompat_flags().unwrap())
                         .position(|(item, _)| compare(&item.key, key) == Ordering::Equal);
                 }
                 Tree::Internal(internal) => {
@@ -491,7 +499,7 @@ impl<'a> Tree<'a> {
             .last()
             .map(|(node, _)| node.as_ref().as_leaf().unwrap())
             .unwrap()
-            .iter()
+            .iter(superblock.incompat_flags().unwrap())
             .nth(item_index)
             .unwrap();
         Some(((key.key, value.to_static()), path))
@@ -590,7 +598,7 @@ impl<'a, D: fal::Device> Iterator for Pairs<'a, D> {
         };
 
         let action = match (*current_tree).as_ref() {
-            Tree::Leaf(leaf) => match leaf.iter().nth(*current_index) {
+            Tree::Leaf(leaf) => match leaf.iter(self.superblock.incompat_flags().unwrap()).nth(*current_index) {
                 Some((item, value)) => {
                     // If there is a pair available, just yield it and continue.
                     if let Some(previous_key) = self.previous_key {

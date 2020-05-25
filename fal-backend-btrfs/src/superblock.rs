@@ -40,9 +40,9 @@ pub struct Superblock {
     pub system_chunk_array_size: u32_le,
     pub chunk_root_gen: u64_le,
 
-    pub optional_flags: u64_le,
-    pub flags_for_write_support: u64_le,
-    pub required_flags: u64_le,
+    pub compat_flags: u64_le,
+    pub ro_compat_flags: u64_le,
+    pub incompat_flags: u64_le,
 
     pub checksum_type: u16_le,
 
@@ -236,6 +236,29 @@ impl Superblock {
         ChecksumType::from_u16(self.checksum_type.get())
             .expect("checksum_ty has been set to invalid value")
     }
+    /// Gets the read-only compatible flags. All of these flags have to be supported by this
+    /// implementation to be able to modify the filesystem.
+    ///
+    /// The return value is either as Ok(flags) if no unrecognized flags were found,
+    /// or Err((flags, rest)) if there were flags from the future (or if everything was malformed).
+    pub fn ro_compat_flags(&self) -> Result<RoCompatFlags, (RoCompatFlags, u64)> {
+        let flags = self.ro_compat_flags.get();
+
+        match RoCompatFlags::from_bits(flags) {
+            Some(f) => Ok(f),
+            None => Err((RoCompatFlags::from_bits_truncate(flags), flags & !RoCompatFlags::all().bits())),
+        }
+    }
+    /// Gets the incompatible flags. If any of the flags on-disk were unrecognized, this would mean
+    /// that the filesystem would fail to mount (hence only the bitmask in the Err variant).
+    pub fn incompat_flags(&self) -> Result<IncompatFlags, u64> {
+        let flags = self.incompat_flags.get();
+
+        match IncompatFlags::from_bits(flags) {
+            Some(f) => Ok(f),
+            None => Err(flags & !IncompatFlags::all().bits()),
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -350,5 +373,30 @@ bitflags! {
         const METADUMP_V2 = 1 << 34;
         const CHANGING_FSID = 1 << 35;
         const CHANGING_FSID_V2 = 1 << 36;
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct CompatFlags;
+
+bitflags! {
+    pub struct RoCompatFlags: u64 {
+        const FREE_SPACE_TREE = 1 << 0;
+        const FREE_SPACE_TREE_VALID = 1 << 1;
+    }
+}
+bitflags! {
+    pub struct IncompatFlags: u64 {
+        const MIXED_BACKREF = 1 << 0;
+        const DEFAULT_SUBVOL = 1 << 1;
+        const MIXED_GROUPS = 1 << 2;
+        const COMPRESS_LZO = 1 << 3;
+        const COMPRESS_ZSTD = 1 << 4;
+        const BIG_METADATA = 1 << 5;
+        const EXTENDED_IREF = 1 << 6;
+        const RAID56 = 1 << 7;
+        const SKINNY_METADATA = 1 << 8;
+        const NO_HOLES = 1 << 9;
+        const METADATA_UUID = 1 << 10;
+        const RAID1C34 = 1 << 11;
     }
 }
