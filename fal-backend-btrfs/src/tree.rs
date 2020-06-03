@@ -1,4 +1,5 @@
 use core::{borrow::Borrow, cmp::Ordering, fmt, mem};
+use alloc::borrow::Cow;
 
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
@@ -7,7 +8,7 @@ use crate::{
     filesystem,
     items::{
         BlockGroupItem, ChunkItem, CsumItem, DevExtent, DevItem, DevStatsItem, DirItem,
-        ExtentItemFull, ExtentItemFullWrapper, FileExtentItem, InodeItem, InodeRef, RootItem,
+        ExtentItemFull, ExtentItemFullWrapperCow, ExtentItemFullWrapperRef, FileExtentItem, InodeItem, InodeRef, RootItem,
         RootRef, UuidItem,
     },
     superblock::{ChecksumType, IncompatFlags, Superblock},
@@ -15,37 +16,6 @@ use crate::{
 };
 
 // TODO: Paths are small and smallvec / arrayvec should be used.
-
-/// A representation of data either being borrowed or owned, very similar to std's `Cow`, but being
-/// co-variant.
-#[derive(Copy, Debug)]
-pub enum Cow<'a, O, B: ?Sized + 'a = O> {
-    Borrowed(&'a B),
-    Owned(O),
-}
-
-impl<'a, O, B: ?Sized + 'a> Clone for Cow<'a, O, B>
-where
-    B: ToOwned<Owned = O>
-    O: Borrow<B>
-{
-    fn clone(&self) -> Self {
-        Cow::Owned(self.into_owned())
-    }
-}
-
-impl<'a, O, B: ?Sized + 'a> Cow<'a, O, B>
-where
-    B: ToOwned<Owned = O>,
-    O: Borrow<B>,
-{
-    pub fn into_owned(self) -> O {
-        match self {
-            Self::Owned(o) => o,
-            Self::Borrowed(b) => b.to_owned(),
-        }
-    }
-}
 
 pub enum OwnedOrBorrowedTree<'a> {
     Owned(TreeOwned),
@@ -161,48 +131,72 @@ pub struct Item {
 }
 
 #[derive(Clone, Debug)]
-pub enum Value<'a> {
+pub enum ValueCow<'a> {
     BlockGroupItem(Cow<'a, BlockGroupItem>),
-    Chunk(Cow<'a, Box<ChunkItem>, ChunkItem>),
+    Chunk(Cow<'a, ChunkItem>),
     Device(Cow<'a, DevItem>),
     DevExtent(Cow<'a, DevExtent>),
-    DirIndex(Cow<'a, Box<ChunkItem>, DirItem>),
-    DirItem(Cow<'a, Box<DirItem>, DirItem>),
-    ExtentCsum(Cow<'a, Box<CsumItem>, CsumItem>),
-    ExtentData(Cow<'a, Box<FileExtentItem>, FileExtentItem>),
-    ExtentItem(ExtentItemFullWrapper<'a>),
+    DirIndex(Cow<'a, DirItem>),
+    DirItem(Cow<'a, DirItem>),
+    ExtentCsum(Cow<'a, CsumItem>),
+    ExtentData(Cow<'a, FileExtentItem>),
+    ExtentItem(ExtentItemFullWrapperCow<'a>),
     InodeItem(Cow<'a, InodeItem>),
-    InodeRef(Cow<'a, Box<InodeRef>, InodeRef>),
-    MetadataItem(ExtentItemFullWrapper<'a>),
+    InodeRef(Cow<'a, InodeRef>),
+    MetadataItem(ExtentItemFullWrapperCow<'a>),
     PersistentItem(Cow<'a, DevStatsItem>), // NOTE: Currently the only persistent item is the dev stats item.
     Root(Cow<'a, RootItem>),
-    RootRef(Cow<'a, Box<RootRef>, RootRef>),
-    RootBackref(Cow<'a, Box<RootRef>, RootRef>),
-    UuidSubvol(Cow<'a, Box<UuidItem>, UuidItem>),
-    UuidReceivedSubvol(Cow<'a, Box<UuidItem>, UuidItem>),
-    XattrItem(Cow<'a, Box<DirItem>, DirItem>),
+    RootRef(Cow<'a, RootRef>),
+    RootBackref(Cow<'a, RootRef>),
+    UuidSubvol(Cow<'a, UuidItem>),
+    UuidReceivedSubvol(Cow<'a, UuidItem>),
+    XattrItem(Cow<'a, DirItem>),
     Unknown,
 }
-impl<'a> Value<'a> {
-    pub fn as_root_item(&'a self) -> Option<&'a RootItem> {
+#[derive(Clone, Copy, Debug)]
+pub enum ValueRef<'a> {
+    BlockGroupItem(&'a BlockGroupItem),
+    Chunk(&'a ChunkItem),
+    Device(&'a DevItem),
+    DevExtent(&'a DevExtent),
+    DirIndex(&'a DirItem),
+    DirItem(&'a DirItem),
+    ExtentCsum(&'a CsumItem),
+    ExtentData(&'a FileExtentItem),
+    ExtentItem(ExtentItemFullWrapperRef<'a>),
+    InodeItem(&'a InodeItem),
+    InodeRef(&'a InodeRef),
+    MetadataItem(ExtentItemFullWrapperRef<'a>),
+    PersistentItem(&'a DevStatsItem), // NOTE: Currently the only persistent item is the dev stats item.
+    Root(&'a RootItem),
+    RootRef(&'a RootRef),
+    RootBackref(&'a RootRef),
+    UuidSubvol(&'a UuidItem),
+    UuidReceivedSubvol(&'a UuidItem),
+    XattrItem(&'a DirItem),
+    Unknown,
+}
+
+impl<'a> ValueRef<'a> {
+    pub fn as_root_item(self) -> Option<&'a RootItem> {
         match self {
-            &Self::Root(ref item) => Some(item.borrow()),
+            Self::Root(item) => Some(item),
             _ => None,
         }
     }
-    pub fn into_inode_item(self) -> Option<InodeItem> {
+    pub fn as_inode_item(self) -> Option<&'a InodeItem> {
         match self {
-            Self::InodeItem(item) => Some(item.into_owned()),
+            Self::InodeItem(item) => Some(item),
             _ => None,
         }
     }
-    pub fn into_dir_item(self) -> Option<Cow<'a, Box<DirItem>, DirItem>> {
+    pub fn as_dir_item(self) -> Option<&'a DirItem> {
         match self {
             Self::DirItem(item) => Some(item),
             _ => None,
         }
     }
-    pub fn into_dir_index(self) -> Option<Cow<'a, Box<DirItem>, DirItem>> {
+    pub fn as_dir_index(self) -> Option<&'a DirItem> {
         match self {
             Self::DirIndex(item) => Some(item),
             _ => None,
@@ -220,87 +214,87 @@ impl<'a> Value<'a> {
             _ => false,
         }
     }
+}
+
+impl<'a> ValueCow<'a> {
     /// Convert self to a Value which is guaranteed not to contain any borrowed data, cloning into
     /// a Box if necessary.
-    pub fn to_static(self) -> Value<'static> {
+    pub fn to_static(self) -> ValueCow<'static> {
         match self {
-            Self::BlockGroupItem(i) => Value::BlockGroupItem(Cow::<'static>::Owned(i.into_owned())),
-            Self::Chunk(i) => Value::Chunk(Cow::<'static>::Owned(i.into_owned())),
-            Self::Device(i) => Value::Device(Cow::<'static>::Owned(i.into_owned())),
-            Self::DevExtent(i) => Value::DevExtent(Cow::<'static>::Owned(i.into_owned())),
-            Self::DirIndex(i) => Value::DirIndex(Cow::<'static>::Owned(i.into_owned())),
-            Self::DirItem(i) => Value::DirItem(Cow::<'static>::Owned(i.into_owned())),
-            Self::ExtentCsum(i) => Value::ExtentCsum(Cow::<'static>::Owned(i.into_owned())),
-            Self::ExtentData(i) => Value::ExtentData(Cow::<'static>::Owned(i.into_owned())),
-            Self::ExtentItem(i) => Value::ExtentItem(i.to_static()),
-            Self::InodeItem(i) => Value::InodeItem(Cow::<'static>::Owned(i.into_owned())),
-            Self::InodeRef(i) => Value::InodeRef(Cow::<'static>::Owned(i.into_owned())),
-            Self::MetadataItem(i) => Value::MetadataItem(i.to_static()),
-            Self::PersistentItem(i) => Value::PersistentItem(Cow::<'static>::Owned(i.into_owned())),
-            Self::Root(i) => Value::Root(Cow::<'static>::Owned(i.into_owned())),
-            Self::RootRef(i) => Value::RootRef(Cow::<'static>::Owned(i.into_owned())),
-            Self::RootBackref(i) => Value::RootBackref(Cow::<'static>::Owned(i.into_owned())),
-            Self::UuidSubvol(i) => Value::UuidSubvol(Cow::<'static>::Owned(i.into_owned())),
+            Self::BlockGroupItem(i) => ValueCow::BlockGroupItem(Cow::<'static>::Owned(i.into_owned())),
+            Self::Chunk(i) => ValueCow::Chunk(Cow::<'static>::Owned(i.into_owned())),
+            Self::Device(i) => ValueCow::Device(Cow::<'static>::Owned(i.into_owned())),
+            Self::DevExtent(i) => ValueCow::DevExtent(Cow::<'static>::Owned(i.into_owned())),
+            Self::DirIndex(i) => ValueCow::DirIndex(Cow::<'static>::Owned(i.into_owned())),
+            Self::DirItem(i) => ValueCow::DirItem(Cow::<'static>::Owned(i.into_owned())),
+            Self::ExtentCsum(i) => ValueCow::ExtentCsum(Cow::<'static>::Owned(i.into_owned())),
+            Self::ExtentData(i) => ValueCow::ExtentData(Cow::<'static>::Owned(i.into_owned())),
+            Self::ExtentItem(i) => ValueCow::ExtentItem(i.to_static()),
+            Self::InodeItem(i) => ValueCow::InodeItem(Cow::<'static>::Owned(i.into_owned())),
+            Self::InodeRef(i) => ValueCow::InodeRef(Cow::<'static>::Owned(i.into_owned())),
+            Self::MetadataItem(i) => ValueCow::MetadataItem(i.to_static()),
+            Self::PersistentItem(i) => ValueCow::PersistentItem(Cow::<'static>::Owned(i.into_owned())),
+            Self::Root(i) => ValueCow::Root(Cow::<'static>::Owned(i.into_owned())),
+            Self::RootRef(i) => ValueCow::RootRef(Cow::<'static>::Owned(i.into_owned())),
+            Self::RootBackref(i) => ValueCow::RootBackref(Cow::<'static>::Owned(i.into_owned())),
+            Self::UuidSubvol(i) => ValueCow::UuidSubvol(Cow::<'static>::Owned(i.into_owned())),
             Self::UuidReceivedSubvol(i) => {
-                Value::UuidReceivedSubvol(Cow::<'static>::Owned(i.into_owned()))
+                ValueCow::UuidReceivedSubvol(Cow::<'static>::Owned(i.into_owned()))
             }
-            Self::XattrItem(i) => Value::XattrItem(Cow::<'static>::Owned(i.into_owned())),
-            Self::Unknown => Value::Unknown,
+            Self::XattrItem(i) => ValueCow::XattrItem(Cow::<'static>::Owned(i.into_owned())),
+            Self::Unknown => ValueCow::Unknown,
         }
     }
-    /// Returns Some(self) if the value is borrowed, otherwise None.
-    pub fn as_borrowed(self) -> Option<Self> {
+    // Converts self into a ValueRef if self is borrowed, so that the lifetime of the return value
+    // is completely untied to self.
+    pub fn as_borrowed(&self) -> Option<ValueRef<'a>> {
         Some(match self {
-            Self::BlockGroupItem(Cow::Borrowed(i)) => Self::BlockGroupItem(Cow::Borrowed(i)),
-            Self::Chunk(Cow::Borrowed(i)) => Self::Chunk(Cow::Borrowed(i)),
-            Self::Device(Cow::Borrowed(i)) => Self::Device(Cow::Borrowed(i)),
-            Self::DevExtent(Cow::Borrowed(i)) => Self::DevExtent(Cow::Borrowed(i)),
-            Self::DirIndex(Cow::Borrowed(i)) => Self::DirIndex(Cow::Borrowed(i)),
-            Self::DirItem(Cow::Borrowed(i)) => Self::DirItem(Cow::Borrowed(i)),
-            Self::ExtentCsum(Cow::Borrowed(i)) => Self::ExtentCsum(Cow::Borrowed(i)),
-            Self::ExtentData(Cow::Borrowed(i)) => Self::ExtentData(Cow::Borrowed(i)),
-            Self::ExtentItem(i) => Self::ExtentItem(i.as_borrowed()?),
-            Self::InodeItem(Cow::Borrowed(i)) => Self::InodeItem(Cow::Borrowed(i)),
-            Self::InodeRef(Cow::Borrowed(i)) => Self::InodeRef(Cow::Borrowed(i)),
-            Self::MetadataItem(i) => Self::MetadataItem(i.as_borrowed()?),
-            Self::PersistentItem(Cow::Borrowed(i)) => Self::PersistentItem(Cow::Borrowed(i)),
-            Self::Root(Cow::Borrowed(i)) => Self::Root(Cow::Borrowed(i)),
-            Self::RootRef(Cow::Borrowed(i)) => Self::RootRef(Cow::Borrowed(i)),
-            Self::RootBackref(Cow::Borrowed(i)) => Self::RootBackref(Cow::Borrowed(i)),
-            Self::UuidSubvol(Cow::Borrowed(i)) => Self::UuidSubvol(Cow::Borrowed(i)),
-            Self::UuidReceivedSubvol(Cow::Borrowed(i)) => {
-                Self::UuidReceivedSubvol(Cow::Borrowed(i))
-            }
-            Self::XattrItem(Cow::Borrowed(i)) => Self::XattrItem(Cow::Borrowed(i)),
-            Self::Unknown => Value::Unknown,
+            Self::BlockGroupItem(Cow::Borrowed(i)) => ValueRef::BlockGroupItem(i),
+            Self::Chunk(Cow::Borrowed(i)) => ValueRef::Chunk(i),
+            Self::Device(Cow::Borrowed(i)) => ValueRef::Device(i),
+            Self::DevExtent(Cow::Borrowed(i)) => ValueRef::DevExtent(i),
+            Self::DirIndex(Cow::Borrowed(i)) => ValueRef::DirIndex(i),
+            Self::DirItem(Cow::Borrowed(i)) => ValueRef::DirItem(i),
+            Self::ExtentCsum(Cow::Borrowed(i)) => ValueRef::ExtentCsum(i),
+            Self::ExtentData(Cow::Borrowed(i)) => ValueRef::ExtentData(i),
+            Self::ExtentItem(i) => ValueRef::ExtentItem(i.as_borrowed()?),
+            Self::InodeItem(Cow::Borrowed(i)) => ValueRef::InodeItem(i),
+            Self::InodeRef(Cow::Borrowed(i)) => ValueRef::InodeRef(i),
+            Self::MetadataItem(i) => ValueRef::MetadataItem(i.as_borrowed()?),
+            Self::PersistentItem(Cow::Borrowed(i)) => ValueRef::PersistentItem(i),
+            Self::Root(Cow::Borrowed(i)) => ValueRef::Root(i),
+            Self::RootRef(Cow::Borrowed(i)) => ValueRef::RootRef(i),
+            Self::RootBackref(Cow::Borrowed(i)) => ValueRef::RootBackref(i),
+            Self::UuidSubvol(Cow::Borrowed(i)) => ValueRef::UuidSubvol(i),
+            Self::UuidReceivedSubvol(Cow::Borrowed(i)) => ValueRef::UuidReceivedSubvol(i),
+            Self::XattrItem(Cow::Borrowed(i)) => ValueRef::XattrItem(i),
+            Self::Unknown => ValueRef::Unknown,
             _ => return None,
         })
     }
-    /// Returns a borrowed value for self ('b), or None if the value was already borrowed.
-    pub fn owned_as_borrowed<'b>(&'b self) -> Option<Value<'b>> {
+    /// Returns a borrowed value ref for self ('b), or None if the value was already borrowed.
+    pub fn owned_as_borrowed<'b>(&'b self) -> Option<ValueRef<'b>> {
         Some(match self {
-            &Self::BlockGroupItem(Cow::Owned(ref i)) => Value::BlockGroupItem(Cow::<'b>::Borrowed(i)),
-            &Self::Chunk(Cow::Owned(ref i)) => Value::Chunk(Cow::<'b>::Borrowed(i)),
-            &Self::Device(Cow::Owned(ref i)) => Value::Device(Cow::<'b>::Borrowed(i)),
-            &Self::DevExtent(Cow::Owned(ref i)) => Value::DevExtent(Cow::<'b>::Borrowed(i)),
-            &Self::DirIndex(Cow::Owned(ref i)) => Value::DirIndex(Cow::<'b>::Borrowed(i)),
-            &Self::DirItem(Cow::Owned(ref i)) => Value::DirItem(Cow::<'b>::Borrowed(i)),
-            &Self::ExtentCsum(Cow::Owned(ref i)) => Value::ExtentCsum(Cow::<'b>::Borrowed(i)),
-            &Self::ExtentData(Cow::Owned(ref i)) => Value::ExtentData(Cow::<'b>::Borrowed(i)),
-            &Self::ExtentItem(ref i) => Value::ExtentItem(i.owned_as_borrowed()?),
-            &Self::InodeItem(Cow::Owned(ref i)) => Value::InodeItem(Cow::<'b>::Borrowed(i)),
-            &Self::InodeRef(Cow::Owned(ref i)) => Value::InodeRef(Cow::<'b>::Borrowed(i)),
-            &Self::MetadataItem(ref i) => Value::MetadataItem(i.owned_as_borrowed()?),
-            &Self::PersistentItem(Cow::Owned(ref i)) => Value::PersistentItem(Cow::<'b>::Borrowed(i)),
-            &Self::Root(Cow::Owned(ref i)) => Value::Root(Cow::<'b>::Borrowed(i)),
-            &Self::RootRef(Cow::Owned(ref i)) => Value::RootRef(Cow::<'b>::Borrowed(i)),
-            &Self::RootBackref(Cow::Owned(ref i)) => Value::RootBackref(Cow::<'b>::Borrowed(i)),
-            &Self::UuidSubvol(Cow::Owned(ref i)) => Value::UuidSubvol(Cow::<'b>::Borrowed(i)),
-            &Self::UuidReceivedSubvol(Cow::Owned(ref i)) => {
-                Value::UuidReceivedSubvol(Cow::<'b>::Borrowed(i))
-            }
-            &Self::XattrItem(Cow::Owned(ref i)) => Value::XattrItem(Cow::<'b>::Borrowed(i)),
-            &Self::Unknown => Value::Unknown,
+            &Self::BlockGroupItem(Cow::Owned(ref i)) => ValueRef::BlockGroupItem(i),
+            &Self::Chunk(Cow::Owned(ref i)) => ValueRef::Chunk(i),
+            &Self::Device(Cow::Owned(ref i)) => ValueRef::Device(i),
+            &Self::DevExtent(Cow::Owned(ref i)) => ValueRef::DevExtent(i),
+            &Self::DirIndex(Cow::Owned(ref i)) => ValueRef::DirIndex(i),
+            &Self::DirItem(Cow::Owned(ref i)) => ValueRef::DirItem(i),
+            &Self::ExtentCsum(Cow::Owned(ref i)) => ValueRef::ExtentCsum(i),
+            &Self::ExtentData(Cow::Owned(ref i)) => ValueRef::ExtentData(i),
+            &Self::ExtentItem(ref i) => ValueRef::ExtentItem(i.owned_as_borrowed()?),
+            &Self::InodeItem(Cow::Owned(ref i)) => ValueRef::InodeItem(i),
+            &Self::InodeRef(Cow::Owned(ref i)) => ValueRef::InodeRef(i),
+            &Self::MetadataItem(ref i) => ValueRef::MetadataItem(i.owned_as_borrowed()?),
+            &Self::PersistentItem(Cow::Owned(ref i)) => ValueRef::PersistentItem(i),
+            &Self::Root(Cow::Owned(ref i)) => ValueRef::Root(i),
+            &Self::RootRef(Cow::Owned(ref i)) => ValueRef::RootRef(i),
+            &Self::RootBackref(Cow::Owned(ref i)) => ValueRef::RootBackref(i),
+            &Self::UuidSubvol(Cow::Owned(ref i)) => ValueRef::UuidSubvol(i),
+            &Self::UuidReceivedSubvol(Cow::Owned(ref i)) => ValueRef::UuidReceivedSubvol(i),
+            &Self::XattrItem(Cow::Owned(ref i)) => ValueRef::XattrItem(i),
+            &Self::Unknown => ValueRef::Unknown,
             _ => return None,
         })
     }
@@ -374,7 +368,7 @@ impl Leaf {
     pub fn iter<'a>(
         &'a self,
         incompat_flags: IncompatFlags,
-    ) -> impl Iterator<Item = (LayoutVerified<&'a [u8], Item>, Value<'a>)> + 'a {
+    ) -> impl Iterator<Item = (LayoutVerified<&'a [u8], Item>, ValueRef<'a>)> + 'a {
         (0..self.header.item_count.get() as usize)
             .map_while(move |i| {
                 LayoutVerified::new_unaligned(
@@ -392,73 +386,73 @@ impl Leaf {
 
                     let ty = match item.key.ty() {
                         Some(ty) => ty,
-                        None => return Some((item, Value::Unknown)), // TODO: Warn
+                        None => return Some((item, ValueRef::Unknown)), // TODO: Warn
                     };
 
-                    let value: Value<'a> = match ty {
-                        DiskKeyType::BlockGroupItem => Value::BlockGroupItem(Cow::Borrowed(
+                    let value: ValueRef<'a> = match ty {
+                        DiskKeyType::BlockGroupItem => ValueRef::BlockGroupItem(
                             dbg_none!(LayoutVerified::<_, BlockGroupItem>::new_unaligned(value_bytes))?
                                 .into_ref(),
-                        )),
+                        ),
                         DiskKeyType::ChunkItem => {
-                            Value::Chunk(Cow::Borrowed(dbg_none!(ChunkItem::parse(value_bytes))?))
+                            ValueRef::Chunk(dbg_none!(ChunkItem::parse(value_bytes))?)
                         }
-                        DiskKeyType::DevExtent => Value::DevExtent(Cow::Borrowed(
+                        DiskKeyType::DevExtent => ValueRef::DevExtent(
                             dbg_none!(LayoutVerified::<_, DevExtent>::new_unaligned(value_bytes))?.into_ref(),
-                        )),
-                        DiskKeyType::DevItem => Value::Device(Cow::Borrowed(
+                        ),
+                        DiskKeyType::DevItem => ValueRef::Device(
                             dbg_none!(LayoutVerified::<_, DevItem>::new_unaligned(value_bytes))?.into_ref(),
-                        )),
+                        ),
                         DiskKeyType::DirIndex => {
-                            Value::DirIndex(Cow::Borrowed(dbg_none!(DirItem::parse(value_bytes))?))
+                            ValueRef::DirIndex(dbg_none!(DirItem::parse(value_bytes))?)
                         }
                         DiskKeyType::DirItem => {
-                            Value::DirItem(Cow::Borrowed(dbg_none!(DirItem::parse(value_bytes))?))
+                            ValueRef::DirItem(dbg_none!(DirItem::parse(value_bytes))?)
                         }
                         DiskKeyType::ExtentCsum => {
-                            Value::ExtentCsum(Cow::Borrowed(CsumItem::parse(value_bytes)))
+                            ValueRef::ExtentCsum(CsumItem::parse(value_bytes))
                         }
                         DiskKeyType::ExtentData => {
-                            Value::ExtentData(Cow::Borrowed(dbg_none!(FileExtentItem::parse(value_bytes))?))
+                            ValueRef::ExtentData(dbg_none!(FileExtentItem::parse(value_bytes))?)
                         }
-                        DiskKeyType::ExtentItem => Value::ExtentItem(ExtentItemFullWrapper(
-                            Cow::Borrowed(dbg_none!(ExtentItemFull::parse(value_bytes))?),
+                        DiskKeyType::ExtentItem => ValueRef::ExtentItem(ExtentItemFullWrapperRef(
+                            dbg_none!(ExtentItemFull::parse(value_bytes))?,
                             incompat_flags,
                         )),
-                        DiskKeyType::InodeItem => Value::InodeItem(Cow::Borrowed(
+                        DiskKeyType::InodeItem => ValueRef::InodeItem(
                             dbg_none!(LayoutVerified::<_, InodeItem>::new_unaligned(value_bytes))?.into_ref(),
-                        )),
+                        ),
                         DiskKeyType::InodeRef => {
-                            Value::InodeRef(Cow::Borrowed(dbg_none!(InodeRef::parse(value_bytes))?))
+                            ValueRef::InodeRef(dbg_none!(InodeRef::parse(value_bytes))?)
                         }
-                        DiskKeyType::MetadataItem => Value::MetadataItem(ExtentItemFullWrapper(
-                            Cow::Borrowed(dbg_none!(ExtentItemFull::parse(value_bytes))?),
+                        DiskKeyType::MetadataItem => ValueRef::MetadataItem(ExtentItemFullWrapperRef(
+                            dbg_none!(ExtentItemFull::parse(value_bytes))?,
                             incompat_flags,
                         )),
-                        DiskKeyType::PersistentItem => Value::PersistentItem(Cow::Borrowed(
+                        DiskKeyType::PersistentItem => ValueRef::PersistentItem(
                             dbg_none!(LayoutVerified::<_, DevStatsItem>::new_unaligned(value_bytes))?
                                 .into_ref(),
-                        )),
-                        DiskKeyType::RootBackref => Value::RootBackref(Cow::Borrowed(
+                        ),
+                        DiskKeyType::RootBackref => ValueRef::RootBackref(
                             dbg_none!(RootRef::parse(value_bytes))?,
-                        )),
-                        DiskKeyType::RootItem => Value::Root(Cow::Borrowed(
+                        ),
+                        DiskKeyType::RootItem => ValueRef::Root(
                             dbg_none!(LayoutVerified::<_, RootItem>::new_unaligned(value_bytes))?.into_ref(),
-                        )),
-                        DiskKeyType::RootRef => Value::RootRef(Cow::Borrowed(
+                        ),
+                        DiskKeyType::RootRef => ValueRef::RootRef(
                             dbg_none!(RootRef::parse(value_bytes))?,
-                        )),
+                        ),
                         DiskKeyType::UuidSubvol => {
-                            Value::UuidSubvol(Cow::Borrowed(UuidItem::parse(value_bytes)))
+                            ValueRef::UuidSubvol(UuidItem::parse(value_bytes))
                         }
                         DiskKeyType::UuidReceivedSubvol => {
-                            Value::UuidReceivedSubvol(Cow::Borrowed(UuidItem::parse(value_bytes)))
+                            ValueRef::UuidReceivedSubvol(UuidItem::parse(value_bytes))
                         }
                         DiskKeyType::XattrItem => {
-                            Value::XattrItem(Cow::Borrowed(dbg_none!(DirItem::parse(value_bytes))?))
+                            ValueRef::XattrItem(dbg_none!(DirItem::parse(value_bytes))?)
                         }
                         DiskKeyType::Unknown => panic!(),
-                        _ => Value::Unknown,
+                        _ => ValueRef::Unknown,
                     };
                     Some((item, value))
                 },
@@ -566,7 +560,7 @@ impl<'a> Tree<'a> {
         chunk_map: &ChunkMap,
         key: &DiskKey,
         compare: fn(k1: &DiskKey, k2: &DiskKey) -> Ordering,
-    ) -> Option<((DiskKey, Value<'static>), Path<'a>)> {
+    ) -> Option<((DiskKey, ValueRef<'a>), Path<'a>)> {
         let mut path = Vec::with_capacity(self.header().level.into());
         path.push((OwnedOrBorrowedTree::Borrowed(*self), 0));
 
@@ -619,7 +613,7 @@ impl<'a> Tree<'a> {
             .iter(superblock.incompat_flags().unwrap())
             .nth(item_index)
             .unwrap();
-        Some(((key.key, value.to_static()), path))
+        Some(((key.key, value), path))
     }
     pub fn get<D: fal::Device>(
         &'a self,
@@ -627,7 +621,7 @@ impl<'a> Tree<'a> {
         superblock: &Superblock,
         chunk_map: &ChunkMap,
         key: &DiskKey,
-    ) -> Option<Value<'a>> {
+    ) -> Option<ValueRef<'a>> {
         self.get_with_path(device, superblock, chunk_map, key)
             .map(|(value, _)| value)
     }
@@ -637,7 +631,7 @@ impl<'a> Tree<'a> {
         superblock: &Superblock,
         chunk_map: &ChunkMap,
         key: &DiskKey,
-    ) -> Option<(Value<'a>, Path)> {
+    ) -> Option<(ValueRef<'a>, Path)> {
         self.get_generic(device, superblock, chunk_map, key, Ord::cmp)
             .map(|((_, value), path)| (value, path))
     }
@@ -697,7 +691,7 @@ pub struct PairsIterState<'a> {
 enum Either<A, B> { A(A), B(B) }
 
 pub enum Step<'a, 'b> {
-    Value(Option<(DiskKey, Either<Value<'a>, Value<'b>>)>),
+    Value(Option<(DiskKey, Either<ValueRef<'a>, ValueRef<'b>>)>),
     Step,
 }
 
@@ -792,19 +786,20 @@ impl<'a> PairsIterState<'a> {
             return Step::Step;
         }
     }
-    pub fn next_owned<'b, D: fal::DeviceRo>(&'b mut self, device: &D, superblock: &Superblock, chunk_map: &ChunkMap) -> Option<(DiskKey, Value<'static>)> {
-        //loop {
+    pub fn next_owned<'b, D: fal::DeviceRo>(&'b mut self, device: &D, superblock: &Superblock, chunk_map: &ChunkMap) -> Option<(DiskKey, ValueRef<'static>)> {
+        /*//loop {
             let step: Step<'a, 'b> = self.step(device, superblock, chunk_map, 1);
 
             match step {
                 Step::Value(Some((key, value))) => match value {
-                    Either::<Value<'a>, Value<'b>>::A(a) => return Some((key, Value::<'static>::to_static(a))),
-                    Either::<Value<'a>, Value<'b>>::B(b) => return Some((key, Value::<'static>::to_static(b))),
+                    Either::<Value<'a>, Value<'b>>::A(a) => return Some((key, ValueRef::<'static>::to_static(a))),
+                    Either::<ValueRef<'a>, Value<'b>>::B(b) => return Some((key, ValueRef::<'static>::to_static(b))),
                 }
                 Step::Value(None) => return None,
                 Step::Step => panic!(),
             }
-        //}
+        //}*/
+        todo!()
     }
     pub fn iter<'b, D>(&'a mut self, device: &'b D, superblock: &'b Superblock, chunk_map: &'b ChunkMap) -> Pairs<'a, 'b, D> {
         Pairs::assemble(self, device, superblock, chunk_map)

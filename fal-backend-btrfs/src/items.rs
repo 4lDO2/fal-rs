@@ -695,27 +695,13 @@ impl ToOwned for ExtentItemFull {
     }
 }
 
-#[derive(Clone)]
-pub struct ExtentItemFullWrapper<'a>(pub Cow<'a, ExtentItemFull>, pub IncompatFlags);
+#[derive(Clone, Copy)]
+pub struct ExtentItemFullWrapperRef<'a>(pub &'a ExtentItemFull, pub IncompatFlags);
 
-impl<'a> ExtentItemFullWrapper<'a> {
-    pub fn to_static(self) -> ExtentItemFullWrapper<'static> {
-        ExtentItemFullWrapper(Cow::<'static>::Owned(self.0.into_owned()), self.1)
-    }
-    /// In case we own the item, borrow it for self ('b), otherwise return None.
-    pub fn owned_as_borrowed<'b>(&'b self) -> Option<ExtentItemFullWrapper<'b>> {
-        match self {
-            &ExtentItemFullWrapper(Cow::Owned(ref s), f) => Some(ExtentItemFullWrapper(Cow::Borrowed(s), f)),
-            _ => None,
-        }
-    }
-    /// Only return self if borrowed for 'a.
-    pub fn as_borrowed(self) -> Option<Self> {
-        match self {
-            Self(Cow::Borrowed(r), f) => Some(Self(Cow::Borrowed(r), f)),
-            _ => return None,
-        }
-    }
+#[derive(Clone)]
+pub struct ExtentItemFullWrapperCow<'a>(pub Cow<'a, ExtentItemFull>, pub IncompatFlags);
+
+impl<'a> ExtentItemFullWrapperRef<'a> {
     pub fn tree_block_info(&'a self) -> Option<&'a TreeBlockInfo> {
         if self.1.contains(IncompatFlags::SKINNY_METADATA)
             || self.0.base.flags()?.contains(ExtentFlags::DATA)
@@ -737,14 +723,44 @@ impl<'a> ExtentItemFullWrapper<'a> {
         Some(LayoutVerified::new_slice_unaligned(&self.0.rest)?.into_slice())
     }
 }
+impl<'a> ExtentItemFullWrapperCow<'a> {
+    pub fn as_borrowed(&self) -> Option<ExtentItemFullWrapperRef<'a>> {
+        if let Cow::Borrowed(reference) = self.0 {
+            Some(ExtentItemFullWrapperRef(reference, self.1))
+        } else {
+            None
+        }
+    }
+    pub fn owned_as_borrowed<'b>(&'b self) -> Option<ExtentItemFullWrapperRef<'b>> {
+        if let Cow::Owned(ref owned) = self.0 {
+            Some(ExtentItemFullWrapperRef(owned, self.1))
+        } else {
+            None
+        }
+    }
+    pub fn to_static(self) -> ExtentItemFullWrapperCow<'static> {
+        match self.0 {
+            Cow::Owned(owned) => ExtentItemFullWrapperCow(Cow::Owned(owned), self.1),
+            Cow::Borrowed(borrowed) => ExtentItemFullWrapperCow(Cow::Owned(borrowed.to_owned()), self.1),
+        }
+    }
+    pub fn as_ref<'b: 'a>(&'b self) -> ExtentItemFullWrapperRef<'b> {
+        self.owned_as_borrowed().or(self.as_borrowed()).unwrap()
+    }
+}
 
-impl fmt::Debug for ExtentItemFullWrapper<'_> {
+impl fmt::Debug for ExtentItemFullWrapperRef<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ExtentItemFull")
             .field("base", &self.0.base)
             .field("tree_block_info", &self.tree_block_info())
             .field("refs", &self.refs())
             .finish()
+    }
+}
+impl fmt::Debug for ExtentItemFullWrapperCow<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.as_ref(), f)
     }
 }
 

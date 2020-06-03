@@ -3,7 +3,6 @@ use std::sync::{Mutex, RwLock};
 use core::convert::{TryFrom, TryInto};
 use core::sync::atomic::{self, AtomicU64};
 
-use alloc::borrow::Cow;
 use alloc::collections::BTreeMap;
 
 use fal::Inode as _;
@@ -13,7 +12,7 @@ use crate::{
     items::{DirItem, Filetype, InodeItem},
     oid,
     superblock::Superblock,
-    tree::{Tree, TreeOwned, Value},
+    tree::{Tree, TreeOwned},
     u64_le, DiskKey, DiskKeyType, Timespec,
 };
 
@@ -313,14 +312,14 @@ impl<D: fal::Device> Filesystem<D> {
         tree: Tree<'a>,
         oid: u64,
         name: &[u8],
-    ) -> Option<Box<DirItem>> {
+    ) -> Option<&'a DirItem> {
         let key = DiskKey {
             oid: u64_le::new(oid),
             ty: DiskKeyType::DirItem as u8,
             offset: u64_le::new(u64::from(dbg!(Self::name_hash(name)))),
         };
         let value = tree.get(device, superblock, chunk_map, &key)?;
-        Some(value.into_dir_item()?.into_owned())
+        Some(value.as_dir_item()?)
     }
     pub fn insert_handle(&self, handle: Handle) -> u64 {
         let num = self.next_handle.fetch_add(1, atomic::Ordering::Relaxed);
@@ -352,11 +351,11 @@ impl<D: fal::Device> Filesystem<D> {
         let subvolumes_read_guard = self.subvolumes.read().unwrap();
         let subvolume_read_guard = subvolumes_read_guard.get(&subvolid).ok_or(fal::Error::NoEntity)?.read().unwrap();
 
-        let inner = subvolume_read_guard
+        let inner = *subvolume_read_guard
             .as_ref()
             .get(&self.device, &self.superblock, &self.chunk_map, &disk_key)
             .ok_or(fal::Error::NoEntity)?
-            .into_inode_item()
+            .as_inode_item()
             .ok_or(fal::Error::NoEntity)?;
 
         Ok((Inode {
@@ -460,7 +459,7 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
             .get(&self.device, &self.superblock, &self.chunk_map, &disk_key)
             .ok_or(fal::Error::NoEntity)?;
 
-        let item = value.into_dir_item().ok_or(fal::Error::NoEntity)?;
+        let item = value.as_dir_item().ok_or(fal::Error::NoEntity)?;
 
         let fal_inode = if item.location.ty() == Some(DiskKeyType::DirItem) {
             self.translation_for(item.location.oid.get(), parent_subvolid)
