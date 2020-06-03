@@ -52,7 +52,7 @@ impl fal::Inode for Inode {
             },
             inode: self.key.header.oid.into(),
             permissions: self.value.permissions,
-            rdev: self.value.rdev(),
+            rdev: u64::from(self.value.rdev()),
         }
     }
     fn set_perm(&mut self, permissions: u16) {

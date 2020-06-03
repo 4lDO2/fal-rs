@@ -8,6 +8,8 @@ pub mod items;
 pub mod superblock;
 pub mod tree;
 
+pub use filesystem::Filesystem;
+
 use core::cmp::Ordering;
 use core::convert::TryFrom;
 use core::fmt;

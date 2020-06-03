@@ -492,10 +492,10 @@ impl ToOwned for FileExtentItem {
 
         let ptr: *mut [u8] = Box::into_raw(b);
         unsafe {
-            Box::from_raw(slice::from_raw_parts(
-                ptr as *const u8,
-                self.rest.len(),
-            ) as *const [u8] as *const Self as *mut Self)
+            Box::from_raw(
+                slice::from_raw_parts(ptr as *const u8, self.rest.len()) as *const [u8]
+                    as *const Self as *mut Self,
+            )
         }
     }
 }
@@ -632,22 +632,27 @@ impl ExtentItemFull {
         }
         let count = bytes.len() - Self::BASE_LEN;
 
-        Some(
-            NonZeroUsize::new(Self::BASE_LEN + count)
-                .unwrap(),
-        )
+        Some(NonZeroUsize::new(Self::BASE_LEN + count).unwrap())
     }
 
     pub fn parse<'a>(bytes: &'a [u8]) -> Option<&'a Self> {
-        let base = LayoutVerified::<_, ExtentItem>::new_unaligned(&bytes[..mem::size_of::<ExtentItem>()])?.into_ref();
+        let base =
+            LayoutVerified::<_, ExtentItem>::new_unaligned(&bytes[..mem::size_of::<ExtentItem>()])?
+                .into_ref();
 
-        if base.flags()?.contains(ExtentFlags::DATA) && base.flags()?.contains(ExtentFlags::TREE_BLOCK) {
+        if base.flags()?.contains(ExtentFlags::DATA)
+            && base.flags()?.contains(ExtentFlags::TREE_BLOCK)
+        {
             todo!("handle invalid flag combination")
         }
-        if !base.flags()?.contains(ExtentFlags::DATA) && !base.flags()?.contains(ExtentFlags::TREE_BLOCK) {
+        if !base.flags()?.contains(ExtentFlags::DATA)
+            && !base.flags()?.contains(ExtentFlags::TREE_BLOCK)
+        {
             todo!("handle invalid flag combination")
         }
-        if base.flags()?.contains(ExtentFlags::DATA) && base.flags()?.contains(ExtentFlags::FULL_BACKREF) {
+        if base.flags()?.contains(ExtentFlags::DATA)
+            && base.flags()?.contains(ExtentFlags::FULL_BACKREF)
+        {
             todo!("handle invalid flag combination")
         }
         unsafe {
@@ -682,10 +687,10 @@ impl ToOwned for ExtentItemFull {
 
         let ptr: *mut [u8] = Box::into_raw(b);
         unsafe {
-            Box::from_raw(slice::from_raw_parts(
-                ptr as *const u8,
-                self.rest.len(),
-            ) as *const [u8] as *const Self as *mut Self)
+            Box::from_raw(
+                slice::from_raw_parts(ptr as *const u8, self.rest.len()) as *const [u8]
+                    as *const Self as *mut Self,
+            )
         }
     }
 }
@@ -697,15 +702,34 @@ impl<'a> ExtentItemFullWrapper<'a> {
     pub fn to_static(self) -> ExtentItemFullWrapper<'static> {
         ExtentItemFullWrapper(Cow::<'static>::Owned(self.0.into_owned()), self.1)
     }
+    /// In case we own the item, borrow it for self ('b), otherwise return None.
+    pub fn owned_as_borrowed<'b>(&'b self) -> Option<ExtentItemFullWrapper<'b>> {
+        match self {
+            &ExtentItemFullWrapper(Cow::Owned(ref s), f) => Some(ExtentItemFullWrapper(Cow::Borrowed(s), f)),
+            _ => None,
+        }
+    }
+    /// Only return self if borrowed for 'a.
+    pub fn as_borrowed(self) -> Option<Self> {
+        match self {
+            Self(Cow::Borrowed(r), f) => Some(Self(Cow::Borrowed(r), f)),
+            _ => return None,
+        }
+    }
     pub fn tree_block_info(&'a self) -> Option<&'a TreeBlockInfo> {
-        if self.1.contains(IncompatFlags::SKINNY_METADATA) || self.0.base.flags()?.contains(ExtentFlags::DATA) {
+        if self.1.contains(IncompatFlags::SKINNY_METADATA)
+            || self.0.base.flags()?.contains(ExtentFlags::DATA)
+        {
             return None;
         }
-        let reference: LayoutVerified<&'a [u8], TreeBlockInfo> = LayoutVerified::new_unaligned(&self.0.rest[..mem::size_of::<TreeBlockInfo>()])?;
+        let reference: LayoutVerified<&'a [u8], TreeBlockInfo> =
+            LayoutVerified::new_unaligned(&self.0.rest[..mem::size_of::<TreeBlockInfo>()])?;
         Some(reference.into_ref())
     }
     pub fn refs(&'a self) -> Option<&'a [ExtentInlineRef]> {
-        let slice = if self.0.base.flags()?.contains(ExtentFlags::DATA) || self.1.contains(IncompatFlags::SKINNY_METADATA) {
+        let slice = if self.0.base.flags()?.contains(ExtentFlags::DATA)
+            || self.1.contains(IncompatFlags::SKINNY_METADATA)
+        {
             &self.0.rest
         } else {
             &self.0.rest[mem::size_of::<TreeBlockInfo>()..]
@@ -790,10 +814,10 @@ impl ToOwned for CsumItem {
 
         let ptr: *mut [u8] = Box::into_raw(b);
         unsafe {
-            Box::from_raw(slice::from_raw_parts(
-                ptr as *const u8,
-                self.data.len(),
-            ) as *const [u8] as *const Self as *mut Self)
+            Box::from_raw(
+                slice::from_raw_parts(ptr as *const u8, self.data.len()) as *const [u8]
+                    as *const Self as *mut Self,
+            )
         }
     }
 }
@@ -842,9 +866,12 @@ impl fmt::Debug for UuidItem {
     }
 }
 impl PartialEq for UuidItem {
-     fn eq(&self, other: &Self) -> bool {
-         self.subvolumes.iter().map(|NoAlign(val)| val.get()).eq(other.subvolumes.iter().map(|NoAlign(val)| val.get()))
-     }
+    fn eq(&self, other: &Self) -> bool {
+        self.subvolumes
+            .iter()
+            .map(|NoAlign(val)| val.get())
+            .eq(other.subvolumes.iter().map(|NoAlign(val)| val.get()))
+    }
 }
 impl ToOwned for UuidItem {
     type Owned = Box<Self>;
@@ -858,7 +885,8 @@ impl ToOwned for UuidItem {
             Box::from_raw(slice::from_raw_parts(
                 ptr as *const u8 as *const NoAlign<u64_le>,
                 self.subvolumes.len(),
-            ) as *const [NoAlign<u64_le>] as *const Self as *mut Self)
+            ) as *const [NoAlign<u64_le>] as *const Self
+                as *mut Self)
         }
     }
 }
@@ -912,9 +940,8 @@ mod tests {
         use super::InodeRef;
 
         let bytes = [
-            0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x0A, 0x00, 0x73, 0x75, 0x62, 0x73, 0x75, 0x62,
-            0x66, 0x69, 0x6C, 0x65,
+            0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0A, 0x00, 0x73, 0x75, 0x62, 0x73,
+            0x75, 0x62, 0x66, 0x69, 0x6C, 0x65,
         ];
         check_parsing!(InodeRef, &bytes)
     }
@@ -923,11 +950,9 @@ mod tests {
         use super::DirItem;
 
         let bytes = [
-            0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x0A, 0x00, 0x01, 0x73, 0x75,
-            0x62, 0x73, 0x75, 0x62, 0x66, 0x69, 0x6C, 0x65,
+            0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0A,
+            0x00, 0x01, 0x73, 0x75, 0x62, 0x73, 0x75, 0x62, 0x66, 0x69, 0x6C, 0x65,
         ];
         check_parsing!(DirItem, &bytes)
     }
@@ -936,10 +961,8 @@ mod tests {
         use super::RootRef;
 
         let bytes = [
-            0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x0A, 0x00, 0x66, 0x61, 0x6C, 0x2D, 0x73, 0x75,
-            0x6C,
+            0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x0A, 0x00, 0x66, 0x61, 0x6C, 0x2D, 0x73, 0x75, 0x6C,
         ];
         check_parsing!(RootRef, &bytes);
     }

@@ -46,12 +46,13 @@ impl ChunkMap {
     }
     pub fn read_chunk_tree<D: fal::Device>(
         &mut self,
-        device: &mut D,
+        device: &D,
         superblock: &Superblock,
         tree: Tree,
     ) {
         let new_pairs = tree
-            .pairs(device, superblock, self)
+            .pairs()
+            .iter(device, superblock, self)
             .filter_map(|(k, v)| v.as_chunk_item().map(|v| (k.offset.get(), v.to_owned())))
             .collect::<Vec<_>>();
         self.map.extend(new_pairs)

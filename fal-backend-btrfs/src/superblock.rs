@@ -246,7 +246,10 @@ impl Superblock {
 
         match RoCompatFlags::from_bits(flags) {
             Some(f) => Ok(f),
-            None => Err((RoCompatFlags::from_bits_truncate(flags), flags & !RoCompatFlags::all().bits())),
+            None => Err((
+                RoCompatFlags::from_bits_truncate(flags),
+                flags & !RoCompatFlags::all().bits(),
+            )),
         }
     }
     /// Gets the incompatible flags. If any of the flags on-disk were unrecognized, this would mean

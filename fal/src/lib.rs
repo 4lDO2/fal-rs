@@ -417,6 +417,7 @@ pub struct DirectoryEntry<InodeAddr: Into<u64>> {
 #[derive(Debug)]
 pub enum Error {
     BadFd,
+    BadFdState,
     NoEntity,
     Overflow,
     Invalid,
@@ -433,6 +434,7 @@ impl Error {
     pub fn errno(&self) -> i32 {
         match self {
             Self::BadFd => libc::EBADF,
+            Self::BadFdState => libc::EBADFD,
             Self::NoEntity => libc::ENOENT,
             Self::Other(n) => *n,
             Self::Overflow => libc::EOVERFLOW,
@@ -456,6 +458,7 @@ impl core::fmt::Display for Error {
         match self {
             Error::NoEntity => write!(formatter, "no such file or directory"),
             Error::BadFd => write!(formatter, "bad file descriptor"),
+            Error::BadFdState => write!(formatter, "bad file descriptor state"),
             Error::Overflow => write!(formatter, "overflow"),
             Error::Invalid => write!(formatter, "invalid argument"),
             Error::Io => write!(formatter, "i/o error"),

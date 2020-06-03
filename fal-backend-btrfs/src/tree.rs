@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use core::{borrow::Borrow, cmp::Ordering, fmt, mem};
 
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
@@ -8,14 +6,46 @@ use crate::{
     chunk_map::ChunkMap,
     filesystem,
     items::{
-        BlockGroupItem, ChunkItem, CsumItem, DevExtent, DevItem, DevStatsItem, DirItem, ExtentItemFull,
-        ExtentItemFullWrapper, FileExtentItem, InodeItem, InodeRef, RootItem, RootRef, UuidItem,
+        BlockGroupItem, ChunkItem, CsumItem, DevExtent, DevItem, DevStatsItem, DirItem,
+        ExtentItemFull, ExtentItemFullWrapper, FileExtentItem, InodeItem, InodeRef, RootItem,
+        RootRef, UuidItem,
     },
     superblock::{ChecksumType, IncompatFlags, Superblock},
     u32_le, u64_le, Checksum, DiskKey, DiskKeyType, InvalidChecksum, PackedUuid,
 };
 
 // TODO: Paths are small and smallvec / arrayvec should be used.
+
+/// A representation of data either being borrowed or owned, very similar to std's `Cow`, but being
+/// co-variant.
+#[derive(Copy, Debug)]
+pub enum Cow<'a, O, B: ?Sized + 'a = O> {
+    Borrowed(&'a B),
+    Owned(O),
+}
+
+impl<'a, O, B: ?Sized + 'a> Clone for Cow<'a, O, B>
+where
+    B: ToOwned<Owned = O>
+    O: Borrow<B>
+{
+    fn clone(&self) -> Self {
+        Cow::Owned(self.into_owned())
+    }
+}
+
+impl<'a, O, B: ?Sized + 'a> Cow<'a, O, B>
+where
+    B: ToOwned<Owned = O>,
+    O: Borrow<B>,
+{
+    pub fn into_owned(self) -> O {
+        match self {
+            Self::Owned(o) => o,
+            Self::Borrowed(b) => b.to_owned(),
+        }
+    }
+}
 
 pub enum OwnedOrBorrowedTree<'a> {
     Owned(TreeOwned),
@@ -28,6 +58,9 @@ impl<'a> OwnedOrBorrowedTree<'a> {
             &Self::Owned(ref owned) => owned.as_ref(),
             &Self::Borrowed(borrowed) => borrowed,
         }
+    }
+    pub fn to_static(self) -> OwnedOrBorrowedTree<'static> {
+        todo!()
     }
 }
 
@@ -130,30 +163,48 @@ pub struct Item {
 #[derive(Clone, Debug)]
 pub enum Value<'a> {
     BlockGroupItem(Cow<'a, BlockGroupItem>),
-    Chunk(Cow<'a, ChunkItem>),
+    Chunk(Cow<'a, Box<ChunkItem>, ChunkItem>),
     Device(Cow<'a, DevItem>),
     DevExtent(Cow<'a, DevExtent>),
-    DirIndex(Cow<'a, DirItem>),
-    DirItem(Cow<'a, DirItem>),
-    ExtentCsum(Cow<'a, CsumItem>),
-    ExtentData(Cow<'a, FileExtentItem>),
+    DirIndex(Cow<'a, Box<ChunkItem>, DirItem>),
+    DirItem(Cow<'a, Box<DirItem>, DirItem>),
+    ExtentCsum(Cow<'a, Box<CsumItem>, CsumItem>),
+    ExtentData(Cow<'a, Box<FileExtentItem>, FileExtentItem>),
     ExtentItem(ExtentItemFullWrapper<'a>),
     InodeItem(Cow<'a, InodeItem>),
-    InodeRef(Cow<'a, InodeRef>),
+    InodeRef(Cow<'a, Box<InodeRef>, InodeRef>),
     MetadataItem(ExtentItemFullWrapper<'a>),
     PersistentItem(Cow<'a, DevStatsItem>), // NOTE: Currently the only persistent item is the dev stats item.
     Root(Cow<'a, RootItem>),
-    RootRef(Cow<'a, RootRef>),
-    RootBackref(Cow<'a, RootRef>),
-    UuidSubvol(Cow<'a, UuidItem>),
-    UuidReceivedSubvol(Cow<'a, UuidItem>),
-    XattrItem(Cow<'a, DirItem>),
+    RootRef(Cow<'a, Box<RootRef>, RootRef>),
+    RootBackref(Cow<'a, Box<RootRef>, RootRef>),
+    UuidSubvol(Cow<'a, Box<UuidItem>, UuidItem>),
+    UuidReceivedSubvol(Cow<'a, Box<UuidItem>, UuidItem>),
+    XattrItem(Cow<'a, Box<DirItem>, DirItem>),
     Unknown,
 }
 impl<'a> Value<'a> {
     pub fn as_root_item(&'a self) -> Option<&'a RootItem> {
         match self {
             &Self::Root(ref item) => Some(item.borrow()),
+            _ => None,
+        }
+    }
+    pub fn into_inode_item(self) -> Option<InodeItem> {
+        match self {
+            Self::InodeItem(item) => Some(item.into_owned()),
+            _ => None,
+        }
+    }
+    pub fn into_dir_item(self) -> Option<Cow<'a, Box<DirItem>, DirItem>> {
+        match self {
+            Self::DirItem(item) => Some(item),
+            _ => None,
+        }
+    }
+    pub fn into_dir_index(self) -> Option<Cow<'a, Box<DirItem>, DirItem>> {
+        match self {
+            Self::DirIndex(item) => Some(item),
             _ => None,
         }
     }
@@ -169,6 +220,8 @@ impl<'a> Value<'a> {
             _ => false,
         }
     }
+    /// Convert self to a Value which is guaranteed not to contain any borrowed data, cloning into
+    /// a Box if necessary.
     pub fn to_static(self) -> Value<'static> {
         match self {
             Self::BlockGroupItem(i) => Value::BlockGroupItem(Cow::<'static>::Owned(i.into_owned())),
@@ -194,6 +247,62 @@ impl<'a> Value<'a> {
             Self::XattrItem(i) => Value::XattrItem(Cow::<'static>::Owned(i.into_owned())),
             Self::Unknown => Value::Unknown,
         }
+    }
+    /// Returns Some(self) if the value is borrowed, otherwise None.
+    pub fn as_borrowed(self) -> Option<Self> {
+        Some(match self {
+            Self::BlockGroupItem(Cow::Borrowed(i)) => Self::BlockGroupItem(Cow::Borrowed(i)),
+            Self::Chunk(Cow::Borrowed(i)) => Self::Chunk(Cow::Borrowed(i)),
+            Self::Device(Cow::Borrowed(i)) => Self::Device(Cow::Borrowed(i)),
+            Self::DevExtent(Cow::Borrowed(i)) => Self::DevExtent(Cow::Borrowed(i)),
+            Self::DirIndex(Cow::Borrowed(i)) => Self::DirIndex(Cow::Borrowed(i)),
+            Self::DirItem(Cow::Borrowed(i)) => Self::DirItem(Cow::Borrowed(i)),
+            Self::ExtentCsum(Cow::Borrowed(i)) => Self::ExtentCsum(Cow::Borrowed(i)),
+            Self::ExtentData(Cow::Borrowed(i)) => Self::ExtentData(Cow::Borrowed(i)),
+            Self::ExtentItem(i) => Self::ExtentItem(i.as_borrowed()?),
+            Self::InodeItem(Cow::Borrowed(i)) => Self::InodeItem(Cow::Borrowed(i)),
+            Self::InodeRef(Cow::Borrowed(i)) => Self::InodeRef(Cow::Borrowed(i)),
+            Self::MetadataItem(i) => Self::MetadataItem(i.as_borrowed()?),
+            Self::PersistentItem(Cow::Borrowed(i)) => Self::PersistentItem(Cow::Borrowed(i)),
+            Self::Root(Cow::Borrowed(i)) => Self::Root(Cow::Borrowed(i)),
+            Self::RootRef(Cow::Borrowed(i)) => Self::RootRef(Cow::Borrowed(i)),
+            Self::RootBackref(Cow::Borrowed(i)) => Self::RootBackref(Cow::Borrowed(i)),
+            Self::UuidSubvol(Cow::Borrowed(i)) => Self::UuidSubvol(Cow::Borrowed(i)),
+            Self::UuidReceivedSubvol(Cow::Borrowed(i)) => {
+                Self::UuidReceivedSubvol(Cow::Borrowed(i))
+            }
+            Self::XattrItem(Cow::Borrowed(i)) => Self::XattrItem(Cow::Borrowed(i)),
+            Self::Unknown => Value::Unknown,
+            _ => return None,
+        })
+    }
+    /// Returns a borrowed value for self ('b), or None if the value was already borrowed.
+    pub fn owned_as_borrowed<'b>(&'b self) -> Option<Value<'b>> {
+        Some(match self {
+            &Self::BlockGroupItem(Cow::Owned(ref i)) => Value::BlockGroupItem(Cow::<'b>::Borrowed(i)),
+            &Self::Chunk(Cow::Owned(ref i)) => Value::Chunk(Cow::<'b>::Borrowed(i)),
+            &Self::Device(Cow::Owned(ref i)) => Value::Device(Cow::<'b>::Borrowed(i)),
+            &Self::DevExtent(Cow::Owned(ref i)) => Value::DevExtent(Cow::<'b>::Borrowed(i)),
+            &Self::DirIndex(Cow::Owned(ref i)) => Value::DirIndex(Cow::<'b>::Borrowed(i)),
+            &Self::DirItem(Cow::Owned(ref i)) => Value::DirItem(Cow::<'b>::Borrowed(i)),
+            &Self::ExtentCsum(Cow::Owned(ref i)) => Value::ExtentCsum(Cow::<'b>::Borrowed(i)),
+            &Self::ExtentData(Cow::Owned(ref i)) => Value::ExtentData(Cow::<'b>::Borrowed(i)),
+            &Self::ExtentItem(ref i) => Value::ExtentItem(i.owned_as_borrowed()?),
+            &Self::InodeItem(Cow::Owned(ref i)) => Value::InodeItem(Cow::<'b>::Borrowed(i)),
+            &Self::InodeRef(Cow::Owned(ref i)) => Value::InodeRef(Cow::<'b>::Borrowed(i)),
+            &Self::MetadataItem(ref i) => Value::MetadataItem(i.owned_as_borrowed()?),
+            &Self::PersistentItem(Cow::Owned(ref i)) => Value::PersistentItem(Cow::<'b>::Borrowed(i)),
+            &Self::Root(Cow::Owned(ref i)) => Value::Root(Cow::<'b>::Borrowed(i)),
+            &Self::RootRef(Cow::Owned(ref i)) => Value::RootRef(Cow::<'b>::Borrowed(i)),
+            &Self::RootBackref(Cow::Owned(ref i)) => Value::RootBackref(Cow::<'b>::Borrowed(i)),
+            &Self::UuidSubvol(Cow::Owned(ref i)) => Value::UuidSubvol(Cow::<'b>::Borrowed(i)),
+            &Self::UuidReceivedSubvol(Cow::Owned(ref i)) => {
+                Value::UuidReceivedSubvol(Cow::<'b>::Borrowed(i))
+            }
+            &Self::XattrItem(Cow::Owned(ref i)) => Value::XattrItem(Cow::<'b>::Borrowed(i)),
+            &Self::Unknown => Value::Unknown,
+            _ => return None,
+        })
     }
 }
 
@@ -363,7 +472,9 @@ impl fmt::Debug for Leaf {
         impl<'a> fmt::Debug for Pairs<'a> {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 // FIXME
-                f.debug_list().entries(self.0.iter(IncompatFlags::empty())).finish()
+                f.debug_list()
+                    .entries(self.0.iter(IncompatFlags::empty()))
+                    .finish()
             }
         }
 
@@ -415,6 +526,12 @@ impl<'a> Tree<'a> {
             Self::Leaf(_) => None,
         }
     }
+    pub fn is_leaf(self) -> bool {
+        matches!(self, Self::Leaf(_))
+    }
+    pub fn is_internal(self) -> bool {
+        matches!(self, Self::Internal(_))
+    }
     pub fn header(&self) -> &Header {
         match self {
             Self::Internal(internal) => &internal.header,
@@ -433,7 +550,7 @@ impl<'a> Tree<'a> {
     }
 
     pub fn load<D: fal::DeviceRo>(
-        device: &mut D,
+        device: &D,
         superblock: &Superblock,
         chunk_map: &ChunkMap,
         addr: u64,
@@ -444,7 +561,7 @@ impl<'a> Tree<'a> {
     }
     fn get_generic<D: fal::Device>(
         &'a self,
-        device: &mut D,
+        device: &D,
         superblock: &Superblock,
         chunk_map: &ChunkMap,
         key: &DiskKey,
@@ -506,7 +623,7 @@ impl<'a> Tree<'a> {
     }
     pub fn get<D: fal::Device>(
         &'a self,
-        device: &mut D,
+        device: &D,
         superblock: &Superblock,
         chunk_map: &ChunkMap,
         key: &DiskKey,
@@ -516,7 +633,7 @@ impl<'a> Tree<'a> {
     }
     pub fn get_with_path<D: fal::Device>(
         &'a self,
-        device: &mut D,
+        device: &D,
         superblock: &Superblock,
         chunk_map: &ChunkMap,
         key: &DiskKey,
@@ -524,31 +641,25 @@ impl<'a> Tree<'a> {
         self.get_generic(device, superblock, chunk_map, key, Ord::cmp)
             .map(|((_, value), path)| (value, path))
     }
-    pub fn pairs<D: fal::Device>(
+    pub fn pairs(
         &'a self,
-        device: &'a mut D,
-        superblock: &'a Superblock,
-        chunk_map: &'a ChunkMap,
-    ) -> Pairs<'a, D> {
+    ) -> PairsIterState<'a> {
         let path = vec![(OwnedOrBorrowedTree::Borrowed(*self), 0)];
 
-        Pairs {
-            chunk_map,
-            device,
-            superblock,
+        PairsIterState {
             path,
             previous_key: None,
-            function: Box::new(always_equal),
+            function: always_equal,
         }
     }
     /// Find similar pairs, i.e. pairs which key have the same oid and type, but possibly different offsets.
-    pub fn similar_pairs<D: fal::Device>(
+    pub fn similar_pairs<'b, D: fal::Device>(
         &'a self,
-        device: &'a mut D,
-        superblock: &'a Superblock,
-        chunk_map: &'a ChunkMap,
+        device: &D,
+        superblock: &Superblock,
+        chunk_map: &ChunkMap,
         partial_key: &DiskKey,
-    ) -> Option<Pairs<'a, D>> {
+    ) -> Option<PairsIterState<'a>> {
         let (_, path) = match self.get_generic(
             device,
             superblock,
@@ -560,102 +671,188 @@ impl<'a> Tree<'a> {
             None => return None,
         };
 
-        Some(Pairs {
-            chunk_map,
-            device,
-            superblock,
+        Some(PairsIterState {
             path,
             previous_key: None,
-            function: Box::new(DiskKey::compare_without_offset),
+            function: DiskKey::compare_without_offset,
         })
     }
 }
 
-/// Stack-based tree traversal iterator
-pub struct Pairs<'a, D: fal::Device> {
-    device: &'a mut D,
-    superblock: &'a Superblock,
-    chunk_map: &'a ChunkMap,
-    path: Path<'a>,
+/// Stack-based tree traversal iterator.
+pub struct Pairs<'a, 'b, D> {
+    device: &'b D,
+    superblock: &'b Superblock,
+    chunk_map: &'b ChunkMap,
+    state: &'a mut PairsIterState<'a>,
+}
 
-    function: Box<for<'b> fn(k1: &'b DiskKey, k2: &'b DiskKey) -> Ordering>,
+/// The state of the Pairs iterator.
+pub struct PairsIterState<'a> {
+    path: Path<'a>,
+    function: for<'b> fn(k1: &'b DiskKey, k2: &'b DiskKey) -> Ordering,
     previous_key: Option<DiskKey>,
 }
 
-impl<'a, D: fal::Device> Iterator for Pairs<'a, D> {
-    type Item = (DiskKey, Value<'static>);
+enum Either<A, B> { A(A), B(B) }
 
-    fn next(&mut self) -> Option<Self::Item> {
-        // Only used to escape the borrow checker while retaining logic.
-        enum Action {
-            ClimbUp(KeyPtr),
-            ClimbDown,
+pub enum Step<'a, 'b> {
+    Value(Option<(DiskKey, Either<Value<'a>, Value<'b>>)>),
+    Step,
+}
+
+impl<'a> PairsIterState<'a> {
+    /// Converts this state into a 'static state by making sure that the path is owned rather than
+    /// borrowed.
+    pub fn to_static(self) -> PairsIterState<'static> {
+        PairsIterState {
+            path: self.path.into_iter().map(|(tree, index)| (tree.to_static(), index)).collect(),
+            function: self.function,
+            previous_key: self.previous_key,
+        }
+    }
+    pub fn step<'b, D: fal::DeviceRo>(&'b mut self, device: &D, superblock: &Superblock, chunk_map: &ChunkMap, count: usize) -> Step<'a, 'b> {
+        let (current_index, is_leaf) = match self.path.last() {
+            Some(&(ref l, current_index)) => (current_index, l.as_ref().is_leaf()),
+            None => return Step::Value(None),
         };
 
-        let (current_tree, current_index) = match self.path.last_mut() {
-            Some(l) => l,
-            None => return None,
-        };
+        if is_leaf {
+            if self.path.last().unwrap().0.as_ref().as_leaf().unwrap().iter(superblock.incompat_flags().unwrap()).nth(current_index).is_some() {
+                let &(ref current_tree, current_index) = match self.path.last() {
+                    Some(l) => l,
+                    None => return Step::Value(None),
+                };
 
-        let action = match (*current_tree).as_ref() {
-            Tree::Leaf(leaf) => match leaf.iter(self.superblock.incompat_flags().unwrap()).nth(*current_index) {
-                Some((item, value)) => {
-                    // If there is a pair available, just yield it and continue.
-                    if let Some(previous_key) = self.previous_key {
-                        let function = &self.function;
-                        if function(&previous_key, &item.key) != Ordering::Equal {
-                            return None;
-                        }
-                        self.previous_key = Some(item.key);
+                let (item, _) = current_tree.as_ref().as_leaf().unwrap().iter(superblock.incompat_flags().unwrap()).nth(current_index).unwrap();
+                // If there is a pair available, just yield it and continue.
+                if let Some(previous_key) = self.previous_key {
+                    let function = &self.function;
+                    if function(&previous_key, &item.key) != Ordering::Equal {
+                        return Step::Value(None);
                     }
-                    *current_index += 1;
-                    return Some((item.key, value.to_static()));
+                    self.previous_key = Some(item.key);
                 }
-                None => {
-                    // When there are no more elements in the current node, we need to go one node
-                    // back, increase the index there and load a new leaf.
-                    Action::ClimbDown
-                }
-            },
-            Tree::Internal(node) => {
-                match node.key_ptrs.get(*current_index) {
-                    Some(&key_ptr) => {
-                        // If there is a new undiscovered leaf node, we climb up the tree (closer
-                        // to the leaves), and search it.
-                        Action::ClimbUp(key_ptr)
+                let key = item.key;
+                // TODO: Support stepping backwards
+                self.path.last_mut().unwrap().1 += count;
+
+                let &(ref current_tree, current_index) = match self.path.last() {
+                    Some(l) => l,
+                    None => return Step::Value(None),
+                };
+
+                // FIXME: Fix increment update nth
+                return Step::Value(Some((key, match current_tree {
+                    &OwnedOrBorrowedTree::Owned(ref owned) => if let Tree::Leaf(ref owned) = owned.as_ref() {
+                        Either::B(owned.iter(superblock.incompat_flags().unwrap()).nth(current_index).unwrap().1)
+                    } else {
+                        unreachable!()
                     }
-                    None => {
-                        // Otherwise, we climb down to the parent node, and continue searching
-                        // there.
-                        Action::ClimbDown
+                    &OwnedOrBorrowedTree::Borrowed(Tree::Leaf(ref borrowed)) => {
+                        Either::A(borrowed.iter(superblock.incompat_flags().unwrap()).nth(current_index).unwrap().1)
                     }
+                    _ => unreachable!(),
+                })));
+            } else {
+                // When there are no more elements in the current node, we need to go one node
+                // back, increase the index there and load a new leaf.
+                self.path.pop();
+
+                if let Some((_, i)) = self.path.last_mut() {
+                    *i += 1;
                 }
+                return Step::Step;
             }
-        };
-
-        match action {
-            Action::ClimbUp(key_ptr) => self.path.push((
-                OwnedOrBorrowedTree::Owned(
-                    Tree::load(
-                        self.device,
-                        self.superblock,
-                        self.chunk_map,
-                        key_ptr.block_ptr.get(),
-                    )
-                    .unwrap(),
-                ),
-                0,
-            )),
-            Action::ClimbDown => {
+        } else {
+            if let Some(block_ptr) = self.path.last().unwrap().0.as_ref().as_internal().unwrap().key_ptrs.get(current_index).map(|key_ptr| key_ptr.block_ptr.get()) {
+                // If there is a new undiscovered leaf node, we climb up the tree (closer
+                // to the leaves), and search it.
+                self.path.push((
+                    OwnedOrBorrowedTree::Owned(
+                        Tree::load(
+                            device,
+                            superblock,
+                            chunk_map,
+                            block_ptr,
+                        )
+                        .unwrap(),
+                    ),
+                    0,
+                ));
+            } else {
+                // Otherwise, we climb down to the parent node, and continue searching
+                // there.
                 self.path.pop();
 
                 if let Some((_, i)) = self.path.last_mut() {
                     *i += 1;
                 }
             }
+            return Step::Step;
+        }
+    }
+    pub fn next_owned<'b, D: fal::DeviceRo>(&'b mut self, device: &D, superblock: &Superblock, chunk_map: &ChunkMap) -> Option<(DiskKey, Value<'static>)> {
+        //loop {
+            let step: Step<'a, 'b> = self.step(device, superblock, chunk_map, 1);
+
+            match step {
+                Step::Value(Some((key, value))) => match value {
+                    Either::<Value<'a>, Value<'b>>::A(a) => return Some((key, Value::<'static>::to_static(a))),
+                    Either::<Value<'a>, Value<'b>>::B(b) => return Some((key, Value::<'static>::to_static(b))),
+                }
+                Step::Value(None) => return None,
+                Step::Step => panic!(),
+            }
+        //}
+    }
+    pub fn iter<'b, D>(&'a mut self, device: &'b D, superblock: &'b Superblock, chunk_map: &'b ChunkMap) -> Pairs<'a, 'b, D> {
+        Pairs::assemble(self, device, superblock, chunk_map)
+    }
+    // TODO: previous
+}
+
+impl<'a, 'b, D> Pairs<'a, 'b, D> {
+    /// Disassemble the iterator into its internal state.
+    pub fn disassemble(self) -> &'a PairsIterState<'a> {
+        self.state
+    }
+    pub fn assemble(state: &'a mut PairsIterState<'a>, device: &'b D, superblock: &'b Superblock, chunk_map: &'b ChunkMap) -> Self {
+        Self {
+            state,
+            device,
+            superblock,
+            chunk_map,
+        }
+    }
+}
+
+impl<'a, 'b, D: fal::DeviceRo> Iterator for Pairs<'a, 'b, D> {
+    type Item = (DiskKey, Value<'static>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // XXX: If the reference to state wasn't mutable, we would have been able to yield
+        // Value<'a>, but apparently just because the Pairs iterator owns the mutable reference,
+        // the borrow checker won't even allow the reference to be created in the first place, even
+        // though it's never returned and converted into 'static as soon as it's possible.
+        self.state.next_owned(self.device, self.superblock, self.chunk_map)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn cow_being_covariant() {
+        use super::Cow as MyCow;
+
+        fn useless_fn<'a, O, B>(p: MyCow<'static, O, B>) -> MyCow<'a, O, B> {
+            p
         }
 
-        // Recurse until another pair is found or until the entire tree has been traversed.
-        self.next()
+        use std::borrow::Cow as StdCow;
+
+        fn useless_std_fn<'a, O>(p: StdCow<'static, O>) -> StdCow<'a, O> {
+            p
+        }
     }
 }
