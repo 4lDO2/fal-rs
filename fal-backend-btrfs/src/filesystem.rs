@@ -208,8 +208,7 @@ impl<D: fal::Device> Filesystem<D> {
             };
             for (key, value) in tree.as_ref().pairs().iter(&device, &superblock, &chunk_map) {
                 println!("FS ({}) ITEM: {:?}\n", tree_oid, (key, &value));
-                if let (Some(DiskKeyType::DirItem), Some(v)) = (key.ty(), value.into_dir_index()) {
-                    let dir_item = v.into_owned();
+                if let (Some(DiskKeyType::DirItem), Some(dir_item)) = (key.ty(), value.as_ref().as_dir_index()) {
                     if dir_item.location.ty() == Some(DiskKeyType::RootItem) {
                         // we have found a submodule
                         let oid = dir_item.location.oid.get();

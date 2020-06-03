@@ -53,7 +53,7 @@ impl ChunkMap {
         let new_pairs = tree
             .pairs()
             .iter(device, superblock, self)
-            .filter_map(|(k, v)| v.as_chunk_item().map(|v| (k.offset.get(), v.to_owned())))
+            .filter_map(|(k, v)| v.as_ref().as_chunk_item().map(|v| (k.offset.get(), v.to_owned())))
             .collect::<Vec<_>>();
         self.map.extend(new_pairs)
     }

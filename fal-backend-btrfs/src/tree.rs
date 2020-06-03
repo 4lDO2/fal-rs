@@ -503,7 +503,7 @@ impl fmt::Debug for TreeOwned {
     }
 }
 
-fn always_equal<'b>(_: &'b DiskKey, _: &'b DiskKey) -> Ordering {
+fn always_equal(_: &DiskKey, _: &DiskKey) -> Ordering {
     Ordering::Equal
 }
 
@@ -673,22 +673,33 @@ impl<'a> Tree<'a> {
     }
 }
 
-/// Stack-based tree traversal iterator.
-pub struct Pairs<'a, 'b, D> {
-    device: &'b D,
-    superblock: &'b Superblock,
-    chunk_map: &'b ChunkMap,
-    state: &'a mut PairsIterState<'a>,
+/// Stack-based tree traversal iterator. Since this iterator is heavily lifetime-tied, and `!Sync`,
+/// it's _not_ supposed to be stored anywhere, but just temporarily constructed from
+/// `PairsIterState`.
+pub struct Pairs<'ctx, 'a, 'b, D> {
+    device: &'ctx D,
+    superblock: &'ctx Superblock,
+    chunk_map: &'ctx ChunkMap,
+    state: &'a mut PairsIterState<'b>,
 }
 
 /// The state of the Pairs iterator.
 pub struct PairsIterState<'a> {
     path: Path<'a>,
-    function: for<'b> fn(k1: &'b DiskKey, k2: &'b DiskKey) -> Ordering,
+    function: for<'k1, 'k2> fn(k1: &'k1 DiskKey, k2: &'k2 DiskKey) -> Ordering,
     previous_key: Option<DiskKey>,
 }
 
+#[derive(Debug)]
 enum Either<A, B> { A(A), B(B) }
+
+impl<'a, 'b: 'a> Either<ValueRef<'a>, ValueRef<'b>> {
+    pub fn as_ref(self) -> ValueRef<'a> {
+        match self {
+            Self::A(value) | Self::B(value) => value,
+        }
+    }
+}
 
 pub enum Step<'a, 'b> {
     Value(Option<(DiskKey, Either<ValueRef<'a>, ValueRef<'b>>)>),
@@ -786,33 +797,26 @@ impl<'a> PairsIterState<'a> {
             return Step::Step;
         }
     }
-    pub fn next_owned<'b, D: fal::DeviceRo>(&'b mut self, device: &D, superblock: &Superblock, chunk_map: &ChunkMap) -> Option<(DiskKey, ValueRef<'static>)> {
-        /*//loop {
-            let step: Step<'a, 'b> = self.step(device, superblock, chunk_map, 1);
-
-            match step {
-                Step::Value(Some((key, value))) => match value {
-                    Either::<Value<'a>, Value<'b>>::A(a) => return Some((key, ValueRef::<'static>::to_static(a))),
-                    Either::<ValueRef<'a>, Value<'b>>::B(b) => return Some((key, ValueRef::<'static>::to_static(b))),
-                }
-                Step::Value(None) => return None,
-                Step::Step => panic!(),
+    pub fn next_owned<'b, D: fal::DeviceRo>(&'b mut self, device: &D, superblock: &Superblock, chunk_map: &ChunkMap) -> Option<(DiskKey, Either<ValueRef<'a>, ValueRef<'b>>)> {
+        loop {
+            match self.step(device, superblock, chunk_map, 1) {
+                Step::Value(v) => return v,
+                Step::Step => continue,
             }
-        //}*/
-        todo!()
+        }
     }
-    pub fn iter<'b, D>(&'a mut self, device: &'b D, superblock: &'b Superblock, chunk_map: &'b ChunkMap) -> Pairs<'a, 'b, D> {
+    pub fn iter<'ctx, 'b, D>(&'b mut self, device: &'ctx D, superblock: &'ctx Superblock, chunk_map: &'ctx ChunkMap) -> Pairs<'ctx, 'a, 'b, D> {
         Pairs::assemble(self, device, superblock, chunk_map)
     }
     // TODO: previous
 }
 
-impl<'a, 'b, D> Pairs<'a, 'b, D> {
+impl<'ctx, 'a, 'b, D> Pairs<'ctx, 'a, 'b, D> {
     /// Disassemble the iterator into its internal state.
     pub fn disassemble(self) -> &'a PairsIterState<'a> {
         self.state
     }
-    pub fn assemble(state: &'a mut PairsIterState<'a>, device: &'b D, superblock: &'b Superblock, chunk_map: &'b ChunkMap) -> Self {
+    pub fn assemble(state: &'a mut PairsIterState<'b>, device: &'ctx D, superblock: &'ctx Superblock, chunk_map: &'ctx ChunkMap) -> Self {
         Self {
             state,
             device,
@@ -822,32 +826,25 @@ impl<'a, 'b, D> Pairs<'a, 'b, D> {
     }
 }
 
-impl<'a, 'b, D: fal::DeviceRo> Iterator for Pairs<'a, 'b, D> {
-    type Item = (DiskKey, Value<'static>);
+impl<'ctx, 'a, 'b, D: fal::DeviceRo> Iterator for Pairs<'ctx, 'a, 'b, D> {
+    type Item = (DiskKey, Either<ValueRef<'a>, ValueRef<'b>>);
 
     fn next(&mut self) -> Option<Self::Item> {
-        // XXX: If the reference to state wasn't mutable, we would have been able to yield
-        // Value<'a>, but apparently just because the Pairs iterator owns the mutable reference,
-        // the borrow checker won't even allow the reference to be created in the first place, even
-        // though it's never returned and converted into 'static as soon as it's possible.
+        // Note that we can't yield references to data stored in the Path of the state, since that
+        // would imply someone could collect all the references from this iterator into a vec, and
+        // then continue using those after the state has been dropped. Thus, the state will have to
+        // keep track of the nodes which are still referenced, and moved elsewhere before the
+        // references are dropped.
+        //
+        // In practice: every tree block gets a refcount. However in
+        // almost all situations, the tree block will be freed immediately after the next node is
+        // reached, since most of the times this iterator is used, the items will be passed by
+        // value (unless they are DSTs).
+        //
+        // The only alternative would be to always yield owned values. This would be completely
+        // fine for all the values that are fixed in size, but for DSTs, there would be one
+        // allocation per value, which is a lot more allocations than simply keeping the blocks in
+        // memory until they aren't used anymore.
         self.state.next_owned(self.device, self.superblock, self.chunk_map)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn cow_being_covariant() {
-        use super::Cow as MyCow;
-
-        fn useless_fn<'a, O, B>(p: MyCow<'static, O, B>) -> MyCow<'a, O, B> {
-            p
-        }
-
-        use std::borrow::Cow as StdCow;
-
-        fn useless_std_fn<'a, O>(p: StdCow<'static, O>) -> StdCow<'a, O> {
-            p
-        }
     }
 }
