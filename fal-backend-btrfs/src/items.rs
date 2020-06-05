@@ -140,7 +140,7 @@ pub struct Stripe {
     pub device_uuid: PackedUuid,
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq, AsBytes, FromBytes, Unaligned)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, AsBytes, FromBytes, Unaligned)]
 #[repr(packed)]
 pub struct RootItem {
     pub inode_item: InodeItem,
@@ -175,7 +175,7 @@ pub struct RootItem {
     pub _rsvd: [u64_le; 8],
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq, AsBytes, FromBytes, Unaligned)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, AsBytes, FromBytes, Unaligned)]
 #[repr(packed)]
 pub struct InodeItem {
     pub generation: u64_le,

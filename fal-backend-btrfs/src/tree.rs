@@ -1,4 +1,5 @@
-use core::{borrow::Borrow, cmp::Ordering, fmt, mem};
+use core::{borrow::Borrow, cmp::Ordering, fmt, mem, pin::Pin, slice};
+use alloc::sync::Arc;
 use alloc::borrow::Cow;
 
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
@@ -30,7 +31,10 @@ impl<'a> OwnedOrBorrowedTree<'a> {
         }
     }
     pub fn to_static(self) -> OwnedOrBorrowedTree<'static> {
-        todo!()
+        match self {
+            Self::Owned(value) => OwnedOrBorrowedTree::Owned(value),
+            Self::Borrowed(reference) => OwnedOrBorrowedTree::Owned(reference.to_tree_owned()),
+        }
     }
 }
 
@@ -53,11 +57,14 @@ pub struct Header {
 }
 
 impl Header {
+    pub fn parse_without_checksum_verif<'a>(bytes: &'a [u8]) -> Option<LayoutVerified<&'a [u8], Self>> {
+        LayoutVerified::new_unaligned(&bytes[..mem::size_of::<Header>()])
+    }
     pub fn parse<'a>(
         checksum_ty: ChecksumType,
         bytes: &'a [u8],
     ) -> Result<LayoutVerified<&'a [u8], Self>, InvalidChecksum> {
-        let this = LayoutVerified::new_unaligned(&bytes[..mem::size_of::<Header>()]).unwrap();
+        let this = Self::parse_without_checksum_verif(bytes).unwrap();
 
         let stored_checksum = Checksum::parse(checksum_ty, &bytes[..32])
             .ok_or(InvalidChecksum::UnsupportedChecksum(checksum_ty))?;
@@ -111,8 +118,14 @@ impl Node {
             let begin = bytes.as_ptr() as *const KeyPtr;
             let len = item_count as usize;
 
-            Some(&*(std::slice::from_raw_parts(begin, len) as *const [KeyPtr] as *const Self))
+            Some(&*(slice::from_raw_parts(begin, len) as *const [KeyPtr] as *const Self))
         }
+    }
+    pub fn struct_size(&self) -> usize {
+        mem::size_of::<Header>() + self.key_ptrs.len() * mem::size_of::<KeyPtr>()
+    }
+    pub fn as_bytes(&self) -> &[u8] {
+        unsafe { slice::from_raw_parts(self as *const Self as *const u8, self.struct_size()) }
     }
 }
 
@@ -178,6 +191,86 @@ pub enum ValueRef<'a> {
 }
 
 impl<'a> ValueRef<'a> {
+    fn parse_inner(incompat_flags: IncompatFlags, item: &Item, data: &'a [u8]) -> Option<Self> {
+        // Sometimes, parsing may fail. For now we print out dbg statements where there
+        // so that nothing is silently discarded.
+        macro_rules! dbg_none ( ( $value:expr ) => {{ if $value.is_none() { dbg!(); $value } else { $value } }} );
+
+        let value_bytes = &data[item.offset.get() as usize
+            ..item.offset.get() as usize + item.size.get() as usize];
+
+        let ty = match item.key.ty() {
+            Some(ty) => ty,
+            None => return Some(ValueRef::Unknown), // TODO: Warn
+        };
+
+        let value: ValueRef<'a> = match ty {
+            DiskKeyType::BlockGroupItem => ValueRef::BlockGroupItem(
+                dbg_none!(LayoutVerified::<_, BlockGroupItem>::new_unaligned(value_bytes))?
+                    .into_ref(),
+            ),
+            DiskKeyType::ChunkItem => {
+                ValueRef::Chunk(dbg_none!(ChunkItem::parse(value_bytes))?)
+            }
+            DiskKeyType::DevExtent => ValueRef::DevExtent(
+                dbg_none!(LayoutVerified::<_, DevExtent>::new_unaligned(value_bytes))?.into_ref(),
+            ),
+            DiskKeyType::DevItem => ValueRef::Device(
+                dbg_none!(LayoutVerified::<_, DevItem>::new_unaligned(value_bytes))?.into_ref(),
+            ),
+            DiskKeyType::DirIndex => {
+                ValueRef::DirIndex(dbg_none!(DirItem::parse(value_bytes))?)
+            }
+            DiskKeyType::DirItem => {
+                ValueRef::DirItem(dbg_none!(DirItem::parse(value_bytes))?)
+            }
+            DiskKeyType::ExtentCsum => {
+                ValueRef::ExtentCsum(CsumItem::parse(value_bytes))
+            }
+            DiskKeyType::ExtentData => {
+                ValueRef::ExtentData(dbg_none!(FileExtentItem::parse(value_bytes))?)
+            }
+            DiskKeyType::ExtentItem => ValueRef::ExtentItem(ExtentItemFullWrapperRef(
+                dbg_none!(ExtentItemFull::parse(value_bytes))?,
+                incompat_flags,
+            )),
+            DiskKeyType::InodeItem => ValueRef::InodeItem(
+                dbg_none!(LayoutVerified::<_, InodeItem>::new_unaligned(value_bytes))?.into_ref(),
+            ),
+            DiskKeyType::InodeRef => {
+                ValueRef::InodeRef(dbg_none!(InodeRef::parse(value_bytes))?)
+            }
+            DiskKeyType::MetadataItem => ValueRef::MetadataItem(ExtentItemFullWrapperRef(
+                dbg_none!(ExtentItemFull::parse(value_bytes))?,
+                incompat_flags,
+            )),
+            DiskKeyType::PersistentItem => ValueRef::PersistentItem(
+                dbg_none!(LayoutVerified::<_, DevStatsItem>::new_unaligned(value_bytes))?
+                    .into_ref(),
+            ),
+            DiskKeyType::RootBackref => ValueRef::RootBackref(
+                dbg_none!(RootRef::parse(value_bytes))?,
+            ),
+            DiskKeyType::RootItem => ValueRef::Root(
+                dbg_none!(LayoutVerified::<_, RootItem>::new_unaligned(value_bytes))?.into_ref(),
+            ),
+            DiskKeyType::RootRef => ValueRef::RootRef(
+                dbg_none!(RootRef::parse(value_bytes))?,
+            ),
+            DiskKeyType::UuidSubvol => {
+                ValueRef::UuidSubvol(UuidItem::parse(value_bytes))
+            }
+            DiskKeyType::UuidReceivedSubvol => {
+                ValueRef::UuidReceivedSubvol(UuidItem::parse(value_bytes))
+            }
+            DiskKeyType::XattrItem => {
+                ValueRef::XattrItem(dbg_none!(DirItem::parse(value_bytes))?)
+            }
+            DiskKeyType::Unknown => panic!(),
+            _ => ValueRef::Unknown,
+        };
+        Some(value)
+    }
     pub fn as_root_item(self) -> Option<&'a RootItem> {
         match self {
             Self::Root(item) => Some(item),
@@ -376,87 +469,13 @@ impl Leaf {
                 )
             })
             .map_while(
-                move |item: LayoutVerified<&'a [u8], Item>| -> Option<(_, _)> {
-                    // Sometimes, parsing may fail. For now we print out dbg statements where there
-                    // so that nothing is silently discarded.
-                    macro_rules! dbg_none ( ( $value:expr ) => {{ if $value.is_none() { dbg!(); $value } else { $value } }} );
-
-                    let value_bytes = &self.data[item.offset.get() as usize
-                        ..item.offset.get() as usize + item.size.get() as usize];
-
-                    let ty = match item.key.ty() {
-                        Some(ty) => ty,
-                        None => return Some((item, ValueRef::Unknown)), // TODO: Warn
-                    };
-
-                    let value: ValueRef<'a> = match ty {
-                        DiskKeyType::BlockGroupItem => ValueRef::BlockGroupItem(
-                            dbg_none!(LayoutVerified::<_, BlockGroupItem>::new_unaligned(value_bytes))?
-                                .into_ref(),
-                        ),
-                        DiskKeyType::ChunkItem => {
-                            ValueRef::Chunk(dbg_none!(ChunkItem::parse(value_bytes))?)
-                        }
-                        DiskKeyType::DevExtent => ValueRef::DevExtent(
-                            dbg_none!(LayoutVerified::<_, DevExtent>::new_unaligned(value_bytes))?.into_ref(),
-                        ),
-                        DiskKeyType::DevItem => ValueRef::Device(
-                            dbg_none!(LayoutVerified::<_, DevItem>::new_unaligned(value_bytes))?.into_ref(),
-                        ),
-                        DiskKeyType::DirIndex => {
-                            ValueRef::DirIndex(dbg_none!(DirItem::parse(value_bytes))?)
-                        }
-                        DiskKeyType::DirItem => {
-                            ValueRef::DirItem(dbg_none!(DirItem::parse(value_bytes))?)
-                        }
-                        DiskKeyType::ExtentCsum => {
-                            ValueRef::ExtentCsum(CsumItem::parse(value_bytes))
-                        }
-                        DiskKeyType::ExtentData => {
-                            ValueRef::ExtentData(dbg_none!(FileExtentItem::parse(value_bytes))?)
-                        }
-                        DiskKeyType::ExtentItem => ValueRef::ExtentItem(ExtentItemFullWrapperRef(
-                            dbg_none!(ExtentItemFull::parse(value_bytes))?,
-                            incompat_flags,
-                        )),
-                        DiskKeyType::InodeItem => ValueRef::InodeItem(
-                            dbg_none!(LayoutVerified::<_, InodeItem>::new_unaligned(value_bytes))?.into_ref(),
-                        ),
-                        DiskKeyType::InodeRef => {
-                            ValueRef::InodeRef(dbg_none!(InodeRef::parse(value_bytes))?)
-                        }
-                        DiskKeyType::MetadataItem => ValueRef::MetadataItem(ExtentItemFullWrapperRef(
-                            dbg_none!(ExtentItemFull::parse(value_bytes))?,
-                            incompat_flags,
-                        )),
-                        DiskKeyType::PersistentItem => ValueRef::PersistentItem(
-                            dbg_none!(LayoutVerified::<_, DevStatsItem>::new_unaligned(value_bytes))?
-                                .into_ref(),
-                        ),
-                        DiskKeyType::RootBackref => ValueRef::RootBackref(
-                            dbg_none!(RootRef::parse(value_bytes))?,
-                        ),
-                        DiskKeyType::RootItem => ValueRef::Root(
-                            dbg_none!(LayoutVerified::<_, RootItem>::new_unaligned(value_bytes))?.into_ref(),
-                        ),
-                        DiskKeyType::RootRef => ValueRef::RootRef(
-                            dbg_none!(RootRef::parse(value_bytes))?,
-                        ),
-                        DiskKeyType::UuidSubvol => {
-                            ValueRef::UuidSubvol(UuidItem::parse(value_bytes))
-                        }
-                        DiskKeyType::UuidReceivedSubvol => {
-                            ValueRef::UuidReceivedSubvol(UuidItem::parse(value_bytes))
-                        }
-                        DiskKeyType::XattrItem => {
-                            ValueRef::XattrItem(dbg_none!(DirItem::parse(value_bytes))?)
-                        }
-                        DiskKeyType::Unknown => panic!(),
-                        _ => ValueRef::Unknown,
-                    };
-                    Some((item, value))
-                },
-            )
+                move |item: LayoutVerified<&'a [u8], Item>| -> Option<(_, _)> { ValueRef::parse_inner(incompat_flags, &*item, &self.data).map(|value| (item, value)) })
+    }
+    pub fn struct_size(&self) -> usize {
+        mem::size_of::<Header>() + self.data.len()
+    }
+    pub fn as_bytes(&self) -> &[u8] {
+        unsafe { slice::from_raw_parts(self as *const Self as *const u8, self.struct_size()) }
     }
 }
 impl fmt::Debug for Leaf {
@@ -486,15 +505,18 @@ pub enum Tree<'a> {
 }
 #[derive(Clone)]
 pub struct TreeOwned {
-    block: Box<[u8]>,
+    pub block: Arc<[u8]>,
 }
 impl TreeOwned {
-    pub fn as_ref<'a>(&'a self) -> Tree<'a> {
+    fn as_ref_inner<'a>(block: &'a [u8]) -> Tree<'a> {
         let header = LayoutVerified::<&'a [u8], Header>::new_unaligned(
-            &self.block[..mem::size_of::<Header>()],
+            &block[..mem::size_of::<Header>()],
         )
         .unwrap();
-        Tree::parse_inner(&*header, &self.block)
+        Tree::parse_inner(&*header, &block)
+    }
+    pub fn as_ref<'a>(&'a self) -> Tree<'a> {
+        Self::as_ref_inner(&self.block)
     }
 }
 impl fmt::Debug for TreeOwned {
@@ -549,7 +571,7 @@ impl<'a> Tree<'a> {
         chunk_map: &ChunkMap,
         addr: u64,
     ) -> Result<TreeOwned, InvalidChecksum> {
-        let block = filesystem::read_node(device, superblock, chunk_map, addr);
+        let block = Arc::from(filesystem::read_node(device, superblock, chunk_map, addr));
         let _ = Header::parse(superblock.checksum_ty(), &block)?;
         Ok(TreeOwned { block })
     }
@@ -671,10 +693,26 @@ impl<'a> Tree<'a> {
             function: DiskKey::compare_without_offset,
         })
     }
+    fn to_tree_owned(&self) -> TreeOwned {
+        match self {
+            &Self::Internal(node) => {
+                // TODO: Maybe we should really make sure that the size be always equal to the node
+                // size.
+                let mut bytes = vec! [0u8; node.struct_size()].into_boxed_slice();
+                bytes.copy_from_slice(node.as_bytes());
+                TreeOwned { block: Arc::from(bytes) }
+            }
+            &Self::Leaf(node) => {
+                let mut bytes = vec! [0u8; node.struct_size()].into_boxed_slice();
+                bytes.copy_from_slice(node.as_bytes());
+                TreeOwned { block: Arc::from(bytes) }
+            }
+        }
+    }
 }
 
 /// Stack-based tree traversal iterator. Since this iterator is heavily lifetime-tied, and `!Sync`,
-/// it's _not_ supposed to be stored anywhere, but just temporarily constructed from
+/// it's _not_ supposed to be stored anywhere, but just being temporarily constructed from
 /// `PairsIterState`.
 pub struct Pairs<'ctx, 'a, 'b, D> {
     device: &'ctx D,
@@ -700,9 +738,33 @@ impl<'a, 'b: 'a> Either<ValueRef<'a>, ValueRef<'b>> {
         }
     }
 }
+impl<'a> Either<ValueRef<'a>, OwningValueRef> {
+    pub fn as_ref<'b: 'a>(&'b self) -> ValueRef<'b> {
+        match self {
+            &Self::A(value) => value,
+            &Self::B(ref value) => value.as_ref(),
+        }
+    }
+}
 
-pub enum Step<'a, 'b> {
-    Value(Option<(DiskKey, Either<ValueRef<'a>, ValueRef<'b>>)>),
+pub struct OwningValueRef {
+    tree_arc: TreeOwned,
+    item: Item,
+    incompat_flags: IncompatFlags,
+}
+impl OwningValueRef {
+    pub fn as_ref<'a>(&'a self) -> ValueRef<'a> {
+        ValueRef::parse_inner(self.incompat_flags, &self.item, &self.tree_arc.as_ref().as_leaf().unwrap().data).unwrap()
+    }
+}
+impl fmt::Debug for OwningValueRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.as_ref(), f)
+    }
+}
+
+pub enum Step<'a> {
+    Value(Option<(DiskKey, Either<ValueRef<'a>, OwningValueRef>)>),
     Step,
 }
 
@@ -716,7 +778,7 @@ impl<'a> PairsIterState<'a> {
             previous_key: self.previous_key,
         }
     }
-    pub fn step<'b, D: fal::DeviceRo>(&'b mut self, device: &D, superblock: &Superblock, chunk_map: &ChunkMap, count: usize) -> Step<'a, 'b> {
+    pub fn step<D: fal::DeviceRo>(&mut self, device: &D, superblock: &Superblock, chunk_map: &ChunkMap, count: usize) -> Step<'a> {
         let (current_index, is_leaf) = match self.path.last() {
             Some(&(ref l, current_index)) => (current_index, l.as_ref().is_leaf()),
             None => return Step::Value(None),
@@ -749,11 +811,16 @@ impl<'a> PairsIterState<'a> {
 
                 // FIXME: Fix increment update nth
                 return Step::Value(Some((key, match current_tree {
-                    &OwnedOrBorrowedTree::Owned(ref owned) => if let Tree::Leaf(ref owned) = owned.as_ref() {
-                        Either::B(owned.iter(superblock.incompat_flags().unwrap()).nth(current_index).unwrap().1)
+                    &OwnedOrBorrowedTree::Owned(ref owned) => if let Tree::Leaf(ref owned_leaf) = owned.as_ref() {
+                        let (item, value) = owned_leaf.iter(superblock.incompat_flags().unwrap()).nth(current_index).unwrap();
+                        Either::B(OwningValueRef {
+                            incompat_flags: superblock.incompat_flags().unwrap(),
+                            tree_arc: owned.clone(), // by ref
+                            item: *item,
+                        })
                     } else {
                         unreachable!()
-                    }
+                    },
                     &OwnedOrBorrowedTree::Borrowed(Tree::Leaf(ref borrowed)) => {
                         Either::A(borrowed.iter(superblock.incompat_flags().unwrap()).nth(current_index).unwrap().1)
                     }
@@ -797,7 +864,7 @@ impl<'a> PairsIterState<'a> {
             return Step::Step;
         }
     }
-    pub fn next_owned<'b, D: fal::DeviceRo>(&'b mut self, device: &D, superblock: &Superblock, chunk_map: &ChunkMap) -> Option<(DiskKey, Either<ValueRef<'a>, ValueRef<'b>>)> {
+    pub fn next_owned<D: fal::DeviceRo>(&mut self, device: &D, superblock: &Superblock, chunk_map: &ChunkMap) -> Option<(DiskKey, Either<ValueRef<'a>, OwningValueRef>)> {
         loop {
             match self.step(device, superblock, chunk_map, 1) {
                 Step::Value(v) => return v,
@@ -827,7 +894,7 @@ impl<'ctx, 'a, 'b, D> Pairs<'ctx, 'a, 'b, D> {
 }
 
 impl<'ctx, 'a, 'b, D: fal::DeviceRo> Iterator for Pairs<'ctx, 'a, 'b, D> {
-    type Item = (DiskKey, Either<ValueRef<'a>, ValueRef<'b>>);
+    type Item = (DiskKey, Either<ValueRef<'a>, OwningValueRef>);
 
     fn next(&mut self) -> Option<Self::Item> {
         // Note that we can't yield references to data stored in the Path of the state, since that
