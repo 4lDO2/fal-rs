@@ -32,7 +32,7 @@ impl fal::Inode for Inode {
     fn addr(&self) -> u64 {
         self.key.header.oid.into()
     }
-    fn attrs(&self) -> fal::Attributes<u64> {
+    fn attrs(&self) -> fal::Attributes {
         fal::Attributes {
             access_time: nanosecs_to_timespec(self.value.access_time),
             creation_time: nanosecs_to_timespec(self.value.create_time),

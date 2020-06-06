@@ -18,6 +18,7 @@ use crate::{
 
 // TODO: Paths are small and smallvec / arrayvec should be used.
 
+#[derive(Debug)]
 pub enum OwnedOrBorrowedTree<'a> {
     Owned(TreeOwned),
     Borrowed(Tree<'a>),
@@ -79,6 +80,7 @@ impl Header {
 }
 
 #[derive(Eq, Hash, PartialEq)]
+#[repr(packed)]
 pub struct Node {
     pub header: Header,
     pub key_ptrs: [KeyPtr],
@@ -130,6 +132,7 @@ impl Node {
 }
 
 #[derive(Eq, Hash, PartialEq)]
+#[repr(packed)]
 pub struct Leaf {
     pub header: Header,
     pub data: [u8],
@@ -201,7 +204,7 @@ impl<'a> ValueRef<'a> {
 
         let ty = match item.key.ty() {
             Some(ty) => ty,
-            None => return Some(ValueRef::Unknown), // TODO: Warn
+            None => panic!("unknown type: {}", item.key.ty), //return Some(ValueRef::Unknown), // TODO: Warn
         };
 
         let value: ValueRef<'a> = match ty {
@@ -266,8 +269,12 @@ impl<'a> ValueRef<'a> {
             DiskKeyType::XattrItem => {
                 ValueRef::XattrItem(dbg_none!(DirItem::parse(value_bytes))?)
             }
-            DiskKeyType::Unknown => panic!(),
-            _ => ValueRef::Unknown,
+            DiskKeyType::Unknown => ValueRef::Unknown, // It seems like an item with the oid TREE_LOG has no real type. TODO: Right?
+
+            other => {
+                eprintln!("Unimplemented key type: {:?}", other);
+                ValueRef::Unknown
+            }
         };
         Some(value)
     }
@@ -294,6 +301,9 @@ impl<'a> ValueRef<'a> {
             Self::DirIndex(item) => Some(item),
             _ => None,
         }
+    }
+    pub fn is_dir_index(self) -> bool {
+        self.as_dir_index().is_some()
     }
     pub fn as_chunk_item(&'a self) -> Option<&'a ChunkItem> {
         match self {
@@ -452,24 +462,27 @@ impl Leaf {
                 return None;
             }
 
-            let begin = bytes.as_ptr() as *const KeyPtr;
+            let begin = bytes.as_ptr();
             let len = bytes.len() - mem::size_of::<Header>();
 
-            Some(&*(std::slice::from_raw_parts(begin, len) as *const [KeyPtr] as *const Self))
+            Some(&*(std::slice::from_raw_parts(begin, len) as *const [u8] as *const Self))
         }
     }
     pub fn iter<'a>(
         &'a self,
         incompat_flags: IncompatFlags,
     ) -> impl Iterator<Item = (LayoutVerified<&'a [u8], Item>, ValueRef<'a>)> + 'a {
-        (0..self.header.item_count.get() as usize)
-            .map_while(move |i| {
-                LayoutVerified::new_unaligned(
-                    &self.data[i * mem::size_of::<Item>()..(i + 1) * mem::size_of::<Item>()],
-                )
-            })
+        self.data.chunks(mem::size_of::<Item>())
+            .take(self.header.item_count.get() as usize)
+            .map_while(LayoutVerified::new_unaligned)
             .map_while(
-                move |item: LayoutVerified<&'a [u8], Item>| -> Option<(_, _)> { ValueRef::parse_inner(incompat_flags, &*item, &self.data).map(|value| (item, value)) })
+                move |item: LayoutVerified<&'a [u8], Item>| -> Option<(_, _)> { match ValueRef::parse_inner(incompat_flags, &*item, &self.data) {
+                    Some(v) => Some((item, v)),
+                    None => {
+                        eprintln!("Item {:?} failed to parse", item);
+                        None
+                    }
+                }})
     }
     pub fn struct_size(&self) -> usize {
         mem::size_of::<Header>() + self.data.len()
@@ -525,7 +538,7 @@ impl fmt::Debug for TreeOwned {
     }
 }
 
-fn always_equal(_: &DiskKey, _: &DiskKey) -> Ordering {
+pub fn always_equal(_: &DiskKey, _: &DiskKey) -> Ordering {
     Ordering::Equal
 }
 
@@ -572,20 +585,20 @@ impl<'a> Tree<'a> {
         addr: u64,
     ) -> Result<TreeOwned, InvalidChecksum> {
         let block = Arc::from(filesystem::read_node(device, superblock, chunk_map, addr));
-        let _ = Header::parse(superblock.checksum_ty(), &block)?;
+        let header = Header::parse(superblock.checksum_ty(), &block)?; // validate checksum
+        if header.logical_addr.get() != addr {
+            panic!("Mismatch: {} != {}", header.logical_addr.get(), addr);
+        }
         Ok(TreeOwned { block })
     }
-    fn get_generic<D: fal::Device>(
-        &'a self,
+    fn get_generic<'b, D: fal::Device>(
+        path: &'b mut Path<'a>,
         device: &D,
         superblock: &Superblock,
         chunk_map: &ChunkMap,
         key: &DiskKey,
         compare: fn(k1: &DiskKey, k2: &DiskKey) -> Ordering,
-    ) -> Option<((DiskKey, ValueRef<'a>), Path<'a>)> {
-        let mut path = Vec::with_capacity(self.header().level.into());
-        path.push((OwnedOrBorrowedTree::Borrowed(*self), 0));
-
+    ) -> Option<(DiskKey, ValueRef<'b>)> {
         let item_index: Option<usize> = loop {
             let (i, subtree) = match path.last().map(|(tree, _)| tree).unwrap().as_ref() {
                 Tree::Leaf(leaf) => {
@@ -597,7 +610,7 @@ impl<'a> Tree<'a> {
                         .position(|(item, _)| compare(&item.key, key) == Ordering::Equal);
                 }
                 Tree::Internal(internal) => {
-                    assert!(internal.header.level > 0);
+                    assert_ne!(internal.header.level, 0);
 
                     // Find the closest key ptr. If the key that we are searching for is larger than the
                     // closest key ptr, we search that tree, and so on.
@@ -635,27 +648,17 @@ impl<'a> Tree<'a> {
             .iter(superblock.incompat_flags().unwrap())
             .nth(item_index)
             .unwrap();
-        Some(((key.key, value), path))
+        Some((key.key, value))
     }
-    pub fn get<D: fal::Device>(
-        &'a self,
+    pub fn get_with_path<'b, D: fal::Device>(
+        path: &'b mut Path<'a>,
         device: &D,
         superblock: &Superblock,
         chunk_map: &ChunkMap,
         key: &DiskKey,
-    ) -> Option<ValueRef<'a>> {
-        self.get_with_path(device, superblock, chunk_map, key)
-            .map(|(value, _)| value)
-    }
-    pub fn get_with_path<D: fal::Device>(
-        &'a self,
-        device: &D,
-        superblock: &Superblock,
-        chunk_map: &ChunkMap,
-        key: &DiskKey,
-    ) -> Option<(ValueRef<'a>, Path)> {
-        self.get_generic(device, superblock, chunk_map, key, Ord::cmp)
-            .map(|((_, value), path)| (value, path))
+    ) -> Option<ValueRef<'b>> {
+        Self::get_generic(path, device, superblock, chunk_map, key, Ord::cmp)
+            .map(|(_, value)| value)
     }
     pub fn pairs(
         &'a self,
@@ -669,21 +672,23 @@ impl<'a> Tree<'a> {
         }
     }
     /// Find similar pairs, i.e. pairs which key have the same oid and type, but possibly different offsets.
-    pub fn similar_pairs<'b, D: fal::Device>(
-        &'a self,
+    pub fn similar_pairs<D: fal::Device>(
+        self,
         device: &D,
         superblock: &Superblock,
         chunk_map: &ChunkMap,
         partial_key: &DiskKey,
     ) -> Option<PairsIterState<'a>> {
-        let (_, path) = match self.get_generic(
+        let mut path = vec!((OwnedOrBorrowedTree::Borrowed(self), 0));
+        match Self::get_generic(
+            &mut path,
             device,
             superblock,
             chunk_map,
             partial_key,
             DiskKey::compare_without_offset,
         ) {
-            Some(p) => p,
+            Some(_) => (),
             None => return None,
         };
 
@@ -723,13 +728,31 @@ pub struct Pairs<'ctx, 'a, 'b, D> {
 
 /// The state of the Pairs iterator.
 pub struct PairsIterState<'a> {
-    path: Path<'a>,
-    function: for<'k1, 'k2> fn(k1: &'k1 DiskKey, k2: &'k2 DiskKey) -> Ordering,
-    previous_key: Option<DiskKey>,
+    pub(crate) path: Path<'a>,
+    pub(crate) function: for<'k1, 'k2> fn(k1: &'k1 DiskKey, k2: &'k2 DiskKey) -> Ordering,
+    pub(crate) previous_key: Option<DiskKey>,
+}
+impl<'a> fmt::Debug for PairsIterState<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        struct FnDebug(for<'k1, 'k2> fn(k2: &'k1 DiskKey, k2: &'k2 DiskKey) -> Ordering);
+
+        impl fmt::Debug for FnDebug {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "(compare function at {:p})", self.0 as *const u8)
+            }
+        }
+
+        f.debug_struct("PairsIterState")
+            .field("path", &self.path)
+            .field("function", &FnDebug(self.function))
+            .field("previous_key", &self.previous_key)
+            .finish()
+    }
 }
 
+
 #[derive(Debug)]
-enum Either<A, B> { A(A), B(B) }
+pub enum Either<A, B> { A(A), B(B) }
 
 impl<'a, 'b: 'a> Either<ValueRef<'a>, ValueRef<'b>> {
     pub fn as_ref(self) -> ValueRef<'a> {
@@ -804,7 +827,7 @@ impl<'a> PairsIterState<'a> {
                 // TODO: Support stepping backwards
                 self.path.last_mut().unwrap().1 += count;
 
-                let &(ref current_tree, current_index) = match self.path.last() {
+                let &(ref current_tree, _) = match self.path.last() {
                     Some(l) => l,
                     None => return Step::Value(None),
                 };
@@ -812,7 +835,7 @@ impl<'a> PairsIterState<'a> {
                 // FIXME: Fix increment update nth
                 return Step::Value(Some((key, match current_tree {
                     &OwnedOrBorrowedTree::Owned(ref owned) => if let Tree::Leaf(ref owned_leaf) = owned.as_ref() {
-                        let (item, value) = owned_leaf.iter(superblock.incompat_flags().unwrap()).nth(current_index).unwrap();
+                        let (item, _) = owned_leaf.iter(superblock.incompat_flags().unwrap()).nth(current_index).unwrap();
                         Either::B(OwningValueRef {
                             incompat_flags: superblock.incompat_flags().unwrap(),
                             tree_arc: owned.clone(), // by ref
@@ -872,7 +895,7 @@ impl<'a> PairsIterState<'a> {
             }
         }
     }
-    pub fn iter<'ctx, 'b, D>(&'b mut self, device: &'ctx D, superblock: &'ctx Superblock, chunk_map: &'ctx ChunkMap) -> Pairs<'ctx, 'a, 'b, D> {
+    pub fn iter<'ctx, 'b, D>(&'b mut self, device: &'ctx D, superblock: &'ctx Superblock, chunk_map: &'ctx ChunkMap) -> Pairs<'ctx, 'b, 'a, D> {
         Pairs::assemble(self, device, superblock, chunk_map)
     }
     // TODO: previous
@@ -913,5 +936,57 @@ impl<'ctx, 'a, 'b, D: fal::DeviceRo> Iterator for Pairs<'ctx, 'a, 'b, D> {
         // allocation per value, which is a lot more allocations than simply keeping the blocks in
         // memory until they aren't used anymore.
         self.state.next_owned(self.device, self.superblock, self.chunk_map)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::tree::Leaf;
+
+    const LEAF_BYTES: &'static [u8] = include_bytes!("../assets/leaf.bin");
+
+    fn check_leaf(leaf: &Leaf) {
+        use crate::{Checksum, DiskKey, DiskKeyType, oid, PackedUuid};
+        use crate::superblock::IncompatFlags;
+        use crate::tree::Header;
+
+        use zerocopy::{U32, U64};
+        // From the superblock from the filesystem in which the trees were stored.
+        let incompat_flags = IncompatFlags::MIXED_BACKREF | IncompatFlags::BIG_METADATA | IncompatFlags::EXTENDED_IREF | IncompatFlags::SKINNY_METADATA;
+
+        let fsid = PackedUuid { bytes: *uuid::Uuid::parse_str("9d9f9ba4-1298-4896-850f-706de1794fb6").unwrap().as_bytes() };
+
+        assert_eq!(leaf.header, Header {
+            checksum: Checksum::Xxhash(0x5D37_71D5_9674_161B).bytes(),
+            fsid,
+            logical_addr: U64::new(22036480),
+            flags: U64::new(0x100000000000001), // TODO: Understand these flags
+            chunk_tree_uuid: PackedUuid { bytes: *uuid::Uuid::parse_str("c90581bd-4c1f-44cd-a545-53820a5967a5").unwrap().as_bytes() },
+            generation: U64::new(5),
+            owner: U64::new(3),
+            item_count: U32::new(4),
+            level: 0,
+        });
+        assert_eq!(leaf.iter(incompat_flags).count(), 4);
+    }
+    #[test]
+    fn leaf_parsing() {
+        let leaf = Leaf::parse(&LEAF_BYTES).unwrap();
+        check_leaf(leaf);
+    }
+    #[test]
+    fn tree_owned() {
+        use crate::superblock::ChecksumType;
+        use crate::tree::Tree;
+
+        let borrowed = Tree::parse(ChecksumType::Xxhash, LEAF_BYTES).unwrap();
+        let owned = borrowed.to_tree_owned();
+
+        assert_eq!(borrowed, owned.as_ref());
+    }
+
+    #[test]
+    fn node_parsing() {
+        const NODE_BYTES: &'static [u8] = include_bytes!("../assets/node.bin");
     }
 }

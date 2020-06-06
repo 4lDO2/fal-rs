@@ -80,7 +80,7 @@ fn convert_time(time: fal::Timespec) -> time::Timespec {
     time::Timespec::new(time.sec, time.nsec)
 }
 
-fn fuse_attr<InodeAddr: Into<u64>>(attrs: fal::Attributes<InodeAddr>) -> fuse::FileAttr {
+fn fuse_attr(attrs: fal::Attributes) -> fuse::FileAttr {
     fuse::FileAttr {
         atime: convert_time(attrs.access_time),
         blocks: attrs.block_count,
@@ -93,7 +93,7 @@ fn fuse_attr<InodeAddr: Into<u64>>(attrs: fal::Attributes<InodeAddr>) -> fuse::F
         mtime: convert_time(attrs.modification_time),
         nlink: attrs.hardlink_count.try_into().unwrap(),
         perm: attrs.permissions,
-        rdev: 0, // TODO
+        rdev: attrs.rdev.try_into().expect("TODO: Fix fuse 64-bit rdev"),
         size: attrs.size,
         uid: attrs.user_id,
     }
@@ -245,7 +245,7 @@ impl<Backend: fal::Filesystem<fal::BasicDevice<File>>> fuse::Filesystem
             }
         };
 
-        assert_eq!(inode.into(), self.inner().fh_inode(fh).attrs().inode.into());
+        assert_eq!(inode.into(), self.inner().fh_inode(fh).unwrap().addr().into());
 
         match self.inner().read_directory(fh, offset) {
             Ok(Some(entry)) => {
@@ -377,9 +377,9 @@ impl<Backend: fal::Filesystem<fal::BasicDevice<File>>> fuse::Filesystem
             }
         };
 
-        let inode_struct = self.inner().fh_inode(fh);
+        let inode_struct = self.inner().fh_inode(fh).unwrap();
 
-        assert_eq!(inode.into(), inode_struct.attrs().inode.into());
+        assert_eq!(inode.into(), inode_struct.addr().into());
 
         let inode_size = inode_struct.attrs().size;
 
@@ -417,7 +417,7 @@ impl<Backend: fal::Filesystem<fal::BasicDevice<File>>> fuse::Filesystem
             }
         };
 
-        let inode_struct = self.inner().fh_inode(fh);
+        let inode_struct = self.inner().fh_inode(fh).unwrap();
 
         assert_eq!(inode.into(), inode_struct.attrs().inode.into());
 

@@ -107,7 +107,7 @@ impl fal::Inode for Inode {
     fn addr(&self) -> u32 {
         self.addr
     }
-    fn attrs(&self) -> fal::Attributes<u32> {
+    fn attrs(&self) -> fal::Attributes {
         fal::Attributes {
             access_time: self.a_time(),
             change_time: self.c_time(),
@@ -118,7 +118,7 @@ impl fal::Inode for Inode {
             flags: self.flags,
             group_id: self.gid.into(),
             hardlink_count: self.hardlink_count.into(),
-            inode: self.addr,
+            inode: self.addr.into(),
             permissions: self.permissions(),
             rdev: 0,
             size: self.size,
@@ -372,15 +372,16 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
             .into_boxed_slice())
     }
 
-    fn fh_offset(&self, fh: u64) -> u64 {
-        self.fhs.get(&fh).unwrap().offset
+    fn fh_offset(&self, fh: u64) -> fal::Result<u64> {
+        Ok(self.fhs.get(&fh).ok_or(fal::Error::BadFd)?.offset)
     }
-    fn fh_inode(&self, fh: u64) -> Inode {
-        self.fhs.get(&fh).unwrap().inode.clone()
+    fn fh_inode(&self, fh: u64) -> fal::Result<Inode> {
+        Ok(self.fhs.get(&fh).ok_or(fal::Error::BadFd)?.inode.clone())
     }
 
-    fn set_fh_offset(&mut self, fh: u64, offset: u64) {
-        self.fhs.get_mut(&fh).unwrap().offset = offset;
+    fn set_fh_offset(&mut self, fh: u64, offset: u64) -> fal::Result<()> {
+        self.fhs.get_mut(&fh).ok_or(fal::Error::BadFd)?.offset = offset;
+        Ok(())
     }
 
     fn filesystem_attrs(&self) -> fal::FsAttributes {

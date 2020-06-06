@@ -263,6 +263,11 @@ impl Checksum {
     pub fn size(&self) -> usize {
         self.ty().size()
     }
+    pub fn bytes(self) -> [u8; 32] {
+        let mut ret = [0u8; 32];
+        self.serialize(&mut ret);
+        ret
+    }
 
     const SUPPORTED_CHECKSUMS: [Option<ChecksumType>; 4] = [
         #[cfg(feature = "crc32c")]

@@ -644,16 +644,17 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
             .into_boxed_slice())
     }
 
-    fn fh_offset(&self, fh: u64) -> u64 {
-        self.file_handles.get(&fh).unwrap().offset
+    fn fh_offset(&self, fh: u64) -> Result<u64> {
+        Ok(self.file_handles.get(&fh).ok_or(fal::Error::BadFd)?.offset)
     }
 
-    fn fh_inode(&self, fh: u64) -> Inode {
-        self.file_handles.get(&fh).unwrap().inode.clone()
+    fn fh_inode(&self, fh: u64) -> Result<Inode> {
+        Ok(self.file_handles.get(&fh).ok_or(fal::Error::BadFd)?.inode.clone())
     }
 
-    fn set_fh_offset(&mut self, fh: u64, offset: u64) {
-        self.file_handles.get_mut(&fh).unwrap().offset = offset;
+    fn set_fh_offset(&mut self, fh: u64, offset: u64) -> Result<()> {
+        self.file_handles.get_mut(&fh).ok_or(fal::Error::BadFd)?.offset = offset;
+        Ok(())
     }
 
     fn filesystem_attrs(&self) -> fal::FsAttributes {

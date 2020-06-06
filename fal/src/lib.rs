@@ -354,7 +354,7 @@ pub trait Inode: Clone {
 
     fn generation_number(&self) -> Option<u64>;
     fn addr(&self) -> Self::InodeAddr;
-    fn attrs(&self) -> Attributes<Self::InodeAddr>;
+    fn attrs(&self) -> Attributes;
 
     fn set_perm(&mut self, permissions: u16);
     fn set_uid(&mut self, uid: u32);
@@ -373,7 +373,7 @@ pub enum FileType {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Attributes<InodeAddr: Into<u64>> {
+pub struct Attributes {
     pub filetype: FileType,
     pub size: u64,
     pub block_count: u64,
@@ -382,7 +382,7 @@ pub struct Attributes<InodeAddr: Into<u64>> {
     pub user_id: u32,
     pub group_id: u32,
     pub rdev: u64,
-    pub inode: InodeAddr,
+    pub inode: u64,
 
     pub creation_time: Timespec,
     pub modification_time: Timespec,
@@ -589,7 +589,7 @@ where
     fn readlink(&mut self, inode: Self::InodeAddr) -> Result<Box<[u8]>>;
 
     /// Get the offset of an open file handle.
-    fn fh_offset(&self, fh: u64) -> u64;
+    fn fh_offset(&self, fh: u64) -> Result<u64>;
 
     // XXX: Rust's type system doesn't support associated types with lifetimes. If a backend wants
     // to use a concurrent hashmap for storing the file handles, then there won't be a direct
@@ -602,10 +602,10 @@ where
     // https://github.com/rust-lang/rust/issues/44265
     //
     /// Retrieve a reference to data about an open file handle.
-    fn fh_inode(&self, fh: u64) -> Self::InodeStruct;
+    fn fh_inode(&self, fh: u64) -> Result<Self::InodeStruct>;
 
     /// Set the current offset of a file handle.
-    fn set_fh_offset(&mut self, fh: u64, offset: u64);
+    fn set_fh_offset(&mut self, fh: u64, offset: u64) -> Result<()>;
 
     /// Get the statvfs of the filesystem.
     fn filesystem_attrs(&self) -> FsAttributes;
@@ -642,7 +642,7 @@ pub fn mask_permissions(mask: u8) -> Permissions {
     }
 }
 /// Check which permissions a user of a certain group has on a file with the specified attributes.
-pub fn check_permissions<A: Into<u64>>(uid: u32, gid: u32, attrs: &Attributes<A>) -> Permissions {
+pub fn check_permissions(uid: u32, gid: u32, attrs: &Attributes) -> Permissions {
     if attrs.user_id == uid {
         let user_mask = (attrs.permissions & 0o700) >> 6;
         mask_permissions(user_mask as u8)
