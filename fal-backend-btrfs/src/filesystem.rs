@@ -1,5 +1,3 @@
-use std::sync::{Mutex, RwLock};
-
 use core::convert::{TryFrom, TryInto};
 use core::sync::atomic::{self, AtomicU64};
 
@@ -17,6 +15,9 @@ use crate::{
 };
 
 // TODO: Separate DiskKey with Key just like Linux does.
+
+use parking_lot::{Mutex, RwLock};
+
 use zerocopy::U64;
 
 pub const FIRST_CHUNK_TREE_OBJECTID: u64 = 256;
@@ -334,7 +335,6 @@ impl<D: fal::Device> Filesystem<D> {
         let _ = self
             .handles
             .write()
-            .unwrap()
             .insert(num, Mutex::new(handle));
         num
     }
@@ -350,7 +350,7 @@ impl<D: fal::Device> Filesystem<D> {
     // through a BTreeMap for example. For now we translate FAL InodeAddrs ourselves to the
     // inode+subvol.
     pub fn load_inode_inner(&mut self, fal_address: u64) -> fal::Result<(Inode, (u64, u64))> {
-        let &(oid, subvolid) = self.inodes_translation.read().unwrap().get(&fal_address).ok_or(fal::Error::NoEntity)?;
+        let &(oid, subvolid) = self.inodes_translation.read().get(&fal_address).ok_or(fal::Error::NoEntity)?;
 
         let disk_key = DiskKey {
             oid: u64_le::new(oid),
@@ -358,8 +358,8 @@ impl<D: fal::Device> Filesystem<D> {
             offset: u64_le::new(0),
         };
 
-        let subvolumes_read_guard = self.subvolumes.read().unwrap();
-        let subvolume_read_guard = subvolumes_read_guard.get(&subvolid).ok_or(fal::Error::NoEntity)?.read().unwrap();
+        let subvolumes_read_guard = self.subvolumes.read();
+        let subvolume_read_guard = subvolumes_read_guard.get(&subvolid).ok_or(fal::Error::NoEntity)?.read();
 
         let mut path = vec!((OwnedOrBorrowedTree::Borrowed(subvolume_read_guard.as_ref()), 0));
 
@@ -376,11 +376,11 @@ impl<D: fal::Device> Filesystem<D> {
         }, (oid, subvolid)))
     }
     pub fn translation_for(&self, oid: u64, subvolid: u64) -> u64 {
-        let mut translation_write_guard = self.inodes_translation_rev.write().unwrap();
+        let mut translation_write_guard = self.inodes_translation_rev.write();
 
         *translation_write_guard.entry((oid, subvolid)).or_insert_with(|| {
             let id = self.next_inode.fetch_add(1, atomic::Ordering::Relaxed);
-            self.inodes_translation.write().unwrap().insert(id, (oid, subvolid));
+            self.inodes_translation.write().insert(id, (oid, subvolid));
             id
         })
     }
@@ -426,8 +426,8 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
             return Err(fal::Error::NotDirectory);
         }
 
-        let subvolumes_read_guard = self.subvolumes.read().unwrap();
-        let subvolume_read_guard = subvolumes_read_guard.get(&subvolid).ok_or(fal::Error::BadFdState)?.read().unwrap();
+        let subvolumes_read_guard = self.subvolumes.read();
+        let subvolume_read_guard = subvolumes_read_guard.get(&subvolid).ok_or(fal::Error::BadFdState)?.read();
 
         let state = subvolume_read_guard.as_ref().similar_pairs(&self.device, &self.superblock, &self.chunk_map, &DiskKey {
             oid: U64::new(oid),
@@ -449,8 +449,8 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         fh: u64,
         offset: i64,
     ) -> fal::Result<Option<fal::DirectoryEntry<Self::InodeAddr>>> {
-        let handles_read_guard = self.handles.read().unwrap();
-        let mut handle = handles_read_guard.get(&fh).ok_or(fal::Error::BadFd)?.lock().unwrap();
+        let handles_read_guard = self.handles.read();
+        let mut handle = handles_read_guard.get(&fh).ok_or(fal::Error::BadFd)?.lock();
 
         let (fal_address, oid, subvolid, handle_offset, inode, state) = match &mut *handle {
             &mut Handle::Directory { fal_address, oid, subvolid, ref mut offset, ref inode, ref mut state } => (fal_address, oid, subvolid, offset, inode, state),
@@ -488,7 +488,7 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         parent_fal_address: Self::InodeAddr,
         name: &[u8],
     ) -> fal::Result<fal::DirectoryEntry<Self::InodeAddr>> {
-        let &(parent_oid, parent_subvolid) = self.inodes_translation.read().unwrap().get(&parent_fal_address).ok_or(fal::Error::NoEntity)?;
+        let &(parent_oid, parent_subvolid) = self.inodes_translation.read().get(&parent_fal_address).ok_or(fal::Error::NoEntity)?;
 
         let disk_key = DiskKey {
             oid: u64_le::new(parent_oid),
@@ -497,8 +497,8 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         };
         dbg!(disk_key);
         dbg!(parent_oid, parent_subvolid);
-        let subvolumes_read_guard = self.subvolumes.read().unwrap();
-        let subvolume_read_guard = subvolumes_read_guard.get(&parent_subvolid).ok_or(fal::Error::NoEntity)?.read().unwrap();
+        let subvolumes_read_guard = self.subvolumes.read();
+        let subvolume_read_guard = subvolumes_read_guard.get(&parent_subvolid).ok_or(fal::Error::NoEntity)?.read();
         let tree = subvolume_read_guard.as_ref();
 
         let mut path = vec!((OwnedOrBorrowedTree::Borrowed(tree), 0));
@@ -529,8 +529,8 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         todo!()
     }
     fn fh_inode(&self, fh: u64) -> fal::Result<Self::InodeStruct> {
-        let handles_guard = self.handles.read().unwrap();
-        let handle_guard = handles_guard.get(&fh).ok_or(fal::Error::BadFd)?.lock().unwrap();
+        let handles_guard = self.handles.read();
+        let handle_guard = handles_guard.get(&fh).ok_or(fal::Error::BadFd)?.lock();
 
         Ok(match &*handle_guard {
             &Handle::Directory { ref inode, .. } => inode.clone(),
@@ -538,8 +538,8 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         })
     }
     fn fh_offset(&self, fh: u64) -> fal::Result<u64> {
-        let handles_guard = self.handles.read().unwrap();
-        let handle_guard = handles_guard.get(&fh).ok_or(fal::Error::BadFd)?.lock().unwrap();
+        let handles_guard = self.handles.read();
+        let handle_guard = handles_guard.get(&fh).ok_or(fal::Error::BadFd)?.lock();
 
         match &*handle_guard {
             &Handle::Directory { offset, .. } => Ok(offset),
@@ -547,8 +547,8 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         }
     }
     fn set_fh_offset(&mut self, fh: u64, new_offset: u64) -> fal::Result<()> {
-        let handles_guard = self.handles.read().unwrap();
-        let mut handle_guard = handles_guard.get(&fh).ok_or(fal::Error::BadFd)?.lock().unwrap();
+        let handles_guard = self.handles.read();
+        let mut handle_guard = handles_guard.get(&fh).ok_or(fal::Error::BadFd)?.lock();
 
         match &mut *handle_guard {
             &mut Handle::Directory { ref mut offset, .. } => *offset = new_offset,
@@ -560,8 +560,8 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         todo!()
     }
     fn close(&mut self, fh: u64) -> fal::Result<()> {
-        let handles_read_guard = self.handles.read().unwrap();
-        let handle_guard = handles_read_guard.get(&fh).ok_or(fal::Error::BadFd)?.lock().unwrap();
+        let handles_read_guard = self.handles.read();
+        let handle_guard = handles_read_guard.get(&fh).ok_or(fal::Error::BadFd)?.lock();
 
         // TODO
         Ok(())
