@@ -1,4 +1,5 @@
 use core::convert::{TryFrom, TryInto};
+use core::cmp;
 use core::sync::atomic::{self, AtomicU64};
 
 use alloc::collections::BTreeMap;
@@ -7,7 +8,7 @@ use fal::Inode as _;
 
 use crate::{
     chunk_map::ChunkMap,
-    items::{DirItem, Filetype, InodeItem},
+    items::{DirItem, FileExtentItemExt, FileExtentItemType, Filetype, InodeItem},
     oid,
     superblock::Superblock,
     tree::{Path, OwnedOrBorrowedTree, PairsIterState, Tree, TreeOwned, ValueRef},
@@ -60,7 +61,14 @@ pub fn name_hash(name: &[u8]) -> u32 {
 
 #[derive(Debug)]
 pub enum Handle {
-    File,
+    File {
+        fal_address: u64,
+        oid: u64,
+        subvolid: u64,
+        offset: u64,
+        inode: Inode,
+        state: Option<PairsIterState<'static>>,
+    },
     Directory {
         fal_address: u64,
         oid: u64,
@@ -405,6 +413,19 @@ impl<D: fal::Device> Filesystem<D> {
         };
         Ok(Some(RwLockReadGuard::map(read_lock, |guard| guard.get(&subvolid).unwrap())))
     }
+    pub fn read_extent(&self, data: &mut Vec<u8>, extent_start_byte: u64, extent_byte_count: u64, extent_offset: u64) -> fal::Result<()> {
+        // first, look up the extent in the extent tree
+        let mut path = vec!((OwnedOrBorrowedTree::Borrowed(self.extent_tree.as_ref()), 0));
+
+        let partial_key = DiskKey {
+            oid: u64_le::new(extent_start_byte),
+            ty: DiskKeyType::ExtentItem as u8,
+            offset: u64_le::new(0), // doesn't matter
+        };
+        let (k, v) = Tree::get_partial_with_path(&mut path, &self.device, &self.superblock, &self.chunk_map, &partial_key).unwrap();
+        dbg!(k, v);
+        todo!()
+    }
 }
 
 impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
@@ -432,11 +453,100 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
     fn store_inode(&mut self, inode: &Self::InodeStruct) -> fal::Result<()> {
         Err(fal::Error::ReadonlyFs)
     }
-    fn open_file(&mut self, inode: Self::InodeAddr) -> fal::Result<u64> {
-        todo!()
+    fn open_file(&mut self, fal_address: Self::InodeAddr) -> fal::Result<u64> {
+        let (inode, (oid, subvolid)) = self.load_inode_inner(fal_address)?;
+        if inode.attrs().filetype != fal::FileType::RegularFile {
+            return Err(fal::Error::IsDirectory);
+        }
+
+        let subvolume_lock = self.subvolume(subvolid)?.ok_or(fal::Error::BadFdState)?;
+        let subvolume_read_guard = subvolume_lock.read();
+        
+        let partial_key = DiskKey {
+            oid: u64_le::new(oid),
+            ty: DiskKeyType::ExtentData as u8,
+            offset: u64_le::new(0), // doesn't matter for partial key
+        };
+
+        let state = Tree::similar_pairs(subvolume_read_guard.as_ref(), &self.device, &self.superblock, &self.chunk_map, &partial_key).map(PairsIterState::to_static);
+        Ok(self.insert_handle(Handle::File { inode, offset: 0, fal_address, oid, subvolid, state }))
     }
-    fn read(&mut self, fh: u64, offset: u64, buffer: &mut [u8]) -> fal::Result<usize> {
-        todo!()
+    fn read(&mut self, fh: u64, read_offset: u64, mut buffer: &mut [u8]) -> fal::Result<usize> {
+        let handles_read_guard = self.handles.read();
+        let mut handle = handles_read_guard.get(&fh).ok_or(fal::Error::BadFd)?.lock();
+
+        let (inode, file_offset, oid, state) = match &mut *handle {
+            &mut Handle::File { ref mut offset, ref inode, oid, ref mut state, .. } => (inode, offset, oid, state),
+            _ => return Err(fal::Error::BadFd),
+        };
+
+        let state = match state {
+            Some(s) => s,
+            None => return Ok(0),
+        };
+
+        let (mut key, mut current_item_owned) = match state.current(&self.device, &self.superblock, &self.chunk_map) {
+            Some(c) => c,
+            None => return Ok(0),
+        };
+
+        let mut bytes_read = 0;
+
+        loop {
+            let current_item = current_item_owned.as_ref();
+
+            let base_offset = match dbg!(key) {
+                DiskKey { oid: owner, ty, offset } if owner.get() == dbg!(oid) && ty == DiskKeyType::ExtentData as u8 => offset.get(),
+                _ => { dbg!(); break }, // we have now iterated past the current inode
+            };
+
+            assert!(base_offset <= read_offset);
+
+            let extent_item = current_item.as_extent_data().ok_or(fal::Error::Io)?;
+
+            if extent_item.compression != 0 || extent_item.encryption != 0 || extent_item.other_encoding.get() != 0 {
+                eprintln!("Unsupported data encoding for file extent item: {:?}", extent_item);
+                return Err(fal::Error::Io);
+            }
+
+            let extent_ext = extent_item.ext().ok_or(fal::Error::Io)?;
+            let extent_size = extent_item.device_size.get();
+
+            if base_offset + extent_size < read_offset {
+                dbg!();
+                // the read offset exceeds the extent range. try finding a new extent located
+                // further away
+                let (new_key, new_item) = match state.next_owned(&self.device, &self.superblock, &self.chunk_map) {
+                    Some(n) => n,
+                    None => break,
+                };
+                key = new_key;
+                current_item_owned = new_item;
+                continue;
+            }
+            if extent_item.ty == FileExtentItemType::Prealloc as u8 {
+                break;
+            }
+
+            let mut data = Vec::new();
+
+            let slice = match extent_ext {
+                FileExtentItemExt::Inline(slice) => slice,
+                FileExtentItemExt::OnDisk(on_disk) => {
+                    self.read_extent(&mut data, on_disk.disk_bytenr.get(), on_disk.disk_byte_count.get(), on_disk.disk_offset.get())?;
+                    &data
+                }
+            };
+            let src_offset = usize::try_from(read_offset - base_offset).or(Err(fal::Error::Overflow))?;
+            let bytes_to_read = cmp::min(usize::try_from(slice.len() as u64 - src_offset as u64).or(Err(fal::Error::Overflow))?, buffer.len());
+            buffer[..bytes_to_read].copy_from_slice(&slice[src_offset..src_offset + bytes_to_read]);
+            buffer = &mut buffer[bytes_to_read..];
+            bytes_read += bytes_to_read;
+            *file_offset += u64::try_from(bytes_to_read).or(Err(fal::Error::Overflow))?;
+
+            if buffer.is_empty() { break }
+        }
+        Ok(bytes_read)
     }
     fn write(&mut self, fh: u64, offset: u64, buffer: &[u8]) -> fal::Result<u64> {
         todo!()
@@ -550,8 +660,7 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         let handle_guard = handles_guard.get(&fh).ok_or(fal::Error::BadFd)?.lock();
 
         Ok(match &*handle_guard {
-            &Handle::Directory { ref inode, .. } => inode.clone(),
-            &Handle::File => todo!(),
+            &Handle::Directory { ref inode, .. } | &Handle::File { ref inode, .. } => inode.clone(),
         })
     }
     fn fh_offset(&self, fh: u64) -> fal::Result<u64> {
@@ -559,8 +668,7 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         let handle_guard = handles_guard.get(&fh).ok_or(fal::Error::BadFd)?.lock();
 
         match &*handle_guard {
-            &Handle::Directory { offset, .. } => Ok(offset),
-            &Handle::File => todo!(),
+            &Handle::Directory { offset, .. } | &Handle::File { offset, .. } => Ok(offset),
         }
     }
     fn set_fh_offset(&mut self, fh: u64, new_offset: u64) -> fal::Result<()> {
@@ -568,8 +676,7 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         let mut handle_guard = handles_guard.get(&fh).ok_or(fal::Error::BadFd)?.lock();
 
         match &mut *handle_guard {
-            &mut Handle::Directory { ref mut offset, .. } => *offset = new_offset,
-            &mut Handle::File => todo!(),
+            &mut Handle::Directory { ref mut offset, .. } | &mut Handle::File { ref mut offset, .. } => *offset = new_offset,
         }
         Ok(())
     }

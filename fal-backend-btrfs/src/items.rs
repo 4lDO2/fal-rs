@@ -487,7 +487,7 @@ impl ToOwned for FileExtentItem {
     type Owned = Box<Self>;
 
     fn to_owned(&self) -> Self::Owned {
-        let mut b = vec![0u8; self.size_in_bytes()].into_boxed_slice();
+        let mut b = vec![0u8; self.struct_size()].into_boxed_slice();
         b.copy_from_slice(self.as_bytes());
 
         let ptr: *mut [u8] = Box::into_raw(b);
@@ -516,10 +516,10 @@ pub enum FileExtentItemExt<'a> {
 #[derive(Clone, Copy, Debug, AsBytes, FromBytes, Unaligned)]
 #[repr(packed)]
 pub struct FileExtentItemExtOnDisk {
-    disk_bytenr: u64_le,
-    disk_byte_count: u64_le,
-    disk_offset: u64_le,
-    byte_count: u64_le,
+    pub disk_bytenr: u64_le,
+    pub disk_byte_count: u64_le,
+    pub disk_offset: u64_le,
+    pub byte_count: u64_le,
 }
 
 impl FileExtentItem {
@@ -528,11 +528,11 @@ impl FileExtentItem {
     }
     pub const BASE_LEN: usize = 21;
 
-    pub fn size_in_bytes(&self) -> usize {
+    pub fn struct_size(&self) -> usize {
         Self::BASE_LEN + self.rest.len()
     }
     pub fn as_bytes(&self) -> &[u8] {
-        unsafe { slice::from_raw_parts(self as *const Self as *const u8, self.size_in_bytes()) }
+        unsafe { slice::from_raw_parts(self as *const Self as *const u8, self.struct_size()) }
     }
 
     pub fn parse<'a>(bytes: &'a [u8]) -> Option<&'a Self> {

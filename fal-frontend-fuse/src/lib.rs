@@ -390,8 +390,7 @@ impl<Backend: fal::Filesystem<fal::BasicDevice<File>>> fuse::Filesystem
         let mut buffer = vec![0u8; bytes_to_read as usize];
 
         let bytes_read = handle_fal_error!(self.inner().read(fh, offset, &mut buffer), reply);
-        assert_eq!(bytes_read, buffer.len());
-        reply.data(&buffer);
+        reply.data(&buffer[..bytes_read]);
     }
     fn write(
         &mut self,

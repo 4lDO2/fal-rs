@@ -323,6 +323,12 @@ impl<'a> ValueRef<'a> {
             _ => false,
         }
     }
+    pub fn as_extent_data(&'a self) -> Option<&'a FileExtentItem> {
+        match self {
+            &Self::ExtentData(ref item) => Some(item.borrow()),
+            _ => None,
+        }
+    }
 }
 
 impl<'a> ValueCow<'a> {
@@ -604,6 +610,7 @@ impl<'a> Tree<'a> {
         chunk_map: &ChunkMap,
         key: &DiskKey,
         compare: fn(k1: &DiskKey, k2: &DiskKey) -> Ordering,
+        or_less: bool,
     ) -> Option<(DiskKey, ValueRef<'b>)> {
         let item_index: Option<usize> = loop {
             let (i, subtree) = match path.last().map(|(tree, _)| tree).unwrap().as_ref() {
@@ -611,9 +618,18 @@ impl<'a> Tree<'a> {
                     assert_eq!(leaf.header.level, 0);
 
                     // Leaf nodes are guaranteed to contain the key and the value, if they exist.
-                    break leaf
-                        .iter(superblock.incompat_flags().unwrap())
-                        .position(|(item, _)| compare(&item.key, key) == Ordering::Equal);
+                    break if or_less {
+                        leaf.iter(superblock.incompat_flags().unwrap())
+                            .enumerate()
+                            .filter(|(_, (k, _))| compare(&k.key, key) != Ordering::Greater)
+                            .max_by(|(_, (k1, _)), (_, (k2, _))| {
+                                compare(&k1.key, &k2.key)
+                            }).map(|(i, _)| i)
+                    } else {
+                        leaf
+                            .iter(superblock.incompat_flags().unwrap())
+                            .position(|(item, _)| compare(&item.key, key) == Ordering::Equal)
+                    }
                 }
                 Tree::Internal(internal) => {
                     assert_ne!(internal.header.level, 0);
@@ -663,7 +679,26 @@ impl<'a> Tree<'a> {
         chunk_map: &ChunkMap,
         key: &DiskKey,
     ) -> Option<ValueRef<'b>> {
-        Self::get_generic(path, device, superblock, chunk_map, key, Ord::cmp)
+        Self::get_generic(path, device, superblock, chunk_map, key, Ord::cmp, false)
+            .map(|(_, value)| value)
+    }
+    pub fn get_partial_with_path<'b, D: fal::Device>(
+        path: &'b mut Path<'a>,
+        device: &D,
+        superblock: &Superblock,
+        chunk_map: &ChunkMap,
+        partial_key: &DiskKey,
+    ) -> Option<(DiskKey, ValueRef<'b>)> {
+        Self::get_generic(path, device, superblock, chunk_map, partial_key, DiskKey::compare_without_offset, false)
+    }
+    pub fn get_or_less_with_path<'b, D: fal::Device>(
+        path: &'b mut Path<'a>,
+        device: &D,
+        superblock: &Superblock,
+        chunk_map: &ChunkMap,
+        key: &DiskKey,
+    ) -> Option<ValueRef<'b>> {
+        Self::get_generic(path, device, superblock, chunk_map, key, Ord::cmp, true)
             .map(|(_, value)| value)
     }
     pub fn pairs(
@@ -693,6 +728,7 @@ impl<'a> Tree<'a> {
             chunk_map,
             partial_key,
             DiskKey::compare_without_offset,
+            false,
         ) {
             Some(_) => (),
             None => return None,
@@ -893,6 +929,14 @@ impl<'a> PairsIterState<'a> {
             return Step::Step;
         }
     }
+    pub fn current<D: fal::DeviceRo>(&mut self, device: &D, superblock: &Superblock, chunk_map: &ChunkMap) -> Option<(DiskKey, Either<ValueRef<'a>, OwningValueRef>)> {
+        loop {
+            match self.step(device, superblock, chunk_map, 0) {
+                Step::Value(v) => return v,
+                Step::Step => continue,
+            }
+        }
+    }
     pub fn next_owned<D: fal::DeviceRo>(&mut self, device: &D, superblock: &Superblock, chunk_map: &ChunkMap) -> Option<(DiskKey, Either<ValueRef<'a>, OwningValueRef>)> {
         loop {
             match self.step(device, superblock, chunk_map, 1) {
@@ -952,7 +996,7 @@ mod tests {
     const LEAF_BYTES: &'static [u8] = include_bytes!("../assets/leaf.bin");
 
     fn check_leaf(leaf: &Leaf) {
-        use crate::{Checksum, DiskKey, DiskKeyType, oid, PackedUuid};
+        use crate::{Checksum, PackedUuid};
         use crate::superblock::IncompatFlags;
         use crate::tree::Header;
 
