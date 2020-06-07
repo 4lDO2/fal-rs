@@ -574,7 +574,20 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         Ok(())
     }
     fn filesystem_attrs(&self) -> fal::FsAttributes {
-        todo!()
+        let node_size = self.superblock.node_size.get();
+        let total_blocks = self.superblock.total_byte_count.get() / u64::from(node_size);
+        let free_blocks = total_blocks - (self.superblock.total_bytes_used.get() / u64::from(node_size));
+
+        fal::FsAttributes {
+            block_size: node_size,
+            free_blocks,
+            available_blocks: free_blocks,
+            total_blocks,
+
+            free_inodes: 0,
+            inode_count: 0,
+            max_fname_len: 255,
+        }
     }
     fn close(&mut self, fh: u64) -> fal::Result<()> {
         let handles_read_guard = self.handles.read();
@@ -622,7 +635,7 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         let subvolume_read_guard = subvolume_lock.read();
 
         let partial_key = DiskKey {
-            oid: u64_le::new(inode.real_address),
+            oid: u64_le::new(oid),
             ty: DiskKeyType::XattrItem as u8,
             offset: u64_le::new(0),
         };
