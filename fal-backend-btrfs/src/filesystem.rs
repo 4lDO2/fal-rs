@@ -16,7 +16,7 @@ use crate::{
 
 // TODO: Separate DiskKey with Key just like Linux does.
 
-use parking_lot::{Mutex, RwLock};
+use parking_lot::{MappedRwLockReadGuard, Mutex, RwLock, RwLockReadGuard, RwLockUpgradableReadGuard, RwLockWriteGuard};
 
 use zerocopy::U64;
 
@@ -217,7 +217,7 @@ impl<D: fal::Device> Filesystem<D> {
             };
             for (key, value) in tree.as_ref().pairs().iter(&device, &superblock, &chunk_map) {
                 println!("FS ({}) ITEM: {:?}\n", tree_oid, (key, &value));
-                if let (Some(DiskKeyType::DirItem), Some(dir_item)) = (key.ty(), value.as_ref().as_dir_index()) {
+                if let (Some(DiskKeyType::DirIndex), Some(dir_item)) = (key.ty(), value.as_ref().as_dir_index()) {
                     if dir_item.location.ty() == Some(DiskKeyType::RootItem) {
                         // we have found a submodule
                         let oid = dir_item.location.oid.get();
@@ -280,7 +280,7 @@ impl<D: fal::Device> Filesystem<D> {
 
             inodes_translation: RwLock::new(std::iter::once((2, (256, oid::FS_TREE))).collect()),
             inodes_translation_rev: RwLock::new(std::iter::once(((256, oid::FS_TREE), 2)).collect()),
-            next_inode: AtomicU64::new(2),
+            next_inode: AtomicU64::new(3),
 
             handles: RwLock::new(BTreeMap::new()),
             next_handle: AtomicU64::new(0),
@@ -325,7 +325,7 @@ impl<D: fal::Device> Filesystem<D> {
         let key = DiskKey {
             oid: u64_le::new(oid),
             ty: DiskKeyType::DirItem as u8,
-            offset: u64_le::new(u64::from(dbg!(name_hash(name)))),
+            offset: u64_le::new(u64::from(name_hash(name))),
         };
         let value = Tree::get_with_path(path, device, superblock, chunk_map, &key)?;
         Some(value.as_dir_item()?)
@@ -358,8 +358,8 @@ impl<D: fal::Device> Filesystem<D> {
             offset: u64_le::new(0),
         };
 
-        let subvolumes_read_guard = self.subvolumes.read();
-        let subvolume_read_guard = subvolumes_read_guard.get(&subvolid).ok_or(fal::Error::NoEntity)?.read();
+        let subvolume_lock = self.subvolume(subvolid)?.ok_or(fal::Error::NoEntity)?;
+        let subvolume_read_guard = subvolume_lock.read();
 
         let mut path = vec!((OwnedOrBorrowedTree::Borrowed(subvolume_read_guard.as_ref()), 0));
 
@@ -383,6 +383,24 @@ impl<D: fal::Device> Filesystem<D> {
             self.inodes_translation.write().insert(id, (oid, subvolid));
             id
         })
+    }
+    pub fn subvolume<'a>(&'a self, subvolid: u64) -> fal::Result<Option<MappedRwLockReadGuard<RwLock<TreeOwned>>>> {
+        let intent_lock = self.subvolumes.upgradable_read();
+
+        let read_lock = if !intent_lock.contains_key(&subvolid) {
+            // TODO: load_tree errors
+            let tree = match Self::load_tree(&self.device, &self.superblock, &self.chunk_map, self.root_tree.as_ref(), subvolid) {
+                Some(t) => t,
+                None => return Ok(None),
+            };
+
+            let mut write_lock = RwLockUpgradableReadGuard::upgrade(intent_lock);
+            write_lock.insert(subvolid, RwLock::new(tree));
+            RwLockWriteGuard::downgrade(write_lock)
+        } else {
+            RwLockUpgradableReadGuard::downgrade(intent_lock)
+        };
+        Ok(Some(RwLockReadGuard::map(read_lock, |guard| guard.get(&subvolid).unwrap())))
     }
 }
 
@@ -426,8 +444,8 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
             return Err(fal::Error::NotDirectory);
         }
 
-        let subvolumes_read_guard = self.subvolumes.read();
-        let subvolume_read_guard = subvolumes_read_guard.get(&subvolid).ok_or(fal::Error::BadFdState)?.read();
+        let subvolume_lock = self.subvolume(subvolid)?.ok_or(fal::Error::BadFdState)?;
+        let subvolume_read_guard = subvolume_lock.read();
 
         let state = subvolume_read_guard.as_ref().similar_pairs(&self.device, &self.superblock, &self.chunk_map, &DiskKey {
             oid: U64::new(oid),
@@ -457,7 +475,7 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
             _ => return Err(fal::Error::BadFd),
         };
 
-        let (key, value) = match state.iter(&self.device, &self.superblock, &self.chunk_map).take_while(|(k, v)| v.as_ref().is_dir_index()).nth(offset as usize) {
+        let (key, value) = match state.iter(&self.device, &self.superblock, &self.chunk_map).take_while(|(_, v)| v.as_ref().is_dir_index()).nth(offset as usize) {
             Some(kv) => kv,
             None => return Ok(None),
         };
@@ -480,7 +498,7 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
             name: value.name().to_vec(),
             filetype: value.file_type().expect("todo: handle unknown filetypes").try_into_fal().expect("todo: handle incompat filetype"),
             inode: fal_address,
-            offset: offset as u64,
+            offset: 0,
         }))
     }
     fn lookup_direntry(
@@ -495,22 +513,18 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
             ty: DiskKeyType::DirItem as u8,
             offset: u64_le::new(u64::from(name_hash(name))),
         };
-        dbg!(disk_key);
-        dbg!(parent_oid, parent_subvolid);
-        let subvolumes_read_guard = self.subvolumes.read();
-        let subvolume_read_guard = subvolumes_read_guard.get(&parent_subvolid).ok_or(fal::Error::NoEntity)?.read();
+        let subvolume_lock = self.subvolume(parent_subvolid)?.ok_or(fal::Error::NoEntity)?;
+        let subvolume_read_guard = subvolume_lock.read();
         let tree = subvolume_read_guard.as_ref();
 
         let mut path = vec!((OwnedOrBorrowedTree::Borrowed(tree), 0));
 
         let value = Tree::get_with_path(&mut path, &self.device, &self.superblock, &self.chunk_map, &disk_key)
-            .ok_or(fal::Error::NoEntity).unwrap();
+            .ok_or(fal::Error::NoEntity)?;
 
         let item = value.as_dir_item().ok_or(fal::Error::NoEntity)?;
 
-        dbg!(&item);
-
-        let fal_inode = if item.location.ty() == Some(DiskKeyType::DirItem) {
+        let fal_inode = if item.location.ty() == Some(DiskKeyType::InodeItem) {
             self.translation_for(item.location.oid.get(), parent_subvolid)
         } else if item.location.ty() == Some(DiskKeyType::RootItem) {
             self.translation_for(256, item.location.oid.get())

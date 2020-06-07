@@ -80,7 +80,7 @@ fn convert_time(time: fal::Timespec) -> time::Timespec {
     time::Timespec::new(time.sec, time.nsec)
 }
 
-fn fuse_attr(attrs: fal::Attributes) -> fuse::FileAttr {
+fn fuse_attr<InodeAddr: Into<u64>>(addr: InodeAddr, attrs: fal::Attributes) -> fuse::FileAttr {
     fuse::FileAttr {
         atime: convert_time(attrs.access_time),
         blocks: attrs.block_count,
@@ -88,7 +88,8 @@ fn fuse_attr(attrs: fal::Attributes) -> fuse::FileAttr {
         ctime: convert_time(attrs.change_time),
         flags: attrs.flags,
         gid: attrs.group_id,
-        ino: attrs.inode.into(),
+        //ino: attrs.inode.into(),
+        ino: addr.into(),
         kind: fuse_filetype(attrs.filetype),
         mtime: convert_time(attrs.modification_time),
         nlink: attrs.hardlink_count.try_into().unwrap(),
@@ -168,7 +169,7 @@ impl<Backend: fal::Filesystem<fal::BasicDevice<File>>> fuse::Filesystem
         };
 
         let file_attributes = match self.inner().load_inode(inode) {
-            Ok(inode_struct) => fuse_attr(inode_struct.attrs()),
+            Ok(inode_struct) => fuse_attr(inode_struct.addr(), inode_struct.attrs()),
             Err(err) => {
                 reply.error(err.errno());
                 return;
@@ -208,7 +209,7 @@ impl<Backend: fal::Filesystem<fal::BasicDevice<File>>> fuse::Filesystem
 
         reply.entry(
             &validity_timeout,
-            &fuse_attr(inode_struct.attrs()),
+            &fuse_attr(inode_struct.addr(), inode_struct.attrs()),
             inode_struct.generation_number().unwrap_or(0),
         ); // TODO: generation_number?
     }
@@ -251,7 +252,7 @@ impl<Backend: fal::Filesystem<fal::BasicDevice<File>>> fuse::Filesystem
             Ok(Some(entry)) => {
                 reply.add(
                     fuse_inode_from_fs_inode(entry.inode, self.inner().root_inode()),
-                    entry.offset as i64 + 1,
+                    entry.offset as i64,
                     fuse_filetype(entry.filetype),
                     OsStr::from_bytes(&entry.name),
                 );
@@ -349,7 +350,7 @@ impl<Backend: fal::Filesystem<fal::BasicDevice<File>>> fuse::Filesystem
             inode.set_uid(gid);
         }
         self.inner().store_inode(&inode).unwrap();
-        reply.attr(&Timespec::new(0, 0), &fuse_attr(inode.attrs()));
+        reply.attr(&Timespec::new(0, 0), &fuse_attr(inode.addr(), inode.attrs()));
     }
     fn read(
         &mut self,
@@ -419,7 +420,7 @@ impl<Backend: fal::Filesystem<fal::BasicDevice<File>>> fuse::Filesystem
 
         let inode_struct = self.inner().fh_inode(fh).unwrap();
 
-        assert_eq!(inode.into(), inode_struct.attrs().inode.into());
+        assert_eq!(inode.into(), inode_struct.addr().into());
 
         let bytes_written = handle_fal_error!(self.inner().write(fh, offset, buffer), reply);
         reply.written(bytes_written as u32);
