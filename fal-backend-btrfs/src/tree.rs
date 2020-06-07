@@ -305,6 +305,12 @@ impl<'a> ValueRef<'a> {
     pub fn is_dir_index(self) -> bool {
         self.as_dir_index().is_some()
     }
+    pub fn as_xattr_item(self) -> Option<&'a DirItem> {
+        match self {
+            Self::XattrItem(item) => Some(item),
+            _ => None,
+        }
+    }
     pub fn as_chunk_item(&'a self) -> Option<&'a ChunkItem> {
         match self {
             &Self::Chunk(ref item) => Some(item.borrow()),

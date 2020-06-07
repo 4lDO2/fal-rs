@@ -10,7 +10,7 @@ use crate::{
     items::{DirItem, Filetype, InodeItem},
     oid,
     superblock::Superblock,
-    tree::{Path, OwnedOrBorrowedTree, PairsIterState, Tree, TreeOwned},
+    tree::{Path, OwnedOrBorrowedTree, PairsIterState, Tree, TreeOwned, ValueRef},
     u64_le, DiskKey, DiskKeyType, Timespec,
 };
 
@@ -67,7 +67,7 @@ pub enum Handle {
         subvolid: u64,
         offset: u64,
         inode: Inode,
-        state: PairsIterState<'static>,
+        state: Option<PairsIterState<'static>>,
     },
 }
 
@@ -375,6 +375,9 @@ impl<D: fal::Device> Filesystem<D> {
             node_size: self.superblock.node_size.get(),
         }, (oid, subvolid)))
     }
+    pub fn translation_rev(&self, fal_address: u64) -> Option<(u64, u64)> {
+        self.inodes_translation.read().get(&fal_address).copied()
+    }
     pub fn translation_for(&self, oid: u64, subvolid: u64) -> u64 {
         let mut translation_write_guard = self.inodes_translation_rev.write();
 
@@ -451,7 +454,7 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
             oid: U64::new(oid),
             ty: DiskKeyType::DirIndex as u8,
             offset: U64::new(0), // doesn't matter since we're doing partial comparisons
-        }).expect("todo: handle error").to_static(); // TODO: Get rid of extra reallocation
+        }).map(PairsIterState::to_static); // TODO: Get rid of extra reallocation
 
         Ok(self.insert_handle(Handle::Directory {
             fal_address,
@@ -475,7 +478,7 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
             _ => return Err(fal::Error::BadFd),
         };
 
-        let (key, value) = match state.iter(&self.device, &self.superblock, &self.chunk_map).take_while(|(_, v)| v.as_ref().is_dir_index()).nth(offset as usize) {
+        let (key, value) = match state.iter_mut().flat_map(|state| state.iter(&self.device, &self.superblock, &self.chunk_map)).take_while(|(_, v)| v.as_ref().is_dir_index()).nth(offset as usize) {
             Some(kv) => kv,
             None => return Ok(None),
         };
@@ -584,10 +587,54 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         todo!()
     }
     fn get_xattr(&mut self, inode: &Self::InodeStruct, name: &[u8]) -> fal::Result<Vec<u8>> {
-        todo!()
+        let (oid, subvolid) = self.translation_rev(inode.fal_address).ok_or(fal::Error::NoEntity)?;
+        let subvolume_lock = self.subvolume(subvolid)?.ok_or(fal::Error::NoEntity)?;
+        let subvolume_read_guard = subvolume_lock.read();
+
+        let key = DiskKey {
+            oid: u64_le::new(inode.real_address),
+            ty: DiskKeyType::XattrItem as u8,
+            offset: u64_le::new(name_hash(name).into()),
+        };
+        let mut path = vec!((OwnedOrBorrowedTree::Borrowed(subvolume_read_guard.as_ref()), 0));
+        let value = Tree::get_with_path(&mut path, &self.device, &self.superblock, &self.chunk_map, &key).ok_or(fal::Error::NoEntity)?;
+        let xattr_item = value.as_xattr_item().ok_or(fal::Error::NoEntity)?;
+
+        // TODO: Support multiple xattrs in the same item (requires a special Value with an
+        // iterator over the DirItems). There WILL be collisions, especially with CRC32C.
+
+        let null_key = DiskKey {
+            oid: u64_le::new(0),
+            ty: DiskKeyType::Unknown as u8,
+            offset: u64_le::new(0),
+        };
+
+        Ok(if xattr_item.location == null_key {
+            // inline xattr data
+            xattr_item.data().to_vec()
+        } else {
+            todo!("xattrs in extents");
+        })
     }
     fn list_xattrs(&mut self, inode: &Self::InodeStruct) -> fal::Result<Vec<Vec<u8>>> {
-        todo!()
+        let (oid, subvolid) = self.translation_rev(inode.fal_address).ok_or(fal::Error::NoEntity)?;
+        let subvolume_lock = self.subvolume(subvolid)?.ok_or(fal::Error::NoEntity)?;
+        let subvolume_read_guard = subvolume_lock.read();
+
+        let partial_key = DiskKey {
+            oid: u64_le::new(inode.real_address),
+            ty: DiskKeyType::XattrItem as u8,
+            offset: u64_le::new(0),
+        };
+
+        Ok(match Tree::similar_pairs(subvolume_read_guard.as_ref(), &self.device, &self.superblock, &self.chunk_map, &partial_key) {
+            Some(mut p) => p.iter(&self.device, &self.superblock, &self.chunk_map).map_while(|(_, v)| if let ValueRef::XattrItem(xattr_item) = v.as_ref() {
+                Some(xattr_item.name().to_vec())
+            } else {
+                None
+            }).collect(),
+            None => Vec::new(),
+        })
     }
 }
 #[derive(Debug, Clone)]
