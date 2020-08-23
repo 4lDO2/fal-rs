@@ -6,10 +6,15 @@ edition = "2018"
 license = "MIT OR Apache-2.0"
 
 [features]
-default = ["std"]
+default = ["std", "libc"]
 std = ["libc/std", "uuid/std", "core-error/std"]
+nightly = []
+gats = ["nightly"]
 
 [dependencies]
-libc = { version = "0.2", default-features = false }
-core-error = { version = "0.0.1-rc3", default-features = false }
+libc = { version = "0.2", default-features = false, optional = true }
+core-error = { version = "0.0.1-rc4", default-features = false }
 uuid = { version = "0.8", default-features = false }
+
+[dev-dependencies]
+libc = "0.2"
