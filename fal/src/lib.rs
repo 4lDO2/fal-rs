@@ -1,6 +1,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(feature = "nightly", feature(min_const_generics))]
 
+#[cfg(feature = "libc")]
 pub extern crate libc;
 
 extern crate alloc;
@@ -10,8 +11,7 @@ use alloc::{boxed::Box, vec::Vec};
 use core::borrow::{Borrow, BorrowMut};
 use core::convert::TryFrom;
 use core::future::Future;
-use core::marker::PhantomData;
-use core::{mem, slice, ops};
+use core::{mem, ops};
 
 pub use uuid::Uuid;
 
@@ -183,7 +183,7 @@ impl<E: IoError> From<E> for DeviceError {
 #[derive(Clone, Copy)]
 pub struct IoSlice<'a> {
     #[cfg(all(unix, feature = "libc"))]
-    inner: (libc::iovec, PhantomData<&'a [u8]>),
+    inner: (libc::iovec, core::marker::PhantomData<&'a [u8]>),
 
     #[cfg(not(all(unix, feature = "libc")))]
     inner: &'a [u8],
@@ -198,7 +198,7 @@ impl<'a> IoSlice<'a> {
                     iov_base: slice.as_ptr() as *mut libc::c_void,
                     iov_len: slice.len(),
                 },
-                PhantomData,
+                core::marker::PhantomData,
             ),
         };
 
@@ -208,7 +208,7 @@ impl<'a> IoSlice<'a> {
 
     pub fn as_slice(&self) -> &'a [u8] {
         #[cfg(all(unix, feature = "libc"))]
-        return unsafe { slice::from_raw_parts(self.inner.0.iov_base as *const u8, self.inner.0.iov_len) };
+        return unsafe { core::slice::from_raw_parts(self.inner.0.iov_base as *const u8, self.inner.0.iov_len) };
 
         #[cfg(not(all(unix, feature = "libc")))]
         return self.inner;
@@ -217,7 +217,7 @@ impl<'a> IoSlice<'a> {
     #[cfg(all(unix, feature = "libc"))]
     pub unsafe fn from_raw_iovec(slice: libc::iovec) -> Self {
         Self {
-            inner: (slice, PhantomData),
+            inner: (slice, core::marker::PhantomData),
         }
     }
     #[cfg(all(unix, feature = "libc"))]
@@ -356,7 +356,7 @@ impl<'a> From<std::io::IoSlice<'a>> for IoSlice<'a> {
                     iov_base: slice.as_ptr() as *mut libc::c_void,
                     iov_len: slice.len(),
                 },
-                PhantomData,
+                core::marker::PhantomData,
             ),
             
         }
@@ -372,11 +372,11 @@ impl<'a> From<std::io::IoSliceMut<'a>> for IoSlice<'a> {
                     iov_base: slice.as_mut_ptr() as *mut libc::c_void,
                     iov_len: slice.len(),
                 },
-                PhantomData,
+                core::marker::PhantomData,
             ),
 
             #[cfg(not(all(unix, feature = "libc")))]
-            inner: unsafe { slice::from_raw_parts_mut(slice.as_mut_ptr(), slice.len()) }
+            inner: unsafe { core::slice::from_raw_parts_mut(slice.as_mut_ptr(), slice.len()) }
         }
     }
 }
@@ -400,7 +400,7 @@ impl<'a> From<IoSlice<'a>> for libc::iovec {
 #[repr(transparent)]
 pub struct IoSliceMut<'a> {
     #[cfg(all(unix, feature = "libc"))]
-    inner: (libc::iovec, PhantomData<&'a mut [u8]>),
+    inner: (libc::iovec, core::marker::PhantomData<&'a mut [u8]>),
 
     #[cfg(not(all(unix, feature = "libc")))]
     inner: &'a mut [u8],
@@ -414,7 +414,7 @@ impl<'a> IoSliceMut<'a> {
                     iov_base: slice.as_mut_ptr() as *mut libc::c_void,
                     iov_len: slice.len(),
                 },
-                PhantomData,
+                core::marker::PhantomData,
             ),
         };
 
@@ -422,16 +422,16 @@ impl<'a> IoSliceMut<'a> {
         return Self { inner: slice };
     }
 
-    pub fn as_slice(&self) -> &'a [u8] {
+    pub fn as_slice(&self) -> &[u8] {
         #[cfg(all(unix, feature = "libc"))]
-        return unsafe { slice::from_raw_parts(self.inner.0.iov_base as *const u8, self.inner.0.iov_len) };
+        return unsafe { core::slice::from_raw_parts(self.inner.0.iov_base as *const u8, self.inner.0.iov_len) };
 
         #[cfg(not(all(unix, feature = "libc")))]
-        return self.inner;
+        return &*self.inner;
     }
     pub fn as_slice_mut<'b>(&'b mut self) -> &'b mut [u8] {
         #[cfg(all(unix, feature = "libc"))]
-        return unsafe { slice::from_raw_parts_mut(self.inner.0.iov_base as *mut u8, self.inner.0.iov_len) };
+        return unsafe { core::slice::from_raw_parts_mut(self.inner.0.iov_base as *mut u8, self.inner.0.iov_len) };
 
         #[cfg(not(all(unix, feature = "libc")))]
         return self.inner;
@@ -441,7 +441,7 @@ impl<'a> IoSliceMut<'a> {
     #[cfg(all(unix, feature = "libc"))]
     pub unsafe fn from_raw_iovec(slice: libc::iovec) -> Self {
         Self {
-            inner: (slice, PhantomData),
+            inner: (slice, core::marker::PhantomData),
         }
     }
     #[cfg(all(unix, feature = "libc"))]
@@ -502,8 +502,11 @@ impl<'a> IoSliceMut<'a> {
             self.inner.0.iov_base = self.inner.0.iov_base.add(count)
         }
         #[cfg(not(all(unix, feature = "libc")))]
-        {
-            self.inner = &mut self.inner[count..];
+        unsafe {
+            let new_len = self.inner.len()
+                .checked_sub(count)
+                .expect("IoSlice::advance causes length to overflow");
+            self.inner = core::slice::from_raw_parts_mut(self.inner.as_mut_ptr().add(count), new_len);
         }
     }
     #[must_use]
@@ -623,7 +626,7 @@ pub struct DiskInfo {
 ///
 /// This trait only uses shared references to self, so it's up to the implementer to use locking,
 /// atomic I/O if possible, or single-threaded interior mutability.
-pub trait DeviceRo: std::fmt::Debug {
+pub trait DeviceRo: core::fmt::Debug {
     // TODO: Add support for querying bad sectors etc (or perhaps that's done via simply checking
     // if the block can actually be written to successfully, when its data was invalid (e.g. a
     // checksum)).
@@ -1231,22 +1234,22 @@ mod tests {
 
             check_slices(ioslices, original_slices);
 
-            ioslices = IoSlice::advance(ioslices, 0).unwrap();
+            ioslices = IoSlice::advance_within(ioslices, 0).unwrap();
             check_slices(ioslices, &[b"this", b" ", b"is", b" ", b"FAL", b"-rs"]);
 
-            ioslices = IoSlice::advance(ioslices, 2).unwrap();
+            ioslices = IoSlice::advance_within(ioslices, 2).unwrap();
             check_slices(ioslices, &[b"is", b" ", b"is", b" ", b"FAL", b"-rs"]);
 
-            ioslices = IoSlice::advance(ioslices, 5).unwrap();
+            ioslices = IoSlice::advance_within(ioslices, 5).unwrap();
             check_slices(ioslices, &[b" ", b"FAL", b"-rs"]);
 
-            ioslices = IoSlice::advance(ioslices, 6).unwrap();
+            ioslices = IoSlice::advance_within(ioslices, 6).unwrap();
             check_slices(ioslices, &[b"s"]);
 
-            ioslices = IoSlice::advance(ioslices, 1).unwrap();
+            ioslices = IoSlice::advance_within(ioslices, 1).unwrap();
             check_slices(ioslices, &[]);
 
-            assert_eq!(IoSlice::advance(ioslices, 1), None);
+            assert_eq!(IoSlice::advance_within(ioslices, 1), None);
         }
 
         #[test]
@@ -1274,7 +1277,7 @@ mod tests {
                 match (&mut *buffer).write_vectored(std_ioslices) {
                     Ok(0) => break,
                     Ok(n) => {
-                        ioslices = IoSlice::advance(ioslices, n).unwrap();
+                        ioslices = IoSlice::advance_within(ioslices, n).unwrap();
                         total += n
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
