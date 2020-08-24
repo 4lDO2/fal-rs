@@ -432,6 +432,9 @@ impl fal::Device for Device {
             }
         }
     }
+    fn sync(&self) -> Result<(), DeviceError> {
+        Ok(self.file.flush()?)
+    }
     fn discard(&self, start_block: u64, count: u64) -> Result<(), fal::DeviceError> {
         #[cfg(target_os = "linux")]
         unsafe {
