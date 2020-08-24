@@ -28,67 +28,175 @@ pub struct Device {
 }
 
 #[cfg(target_os = "linux")]
-mod linux_ioctls {
+mod linux_blk {
     use std::convert::TryFrom;
     use std::io;
 
     use thiserror::Error;
 
-    // actual types based on block/ioctl.c in the Linux kernel source, and the numbers are defined
-    // in <linux/fs.h>.
-    nix::ioctl_read!(linux_blk_get_blocksize, 0x12, 112, libc::c_int); // BLKBSZGET
-    nix::ioctl_read!(linux_blk_get_sectorsize, 0x12, 104, libc::c_int); // BLKSSZGET
-    nix::ioctl_read!(linux_blk_rotational, 0x12, 126, libc::c_ushort); // BLKROTATIONAL
-    nix::ioctl_write_ptr!(linux_blk_discard_range, 0x12, 119, [u64; 2]); // BLKROTATIONAL
+    pub type Result<T = (), E = IoctlError> = ::core::result::Result<T, E>;
 
-    /// Get the block size of a block device.
-    ///
-    /// # Safety
-    /// `fd` has to point to a valid file descriptor, representing a real block device.
-    pub unsafe fn get_blocksize(fd: libc::c_int) -> Result<u32, IoctlError> {
+    // actual types based on `block/ioctl.c` and `block/blk-zoned.c` in the Linux kernel source,
+    // and the numbers are defined in `include/linux/fs.h`.
+
+    mod raw {
+        // NOTE: The term "sector" here __always__ refers to 512-byte sectors, i.e. the size
+        // divided by 512. For real sector sizes, use `get_physical_blocksize`.
+
+        nix::ioctl_write_ptr!(set_readonly, 0x12, 93, libc::c_int); // BLKROSET
+        nix::ioctl_read!(get_readonly, 0x12, 94, libc::c_int); // BLKROGET
+        nix::ioctl_none!(reread_partition_table, 0x12, 95); // BLKRRPART
+        nix::ioctl_read!(get_sector_count, 0x12, 96, libc::c_ulong); // BLKGETSIZE
+
+        // NOTE: BLKFLSBUF appears not to be called anywhere in the kernel, but is it still used?
+
+        nix::ioctl_write_int!(set_sector_read_ahead, 0x12, 98, libc::c_ulong); // BLKRASET
+        nix::ioctl_read!(get_sector_read_ahead, 0x12, 99, libc::c_long); // BLKRAGET
+        nix::ioctl_write_int!(set_sector_fs_read_ahead, 0x12, 100, libc::c_ulong);// BLKFRASET
+        nix::ioctl_read!(get_sector_fs_read_ahead, 0x12, 101, libc::c_long); // BLKFRAGET
+
+        // NOTE: BLKSECTGET appears not to be implemented whatsoever; it is only ever used in a
+        // switch statement in ioctl_compat, where it is a no-op.
+
+        nix::ioctl_read!(get_sector_per_request, 0x12, 103, libc::c_ushort); // BLKSECTGET
+        nix::ioctl_read!(get_logical_blocksize, 0x12, 104, libc::c_int); // BLKSSZGET
+
+        nix::ioctl_read!(get_soft_blocksize, 0x12, 112, libc::c_int); // BLKBSZGET
+        nix::ioctl_write_ptr!(set_soft_blocksize, 0x12, 113, libc::c_int); // BLKBSZSET
+        nix::ioctl_read!(get_size64, 0x12, 114, u64); // BLKGETSIZE64
+
+        // TODO: BLKTRACESETUP
+        // TODO: BLKTRACESTART
+        // TODO: BLKTRACESTOP
+        // TODO: BLKTRACETEARDOWN
+
+        nix::ioctl_write_ptr!(discard_sector_range, 0x12, 119, [u64; 2]); // BLKDISCARD
+        nix::ioctl_read!(get_minimum_io_size, 0x12, 120, libc::c_uint); // BLKIOMIN
+        nix::ioctl_read!(get_optimal_io_size, 0x12, 121, libc::c_uint); // BLKIOOPT
+        nix::ioctl_read!(get_alignment_offset, 0x12, 122, libc::c_int); // BLKALIGNOFF
+        nix::ioctl_read!(physical_blocksize, 0x12, 123, libc::c_uint); // BLKPBSZGET
+
+        // NOTE: There is no documentation on what this does, and the source code simply returns a
+        // zero.
+        nix::ioctl_read!(_discard_zeroes, 0x12, 124, libc::uint); // BLKDISCARDZEROES
+
+        nix::ioctl_write_ptr!(securely_discard_sector_range, 0x12, 125, [u64; 2]); // BLKSECDISCARD
+        nix::ioctl_read!(is_rotational, 0x12, 126, libc::c_ushort); // BLKROTATIONAL
+        nix::ioctl_write_ptr!(zeroout_sector_range, 0x12, 127, [u64; 2]); // BLKZEROOUT
+
+        // TODO: BLKREPORTZONE
+        // TODO: BLKRESETZONE
+        // TODO: BLKGETZONESZ
+        // TODO: BVKGETNRZONES
+        // TODO: BLKOPENZONE
+        // TODO: BLKCLOSEZONE
+        // TODO: BLKFINISHZONE
+    }
+
+    pub unsafe fn set_readonly(fd: libc::c_int, readonly: bool) -> Result<()> {
+        let data: libc::c_int = readonly.into();
+        raw::set_readonly(fd, &data)
+    }
+    pub unsafe fn get_readonly(fd: libc::c_int) -> Result<bool> {
+        let mut data: libc::c_int = -1; // begin with an initially invalid value
+        raw::get_readonly(&mut data)?;
+    }
+    pub unsafe fn reread_partition_table(fd: libc::c_int) -> Result<()> {
+        raw::reread_partition_table(fd)?;
+        Ok(())
+    }
+    pub unsafe fn get_sector_count(fd: libc::c_int) -> Result<u64> {
+        let mut count: libc::c_ulong = 0;
+        raw::get_sector_count(fd, count)?;
+        Ok(count)
+    }
+    pub unsafe fn set_sector_read_ahead(fd: libc::c_int, read_ahead: u64) -> Result<()> {
+        raw::set_sector_read_ahead(fd, read_ahead)?;
+        Ok(())
+    }
+    pub unsafe fn get_sector_read_ahead(fd: libc::c_int) -> Result<u64> {
+        let mut read_ahead: libc::c_long = -1;
+        raw::get_sector_read_ahead(fd, &mut read_ahead)?;
+        Ok(read_ahead.try_into()?)
+    }
+    pub unsafe fn set_sector_fs_read_ahead(fd: libc::c_int, read_ahead: u64) -> Result<()> {
+        raw::set_sector_fs_read_ahead(fd, read_ahead)?;
+        Ok(())
+    }
+    pub unsafe fn get_sector_fs_read_ahead(fd: libc::c_int) -> Result<u64> {
+        let mut read_ahead: libc::c_long = -1;
+        raw::get_sector_fs_read_ahead(fd, &mut read_ahead)?;
+        Ok(read_ahead.try_into()?)
+    }
+    pub unsafe fn get_sector_per_request(fd: libc::c_int) -> Result<u16> {
+        let mut sector_per_req: libc::c_ushort = 0;
+        raw::get_sector_per_request(fd, &mut sector_per_req)?;
+        Ok(sector_per_req.try_into()?)
+    }
+
+    pub unsafe fn get_soft_blocksize(fd: libc::c_int) -> Result<u32> {
+        let mut size: libc::c_int = -1;
+        raw::get_soft_blocksize(fd, &mut size)?;
+        Ok(u32::try_from(size)?)
+    }
+    pub unsafe fn set_soft_blocksize(fd: libc::c_int, size: u32) -> Result<()> {
+        let blocksize: libc::c_int = size.try_into()?;
+        raw::set_soft_blocksize(fd, &blocksize)?;
+        Ok(())
+    }
+    pub unsafe fn get_logical_blocksize(fd: libc::c_int) -> Result<u32> {
+        let mut size: libc::c_int = -1;
+        raw::get_logical_blocksize(fd, &mut size)?;
+        Ok(u32::try_from(size)?)
+    }
+    pub unsafe fn get_physical_blocksize(fd: libc::c_int) -> Result<u32> {
+        let mut size: libc::c_int = -1;
+        raw::get_physical_blocksize(fd, &mut size)?;
+        Ok(u32::try_from(size)?)
+    }
+    pub unsafe fn get_size_in_bytes(fd: libc::c_int) -> Result<u64> {
+        let mut size: u64 = 0;
+        raw::get_size64(fd, &mut size)?;
+        Ok(size)
+    }
+    pub unsafe fn get_minimum_io_size(fd: libc::c_int) -> Result<u32> {
+        let mut size: libc::c_uint = 0;
+        raw::get_minimum_io_size(fd, &mut size)?;
+        Ok(size.try_into()?)
+    }
+    pub unsafe fn get_optimal_io_size(fd: libc::c_int) -> Result<u32> {
+        let mut size: libc::c_uint = 0;
+        raw::get_optimal_io_size(fd, &mut size)?;
+        Ok(size.try_into()?)
+    }
+    pub unsafe fn get_alignment_offset(fd: libc::c_int) -> Result<u32> {
         let mut size: libc::c_int = 0;
-        match linux_blk_get_blocksize(fd, &mut size) {
-            Ok(_) => (),
-            Err(error) => return Err(IoctlError::IoError(error)),
-        }
-        u32::try_from(size).or(Err(IoctlError::Overflow))
+        raw::get_alignment_offset(fd, &mut size)?;
+        Ok(size.try_into()?)
     }
-    /// Get the physical sector size of a block device.
-    ///
-    /// # Safety
-    /// `fd` has to point to a valid file descriptor, representing a real block device.
-    pub unsafe fn get_sectorsize(fd: libc::c_int) -> Result<u32, IoctlError> {
-        let mut size: libc::c_int = 0;
-        match linux_blk_get_sectorsize(fd, &mut size) {
-            Ok(_) => (),
-            Err(error) => return Err(IoctlError::IoError(error)),
-        }
-        u32::try_from(size).or(Err(IoctlError::Overflow))
+    pub unsafe fn is_rotational(fd: libc::c_int) -> Result<bool> {
+        let mut value: libc::c_ushort = 2; // pick an initially invalid value
+        raw::is_rotational(fd, &mut value)?;
+        Ok(bool::try_from(value)?)
     }
 
-    /// Check whether a device is a spinning HDD or not.
-    ///
-    /// # Safety
-    /// `fd` has to point to a valid file descriptor, representing a real block device.
-    pub unsafe fn is_rotational(fd: libc::c_int) -> Result<bool, IoctlError> {
-        let mut value: libc::c_ushort = 0;
-        match linux_blk_rotational(fd, &mut value) {
-            Ok(_) => (),
-            Err(error) => return Err(IoctlError::IoError(error)),
-        }
-        Ok(value != 0)
-    }
-
-    pub unsafe fn basic_discard_range(
+    pub unsafe fn discard_sector_range(
         fd: libc::c_int,
         base: u64,
         count: u64,
+        securely: bool,
     ) -> Result<(), IoctlError> {
-        let mut array = [base, count];
-        match linux_blk_discard_range(fd, &mut array as *const [u64; 2]) {
-            Ok(_) => (),
-            Err(error) => return Err(IoctlError::IoError(error)),
+        let array: [u64; 2] = [base, count];
+        if securely {
+            raw::securely_discard_sector_range(fd, &array)?;
+        } else {
+            raw::discard_sector_range(fd, &array)?;
         }
+        Ok(())
+    }
+    pub unsafe fn zeroout_sector_range(fd: libc::c_int, base: u64, count: u64) -> Result<(), IoctlError> {
+        let array = [u64; 2] = [base, count];
+        raw::zeroout_sector_range(&array)?;
         Ok(())
     }
 
@@ -98,7 +206,7 @@ mod linux_ioctls {
         IoError(#[from] nix::Error),
 
         #[error("integer conversion error")]
-        Overflow,
+        Overflow(#[from] core::num::TryFromIntError),
     }
 }
 #[cfg(target_os = "linux")]
@@ -166,52 +274,62 @@ impl Device {
         }*/
         // FIXME: Unpark a single thread that requests this range.
     }
-    fn io<F: FnMut(&File, u64) -> io::Result<usize>>(
-        &self,
-        block: u64,
-        count: u64,
-        mut f: F,
-    ) -> Result<(), fal::DeviceError> {
-        let block_size = self.block_size()?;
-
-        // Lock the entire range so that no other threads can read possibly corrupt or out-of-date
-        // data.
-        self.acquire_lock(block, count);
-
-        let mut blocks_read = 0;
-
-        // Gradually release blocks from the locked range as more reads are finished.
-        while blocks_read < count {
-            let bytes_read = match f(&self.file, (block + count) * u64::from(block_size)) {
-                Ok(b) => b,
-                Err(err) => {
-                    self.release_lock(block, count);
-                    return Err(err.into());
-                }
-            };
-            let current_blocks_read = bytes_read as u64 / u64::from(block_size);
-            blocks_read += current_blocks_read;
-            self.release_lock(block + blocks_read, block + count);
-        }
-        Ok(())
-    }
 }
 
 impl fal::DeviceRo for Device {
-    fn read_blocks(&self, block: u64, buf: &mut [u8]) -> Result<(), fal::DeviceError> {
-        let bytes_to_read = buf.len() as u64;
-        let block_size = self.block_size()?;
+    fn read_blocking(&self, offset: u64, mut buffers: &mut [fal::IoSliceMut]) -> Result<(), fal::DeviceError> {
+        let fd = self.file.as_raw_fd();
 
-        assert_eq!(bytes_to_read % u64::from(block_size), 0);
-
-        let blocks_to_read = bytes_to_read / u64::from(block_size);
         let mut bytes_read = 0;
 
-        self.io(block, blocks_to_read, |file, offset| {
-            let result = file.read_at(&mut buf[bytes_read..], offset)?;
-            bytes_read += result;
-            Ok(result)
-        })
+        loop {
+            if buffers.is_empty() {
+                return Ok(());
+            }
+
+            let iovecs = fal::IoSliceMut::as_raw_iovecs(buffers);
+
+            // TODO: More platforms that support this.
+            #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd", target_os = "dragonflybsd"))]
+            let result = {
+                // TODO: Maybe add read_at_vectored and write_at_vectored to std?
+                let raw_result = unsafe { libc::preadv(fd, iovecs.as_ptr(), iovecs.len()) };
+
+                if raw_result == -1 {
+                    Err(fal::DeviceError::from(io::Error::last_os_error()))
+                } else {
+                    Ok(usize::try_from(result)?)
+                }
+            };
+            #[cfg(not(any(target_os = "linux", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd", target_os = "dragonflybsd")))]
+            let result = {
+                // TODO: Check for overflow.
+                let current_offset = offset + bytes_read;
+                self.file.read_at(current_offset, &mut buffers[0])
+            };
+
+            match result {
+                Ok(0) => {
+                    if buffers.is_empty() {
+                        return Ok(());
+                    } else {
+                        log::warn!("Device gave insufficient data, returning error.");
+                        return Err(fal::DeviceError::from(io::Error::new(io::ErrorKind::UnexpectedEof, "device finished read even though there were buffers left")));
+                    }
+                }
+                Err(n) => {
+                    // TODO: Check for overflow.
+                    bytes_read += n;
+                    buffers = match fal::IoSliceMut::advance_within(buffers, n) {
+                        Some(b) => b,
+                        None => {
+                            log::warn!("Device return value was higher than the bytes in the slice. Ignoring those.");
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+        }
     }
     fn disk_info(&self) -> Result<fal::DiskInfo, fal::DeviceError> {
         let metadata = self.file.metadata()?;
@@ -224,20 +342,32 @@ impl fal::DeviceRo for Device {
                 },
                 block_count: metadata.len(),
                 sector_size: unsafe {
-                    linux_ioctls::get_sectorsize(self.file.as_raw_fd() as libc::c_int)
+                    linux_blk::get_sectorsize(self.file.as_raw_fd() as libc::c_int)
                         .map(Into::into)
                         .ok()
                 },
                 is_rotational: unsafe {
-                    linux_ioctls::is_rotational(self.file.as_raw_fd() as libc::c_int).ok()
+                    linux_blk::is_rotational(self.file.as_raw_fd() as libc::c_int).ok()
+                },
+                minimal_io_align: None,
+                minimal_io_size: unsafe {
+                    linux_blk::get_minimum_io_size(self.file.as_raw_fd() as libc::c_int)
+                },
+                optimal_io_align: None,
+                optimal_io_size: unsafe {
+                    linux_blk::get_minimum_io_size(self.file.as_raw_fd() as libc::c_int)
                 },
             }
         } else if metadata.file_type().is_char_device() {
-            todo!("IIRC freebsd uses character devices over block devices")
+            todo!("IIRC FreeBSD uses character devices over block devices")
         } else if metadata.file_type().is_file() {
             fal::DiskInfo {
                 block_size: metadata.blksize() as u32, // FIXME
                 block_count: metadata.blocks(),
+                minimal_io_align: None,
+                minimal_io_size: None,
+                optimal_io_align: None,
+                optimal_io_size: None,
                 sector_size: None,
                 is_rotational: None,
             }
@@ -259,19 +389,48 @@ impl fal::DeviceRo for Device {
     }
 }
 impl fal::Device for Device {
-    fn write_blocks(&self, block: u64, mut buf: &[u8]) -> Result<(), fal::DeviceError> {
-        let bytes_to_read = buf.len() as u64;
-        let block_size = self.block_size()?;
+    fn write_blocking(&self, offset: u64, mut buffers: &mut [fal::IoSlice]) -> Result<(), fal::DeviceError> {
+        let mut bytes_written = 0;
 
-        assert_eq!(bytes_to_read % u64::from(block_size), 0);
+        loop {
+            #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd", target_os = "dragonflybsd"))]
+            let result = {
+                let raw_result = unsafe { libc::pwritev(fd, iovecs.as_ptr(), iovecs.len()) };
 
-        let blocks_to_read = bytes_to_read / u64::from(self.block_size()?);
-
-        self.io(block, blocks_to_read, |file, offset| {
-            let result = file.write_at(buf, offset)?;
-            buf = &buf[result..];
-            Ok(result)
-        })
+                if raw_result == -1 {
+                    Err(fal::DeviceError::from(io::Error::last_os_error()))
+                } else {
+                    Ok(usize::try_from(result)?)
+                }
+            };
+            #[cfg(not(any(target_os = "linux", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd", target_os = "dragonflybsd")))]
+            let result = {
+                // TODO: Check for overflow.
+                let current_offset = offset + bytes_written;
+                self.file.write_at(current_offset, &buffers[0])
+            };
+            match result {
+                Ok(0) => {
+                    if buffers.is_empty() {
+                        return Ok(());
+                    } else {
+                        log::warn!("Device didn't accept all data, returning error.");
+                        return Err(fal::DeviceError::from(io::Error::new(io::ErrorKind::UnexpectedEof, "device finished write even though there were buffers left")));
+                    }
+                }
+                Err(n) => {
+                    // TODO: Check for overflow.
+                    bytes_written += n;
+                    buffers = match fal::IoSlice::advance_within(buffers, n) {
+                        Some(b) => b,
+                        None => {
+                            log::warn!("Device return value was higher than the bytes in the slice. Ignoring those.");
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+        }
     }
     fn discard(&self, start_block: u64, count: u64) -> Result<(), fal::DeviceError> {
         #[cfg(target_os = "linux")]

@@ -245,16 +245,28 @@ impl<'a> IoSlice<'a> {
         mem::transmute(slices)
     }
 
+    pub fn advance(&mut self, count: usize) {
+        #[cfg(all(unix, feature = "libc"))]
+        unsafe {
+            self.inner.0.iov_len = self.inner.0.iov_len
+                .checked_sub(count)
+                .expect("IoSlice::advance causes length to overflow");
+            self.inner.0.iov_base = self.inner.0.iov_base.add(count)
+        }
+        #[cfg(not(all(unix, feature = "libc")))]
+        {
+            self.inner = &self.inner[count..];
+        }
+    }
     #[must_use]
-    pub fn advance<'b>(mut slices: &'b mut [Self], mut n: usize) -> Option<&'b mut [Self]> {
+    pub fn advance_within<'b>(mut slices: &'b mut [Self], mut n: usize) -> Option<&'b mut [Self]> {
         while let Some(buffer) = slices.first_mut() {
             if n == 0 { return Some(slices) };
 
             let buffer_len = buffer.len();
 
             if buffer_len > n {
-                let previous: &'a [u8] = mem::replace(buffer, IoSlice::new(&[])).as_slice();
-                *buffer = IoSlice::from(&previous[n..]);
+                buffer.advance(n);
             } else {
                 slices = &mut slices[1..];
             }
@@ -481,6 +493,38 @@ impl<'a> IoSliceMut<'a> {
     pub fn as_std_mut_ioslices_mut(slices: &'a mut [Self]) -> &'a mut [std::io::IoSliceMut<'a>] {
         unsafe { mem::transmute(slices) }
     }
+    pub fn advance(&mut self, count: usize) {
+        #[cfg(all(unix, feature = "libc"))]
+        unsafe {
+            self.inner.0.iov_len = self.inner.0.iov_len
+                .checked_sub(count)
+                .expect("IoSlice::advance causes length to overflow");
+            self.inner.0.iov_base = self.inner.0.iov_base.add(count)
+        }
+        #[cfg(not(all(unix, feature = "libc")))]
+        {
+            self.inner = &mut self.inner[count..];
+        }
+    }
+    #[must_use]
+    pub fn advance_within<'b>(mut slices: &'b mut [Self], mut n: usize) -> Option<&'b mut [Self]> {
+        while let Some(buffer) = slices.first_mut() {
+            if n == 0 { return Some(slices) };
+
+            let buffer_len = buffer.len();
+
+            if buffer_len > n {
+                buffer.advance(n);
+            } else {
+                slices = &mut slices[1..];
+            }
+            n -= core::cmp::min(buffer_len, n);
+        }
+        if n > 0 {
+            return None;
+        }
+        Some(slices)
+    }
 }
 
 impl<'a> AsRef<[u8]> for IoSliceMut<'a> {
@@ -562,10 +606,12 @@ impl IoError for WriteZeroError {
 /// Information about a physical disk.
 #[derive(Clone, Copy, Debug)]
 pub struct DiskInfo {
-    pub block_size: u32,
+    pub block_size: u64,
     pub block_count: u64,
     pub minimal_io_align: Option<u64>,
+    pub minimal_io_size: Option<u64>,
     pub optimal_io_align: Option<u64>,
+    pub optimal_io_size: Option<u64>,
     pub sector_size: Option<u64>,
     pub is_rotational: Option<bool>,
 }
@@ -678,7 +724,13 @@ pub trait Device: DeviceRo {
 
 pub trait AsyncDevice: AsyncDeviceRo {
     type WriteFutureNoGat: Future<Output = Result<usize, DeviceError>>;
-    fn write_async(&self, offset: u64, bufs: &[IoSlice]) -> Self::WriteFutureNoGat;
+    fn write_async_no_gat(&self, offset: u64, bufs: &[IoSlice]) -> Self::WriteFutureNoGat;
+
+    #[cfg(feature = "gats")]
+    type WriteFuture<'a>: Future<Output = Result<usize, DeviceError>>;
+
+    #[cfg(feature = "gats")]
+    fn write_async<'a>(&'a self, offset: u64, bufs: &mut [IoSlice]) -> Self::WriteFuture<'a>;
 }
 
 #[cfg(feature = "std")]
@@ -691,7 +743,7 @@ mod file_device {
         device: Mutex<D>,
     }
     impl<D> BasicDevice<D> {
-        const BLOCK_SIZE: u32 = 512;
+        const BLOCK_SIZE: u64 = 512;
 
         pub fn new(inner: D) -> Self {
             Self {
@@ -763,7 +815,9 @@ mod file_device {
                 block_size: Self::BLOCK_SIZE,
                 block_count: size / u64::from(Self::BLOCK_SIZE),
                 minimal_io_align: None,
+                minimal_io_size: None,
                 optimal_io_align: None,
+                optimal_io_size: None,
                 is_rotational: None,
                 sector_size: None,
             })
@@ -783,7 +837,7 @@ mod file_device {
 
                 match guard.write_vectored(IoSlice::as_std_ioslices(buffers)) {
                     Ok(0) => return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "expected device to read all bytes").into()),
-                    Ok(n) => buffers = IoSlice::advance(buffers, n).unwrap(),
+                    Ok(n) => buffers = IoSlice::advance_within(buffers, n).unwrap(),
                     Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                     Err(error) => return Err(error.into()),
                 }
