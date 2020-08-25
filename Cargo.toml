@@ -4,6 +4,7 @@ members = [
     "fal-backend-btrfs",
     "fal-backend-ext4",
     "fal-frontend-fuse",
+    "fal-frontend-fuse/libaio-sys",
     "fal-frontend-redox",
     "fal",
 

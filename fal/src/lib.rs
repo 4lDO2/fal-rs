@@ -686,10 +686,10 @@ pub trait AsyncDeviceRo: DeviceRo {
     // so long as the underlying interface supports it.
     //#[deprecated = "Use our belovèd GATs and not the runtime tyranny"]
     //#[allow(deprecated)]
-    fn read_async_no_gat(&self, offset: u64, buffers: &mut [IoSliceMut]) -> Self::ReadFutureNoGat;
+    unsafe fn read_async_no_gat(&self, offset: u64, buffers: &mut [IoSliceMut]) -> Self::ReadFutureNoGat;
 
     #[cfg(feature = "gats")]
-    fn read_async<'a>(&'a self, offset: u64, buffers: &mut [IoSliceMut]) -> Self::ReadFuture<'a>;
+    unsafe fn read_async<'a>(&'a self, offset: u64, buffers: &mut [IoSliceMut]) -> Self::ReadFuture<'a>;
 }
 
 /// A read-write device, based on blocking system calls.
@@ -727,13 +727,13 @@ pub trait Device: DeviceRo {
 
 pub trait AsyncDevice: AsyncDeviceRo {
     type WriteFutureNoGat: Future<Output = Result<usize, DeviceError>>;
-    fn write_async_no_gat(&self, offset: u64, bufs: &[IoSlice]) -> Self::WriteFutureNoGat;
+    unsafe fn write_async_no_gat(&self, offset: u64, bufs: &[IoSlice]) -> Self::WriteFutureNoGat;
 
     #[cfg(feature = "gats")]
     type WriteFuture<'a>: Future<Output = Result<usize, DeviceError>>;
 
     #[cfg(feature = "gats")]
-    fn write_async<'a>(&'a self, offset: u64, bufs: &mut [IoSlice]) -> Self::WriteFuture<'a>;
+    unsafe fn write_async<'a>(&'a self, offset: u64, bufs: &mut [IoSlice]) -> Self::WriteFuture<'a>;
 }
 
 #[cfg(feature = "std")]
