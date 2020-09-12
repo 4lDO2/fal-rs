@@ -1,6 +1,7 @@
 use std::{
     borrow::Cow,
     collections::HashMap,
+    convert::TryFrom,
     ffi::OsStr,
     io::SeekFrom,
     sync::{
@@ -43,7 +44,7 @@ pub struct Filesystem<D: fal::DeviceRo> {
 
 impl<D: fal::DeviceRo> Filesystem<D> {
     pub fn mount(device: D, general_options: fal::Options) -> Self {
-        let disk_info = device.disk_info().unwrap();
+        let disk_info = device.disk_info_blocking().unwrap();
         let container_superblock = NxSuperblock::load(&device);
 
         if container_superblock.chkpnt_desc_blkcnt & (1 << 31) != 0 {
@@ -176,19 +177,19 @@ impl<D: fal::DeviceRo> Filesystem<D> {
 }
 impl<D: fal::Device> Filesystem<D> {
     fn phys_blocks_per_block(disk_info: &fal::DiskInfo, superblock: &NxSuperblock) -> u32 {
-        superblock.block_size / disk_info.block_size
+        superblock.block_size / u32::try_from(disk_info.block_size).unwrap()
     }
     pub fn write_block(superblock: &NxSuperblock, device: &D, address: BlockAddr, block: &[u8]) {
         debug_assert_eq!(block.len(), superblock.block_size as usize);
         // FIXME
         device
-            .write_blocks(
+            .write_blocking(
                 address as u64
                     * u64::from(Self::phys_blocks_per_block(
-                        &device.disk_info().unwrap(),
+                        &device.disk_info_blocking().unwrap(),
                         superblock,
                     )),
-                &block,
+                &mut [fal::IoSlice::new(&block)],
             )
             .unwrap();
     }

@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = ["ext4", "apfs"]
+default = ["ext4", "apfs", "io_uring"]
 ext4 = ["fal-backend-ext4"]
 apfs = ["fal-backend-apfs"]
 btrfs = ["fal-backend-btrfs"]
@@ -23,10 +23,12 @@ crossbeam-queue = "0.2"
 env_logger = "0.6"
 fal = { path = "../fal", version = "0.1" }
 libc = "0.2"
+log = "0.4"
 nix = "0.17"
 fuse = "0.3"
 parking_lot = "0.10"
 thiserror = "1"
+threadpool = "1.0"
 time = "0.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]

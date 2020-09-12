@@ -396,7 +396,7 @@ impl InodeRaw {
 
         Timespec {
             sec: i64::from(base) | i64::from(epoch_ext) << 32,
-            nsec: (extra >> 2) as i32,
+            nsec: (extra >> 2),
         }
     }
 

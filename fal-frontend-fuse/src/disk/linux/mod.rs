@@ -1,5 +1,5 @@
-mod ioctl;
 #[cfg(feature = "aio")]
-mod aio;
+pub mod aio;
 #[cfg(feature = "io_uring")]
-mod io_uring;
+pub mod io_uring;
+pub mod ioctl;

@@ -1,4 +1,5 @@
 use std::{
+    convert::TryFrom,
     io::{self, prelude::*, SeekFrom},
     sync::{atomic, Mutex, MutexGuard},
 };
@@ -43,13 +44,13 @@ impl<T> Disk<T> {
         &self.inner
     }
     fn phys_blocks_per_block(&self, filesystem: &Filesystem<T>) -> u32 {
-        filesystem.superblock.block_size() / self.info.block_size
+        filesystem.superblock.block_size() / u32::try_from(self.info.block_size).unwrap()
     }
 }
 impl<T: fal::DeviceRo> Disk<T> {
     /// Wrap a `Read` + `Write` + `Seek` device for optimal caching and journaling.
     pub fn new(inner: T) -> Result<Self, fal::DeviceError> {
-        let info = inner.disk_info()?;
+        let info = inner.disk_info_blocking()?;
 
         Ok(Self { inner, info })
     }
@@ -79,9 +80,9 @@ impl<T: fal::DeviceRo> Disk<T> {
         block_address: u64,
         buffer: &mut [u8],
     ) -> Result<(), fal::DeviceError> {
-        self.inner.read_blocks(
+        self.inner.read_blocking(
             block_address * u64::from(self.phys_blocks_per_block(filesystem)),
-            buffer,
+            &mut [fal::IoSliceMut::new(buffer)],
         )?;
         Ok(())
     }
@@ -105,9 +106,9 @@ impl<T: fal::Device> Disk<T> {
             .kbs_written
             .fetch_add(buffer.len() as u64, atomic::Ordering::Acquire);
 
-        self.inner.write_blocks(
+        self.inner.write_blocking(
             block_address * u64::from(filesystem.superblock.block_size()),
-            buffer,
+            &mut [fal::IoSlice::new(buffer)],
         )?;
         Ok(())
     }

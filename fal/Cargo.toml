@@ -7,11 +7,13 @@ license = "MIT OR Apache-2.0"
 
 [features]
 default = ["std", "libc"]
-std = ["libc/std", "uuid/std", "core-error/std"]
+std = ["libc/std", "uuid/std", "core-error/std", "ioslice/std"]
 nightly = []
 gats = ["nightly"]
+libc_compat = ["libc", "ioslice/libc"]
 
 [dependencies]
+ioslice = { version = "0.1", default-features = false }
 libc = { version = "0.2", default-features = false, optional = true }
 core-error = { version = "0.0.1-rc4", default-features = false }
 uuid = { version = "0.8", default-features = false }

@@ -97,7 +97,7 @@ impl From<JDrecType> for fal::FileType {
 fn nanosecs_to_timespec(ns: u64) -> Timespec {
     let secs: u64 = ns / 1_000_000_000;
     let nsec: u32 = (ns % 1_000_000_000) as u32;
-    Timespec::new(secs as i64, nsec as i32)
+    Timespec::new(secs as i64, nsec)
 }
 
 #[derive(Debug)]

@@ -1,4 +1,4 @@
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 use std::io;
 
 use thiserror::Error;
@@ -19,9 +19,9 @@ mod raw {
 
     // NOTE: BLKFLSBUF appears not to be called anywhere in the kernel, but is it still used?
 
-    nix::ioctl_write_int!(set_sector_read_ahead, 0x12, 98, libc::c_ulong); // BLKRASET
+    nix::ioctl_write_int!(set_sector_read_ahead, 0x12, 98); // BLKRASET
     nix::ioctl_read!(get_sector_read_ahead, 0x12, 99, libc::c_long); // BLKRAGET
-    nix::ioctl_write_int!(set_sector_fs_read_ahead, 0x12, 100, libc::c_ulong);// BLKFRASET
+    nix::ioctl_write_int!(set_sector_fs_read_ahead, 0x12, 100); // BLKFRASET
     nix::ioctl_read!(get_sector_fs_read_ahead, 0x12, 101, libc::c_long); // BLKFRAGET
 
     // NOTE: BLKSECTGET appears not to be implemented whatsoever; it is only ever used in a
@@ -43,11 +43,11 @@ mod raw {
     nix::ioctl_read!(get_minimum_io_size, 0x12, 120, libc::c_uint); // BLKIOMIN
     nix::ioctl_read!(get_optimal_io_size, 0x12, 121, libc::c_uint); // BLKIOOPT
     nix::ioctl_read!(get_alignment_offset, 0x12, 122, libc::c_int); // BLKALIGNOFF
-    nix::ioctl_read!(physical_blocksize, 0x12, 123, libc::c_uint); // BLKPBSZGET
+    nix::ioctl_read!(get_physical_blocksize, 0x12, 123, libc::c_uint); // BLKPBSZGET
 
     // NOTE: There is no documentation on what this does, and the source code simply returns a
     // zero.
-    nix::ioctl_read!(_discard_zeroes, 0x12, 124, libc::uint); // BLKDISCARDZEROES
+    nix::ioctl_read!(_discard_zeroes, 0x12, 124, libc::c_uint); // BLKDISCARDZEROES
 
     nix::ioctl_write_ptr!(securely_discard_sector_range, 0x12, 125, [u64; 2]); // BLKSECDISCARD
     nix::ioctl_read!(is_rotational, 0x12, 126, libc::c_ushort); // BLKROTATIONAL
@@ -64,11 +64,20 @@ mod raw {
 
 pub unsafe fn set_readonly(fd: libc::c_int, readonly: bool) -> Result<()> {
     let data: libc::c_int = readonly.into();
-    raw::set_readonly(fd, &data)
+    raw::set_readonly(fd, &data)?;
+    Ok(())
 }
 pub unsafe fn get_readonly(fd: libc::c_int) -> Result<bool> {
     let mut data: libc::c_int = -1; // begin with an initially invalid value
-    raw::get_readonly(&mut data)?;
+    raw::get_readonly(fd, &mut data)?;
+
+    match data {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(IoctlError::InvalidResponse(
+            "expected only 0 or 1 as result of BLKROGET",
+        )),
+    }
 }
 pub unsafe fn reread_partition_table(fd: libc::c_int) -> Result<()> {
     raw::reread_partition_table(fd)?;
@@ -76,7 +85,7 @@ pub unsafe fn reread_partition_table(fd: libc::c_int) -> Result<()> {
 }
 pub unsafe fn get_sector_count(fd: libc::c_int) -> Result<u64> {
     let mut count: libc::c_ulong = 0;
-    raw::get_sector_count(fd, count)?;
+    raw::get_sector_count(fd, &mut count)?;
     Ok(count)
 }
 pub unsafe fn set_sector_read_ahead(fd: libc::c_int, read_ahead: u64) -> Result<()> {
@@ -119,7 +128,7 @@ pub unsafe fn get_logical_blocksize(fd: libc::c_int) -> Result<u32> {
     Ok(u32::try_from(size)?)
 }
 pub unsafe fn get_physical_blocksize(fd: libc::c_int) -> Result<u32> {
-    let mut size: libc::c_int = -1;
+    let mut size: libc::c_uint = 0;
     raw::get_physical_blocksize(fd, &mut size)?;
     Ok(u32::try_from(size)?)
 }
@@ -146,7 +155,14 @@ pub unsafe fn get_alignment_offset(fd: libc::c_int) -> Result<u32> {
 pub unsafe fn is_rotational(fd: libc::c_int) -> Result<bool> {
     let mut value: libc::c_ushort = 2; // pick an initially invalid value
     raw::is_rotational(fd, &mut value)?;
-    Ok(bool::try_from(value)?)
+
+    match value {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(IoctlError::InvalidResponse(
+            "expected 0 or 1 as return value of BLKROTATIONAL",
+        )),
+    }
 }
 
 pub unsafe fn discard_sector_range(
@@ -163,9 +179,13 @@ pub unsafe fn discard_sector_range(
     }
     Ok(())
 }
-pub unsafe fn zeroout_sector_range(fd: libc::c_int, base: u64, count: u64) -> Result<(), IoctlError> {
-    let array = [u64; 2] = [base, count];
-    raw::zeroout_sector_range(&array)?;
+pub unsafe fn zeroout_sector_range(
+    fd: libc::c_int,
+    base: u64,
+    count: u64,
+) -> Result<(), IoctlError> {
+    let array: [u64; 2] = [base, count];
+    raw::zeroout_sector_range(fd, &array)?;
     Ok(())
 }
 
@@ -176,4 +196,18 @@ pub enum IoctlError {
 
     #[error("integer conversion error")]
     Overflow(#[from] core::num::TryFromIntError),
+
+    #[error("invalid ioctl return value")]
+    InvalidResponse(&'static str),
+}
+
+impl From<std::convert::Infallible> for IoctlError {
+    fn from(infallible: std::convert::Infallible) -> Self {
+        unreachable!()
+    }
+}
+impl From<IoctlError> for fal::DeviceError {
+    fn from(ioctl_error: IoctlError) -> fal::DeviceError {
+        fal::DeviceError::io_error(ioctl_error)
+    }
 }

@@ -77,7 +77,7 @@ fn fuse_filetype(ty: fal::FileType) -> fuse::FileType {
 }
 
 fn convert_time(time: fal::Timespec) -> time::Timespec {
-    time::Timespec::new(time.sec, time.nsec)
+    time::Timespec::new(time.sec, time.nsec.try_into().unwrap())
 }
 
 fn fuse_attr<InodeAddr: Into<u64>>(addr: InodeAddr, attrs: fal::Attributes) -> fuse::FileAttr {
@@ -133,15 +133,21 @@ fn fuse_inode_to_fs_inode<InodeAddr: From<u32> + TryFrom<u64> + Eq>(
     fuse_inode: u64,
     root: InodeAddr,
 ) -> Option<InodeAddr> {
-    InodeAddr::try_from(fuse_inode).ok().map(|fuse_inode| {
-        if fuse_inode == 1.into() {
-            root.try_into().ok()
-        } else {
-            Some(fuse_inode)
-        }
-    }).flatten()
+    InodeAddr::try_from(fuse_inode)
+        .ok()
+        .map(|fuse_inode| {
+            if fuse_inode == 1.into() {
+                root.try_into().ok()
+            } else {
+                Some(fuse_inode)
+            }
+        })
+        .flatten()
 }
-fn fuse_inode_from_fs_inode<InodeAddr: Into<u64> + Copy + PartialEq>(fs_inode: InodeAddr, root: InodeAddr) -> u64 {
+fn fuse_inode_from_fs_inode<InodeAddr: Into<u64> + Copy + PartialEq>(
+    fs_inode: InodeAddr,
+    root: InodeAddr,
+) -> u64 {
     if fs_inode == root {
         1
     } else {
@@ -238,15 +244,19 @@ impl<Backend: fal::Filesystem<fal::BasicDevice<File>>> fuse::Filesystem
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
-        let inode: Backend::InodeAddr = match fuse_inode_to_fs_inode(fuse_inode, self.inner().root_inode()) {
-            Some(inode) => inode,
-            None => {
-                reply.error(libc::EOVERFLOW);
-                return;
-            }
-        };
+        let inode: Backend::InodeAddr =
+            match fuse_inode_to_fs_inode(fuse_inode, self.inner().root_inode()) {
+                Some(inode) => inode,
+                None => {
+                    reply.error(libc::EOVERFLOW);
+                    return;
+                }
+            };
 
-        assert_eq!(inode.into(), self.inner().fh_inode(fh).unwrap().addr().into());
+        assert_eq!(
+            inode.into(),
+            self.inner().fh_inode(fh).unwrap().addr().into()
+        );
 
         match self.inner().read_directory(fh, offset) {
             Ok(Some(entry)) => {
@@ -332,13 +342,14 @@ impl<Backend: fal::Filesystem<fal::BasicDevice<File>>> fuse::Filesystem
         _flags: Option<u32>,
         reply: ReplyAttr,
     ) {
-        let inode: Backend::InodeAddr = match fuse_inode_to_fs_inode(fuse_inode, self.inner().root_inode()) {
-            Some(inode) => inode,
-            None => {
-                reply.error(libc::EOVERFLOW);
-                return;
-            }
-        };
+        let inode: Backend::InodeAddr =
+            match fuse_inode_to_fs_inode(fuse_inode, self.inner().root_inode()) {
+                Some(inode) => inode,
+                None => {
+                    reply.error(libc::EOVERFLOW);
+                    return;
+                }
+            };
         let mut inode: Backend::InodeStruct = self.inner().load_inode(inode).unwrap();
         if let Some(mode) = mode {
             inode.set_perm((mode & 0o777) as u16);
@@ -350,7 +361,10 @@ impl<Backend: fal::Filesystem<fal::BasicDevice<File>>> fuse::Filesystem
             inode.set_uid(gid);
         }
         self.inner().store_inode(&inode).unwrap();
-        reply.attr(&Timespec::new(0, 0), &fuse_attr(inode.addr(), inode.attrs()));
+        reply.attr(
+            &Timespec::new(0, 0),
+            &fuse_attr(inode.addr(), inode.attrs()),
+        );
     }
     fn read(
         &mut self,
@@ -361,13 +375,14 @@ impl<Backend: fal::Filesystem<fal::BasicDevice<File>>> fuse::Filesystem
         size: u32,
         reply: ReplyData,
     ) {
-        let inode: Backend::InodeAddr = match fuse_inode_to_fs_inode(fuse_inode, self.inner().root_inode()) {
-            Some(inode) => inode,
-            None => {
-                reply.error(libc::EOVERFLOW);
-                return;
-            }
-        };
+        let inode: Backend::InodeAddr =
+            match fuse_inode_to_fs_inode(fuse_inode, self.inner().root_inode()) {
+                Some(inode) => inode,
+                None => {
+                    reply.error(libc::EOVERFLOW);
+                    return;
+                }
+            };
         let offset = match u64::try_from(offset) {
             Ok(offset) => offset,
             Err(_) => {
@@ -402,13 +417,14 @@ impl<Backend: fal::Filesystem<fal::BasicDevice<File>>> fuse::Filesystem
         _flags: u32,
         reply: ReplyWrite,
     ) {
-        let inode: Backend::InodeAddr = match fuse_inode_to_fs_inode(fuse_inode, self.inner().root_inode()) {
-            Some(inode) => inode,
-            None => {
-                reply.error(libc::EOVERFLOW);
-                return;
-            }
-        };
+        let inode: Backend::InodeAddr =
+            match fuse_inode_to_fs_inode(fuse_inode, self.inner().root_inode()) {
+                Some(inode) => inode,
+                None => {
+                    reply.error(libc::EOVERFLOW);
+                    return;
+                }
+            };
         let offset = match u64::try_from(offset) {
             Ok(offset) => offset,
             Err(_) => {
