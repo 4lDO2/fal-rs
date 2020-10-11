@@ -16,6 +16,7 @@ default = ["crc32c", "xxhash", "sha256", "blake2b"]
 [dependencies]
 fal = { path = "../fal", version = "0.1" }
 
+arrayvec = "0.5"
 bitflags = "1.2"
 byteorder = "1.3"
 num-derive = "0.3"

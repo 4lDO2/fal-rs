@@ -2,6 +2,7 @@ use core::{borrow::Borrow, cmp::Ordering, fmt, mem, pin::Pin, slice};
 use alloc::sync::Arc;
 use alloc::borrow::Cow;
 
+use thiserror::Error;
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
 use crate::{
@@ -37,6 +38,18 @@ impl<'a> OwnedOrBorrowedTree<'a> {
             Self::Borrowed(reference) => OwnedOrBorrowedTree::Owned(reference.to_tree_owned()),
         }
     }
+}
+
+#[derive(Debug, Error)]
+pub enum LoadError {
+    #[error("the node checksum is invalid")]
+    InvalidChecksum,
+
+    #[error("the allocator was unable to allocate necessary memory for storing the node: {0}")]
+    AllocError(#[from] fal::ioslice::AllocationError),
+
+    #[error("device i/o error: {0}")]
+    DeviceError(fal::DeviceError),
 }
 
 pub type Path<'a> = Vec<(OwnedOrBorrowedTree<'a>, usize)>;
@@ -595,8 +608,12 @@ impl<'a> Tree<'a> {
         superblock: &Superblock,
         chunk_map: &ChunkMap,
         addr: u64,
-    ) -> Result<TreeOwned, InvalidChecksum> {
-        let block = Arc::from(filesystem::read_node(device, superblock, chunk_map, addr));
+    ) -> Result<TreeOwned, LoadError> {
+        // FIXME
+        let mut buffer = fal::IoBox::try_alloc_uninit(superblock.node_size.get() as usize)?;
+        filesystem::read_node(device, superblock, chunk_map, addr, &mut buffer)?;
+
+        let block = Arc::from(unsafe { buffer.assume_init() });
         let header = Header::parse(superblock.checksum_ty(), &block)?; // validate checksum
         if header.logical_addr.get() != addr {
             panic!("Mismatch: {} != {}", header.logical_addr.get(), addr);

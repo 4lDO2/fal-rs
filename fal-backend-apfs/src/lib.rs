@@ -223,7 +223,7 @@ pub fn read_block_to<D: fal::DeviceRo>(
 
     // FIXME
     device
-        .read_blocking(
+        .read_blocking::<fal::ioslice::Initialized>(
             address as u64 * u64::from(superblock.block_size),
             &mut [fal::IoSliceMut::new(block)],
         )

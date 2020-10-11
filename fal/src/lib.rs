@@ -13,7 +13,7 @@ use core::convert::TryFrom;
 use core::future::Future;
 use core::{mem, ops};
 
-pub use ioslice::{IoSlice, IoSliceMut};
+pub use ioslice::{IoBox, IoSlice, IoSliceMut};
 pub use uuid::Uuid;
 
 /// A type that represents time as the number of seconds since January 1st, 1970 (UNIX epoch).
@@ -183,7 +183,7 @@ impl core_error::Error for DeviceError {}
 ///
 /// This trait only uses shared references to self, so it's up to the implementer to use locking,
 /// atomic I/O if possible, or single-threaded interior mutability.
-pub trait DeviceRo: core::fmt::Debug {
+pub unsafe trait DeviceRo: core::fmt::Debug {
     // TODO: Add support for querying bad sectors etc (or perhaps that's done via simply checking
     // if the block can actually be written to successfully, when its data was invalid (e.g. a
     // checksum)).
@@ -202,7 +202,7 @@ pub trait DeviceRo: core::fmt::Debug {
     /// as well as a regular slice without extra indirections.
     ///
     /// This method is blocking, and must only complete after 
-    fn read_blocking(&self, offset: u64, buffers: &mut [IoSliceMut]) -> Result<(), DeviceError>;
+    fn read_blocking<I: ioslice::Initialization>(&self, offset: u64, buffers: &mut [IoSliceMut<I>]) -> Result<(), DeviceError>;
 
     /// Retrieve miscellaneous information about the disk, such as block size, preferred alignment,
     /// number of blocks, etc. This method is blocking and may not return immediately.
@@ -232,7 +232,7 @@ pub trait DeviceRo: core::fmt::Debug {
 /// Solaris's IOCP; as well as the more-or-less-deprecated Linux AIO (not POSIX AIO) interface.
 /// This is in contrast with readiness-based async I/O in APIs such as epoll, kqueue, wepoll, Redox
 /// event queues etc., which are more suited for networking I/O rather than disk I/O.
-pub trait AsyncDeviceRo: DeviceRo {
+pub unsafe trait AsyncDeviceRo: DeviceRo {
     //#[deprecated = "Use our belovèd GATs and not the runtime tyranny"]
     type ReadFutureNoGat: Future<Output = Result<usize, DeviceError>>;
     #[cfg(feature = "gats")]
@@ -243,10 +243,10 @@ pub trait AsyncDeviceRo: DeviceRo {
     // so long as the underlying interface supports it.
     //#[deprecated = "Use our belovèd GATs and not the runtime tyranny"]
     //#[allow(deprecated)]
-    unsafe fn read_async_no_gat(&self, offset: u64, buffers: &mut [IoSliceMut]) -> Self::ReadFutureNoGat;
+    unsafe fn read_async_no_gat<I: ioslice::Initialization>(&self, offset: u64, buffers: &mut [IoSliceMut<I>]) -> Self::ReadFutureNoGat;
 
     #[cfg(feature = "gats")]
-    unsafe fn read_async<'a>(&'a self, offset: u64, buffers: &mut [IoSliceMut]) -> Self::ReadFuture<'a>;
+    unsafe fn read_async<'a, I: ioslice::Initialization>(&'a self, offset: u64, buffers: &mut [IoSliceMut<I>]) -> Self::ReadFuture<'a>;
 }
 
 /// A read-write device, based on blocking system calls.
@@ -275,9 +275,10 @@ pub trait Device: DeviceRo {
     /// anymore. Only available on some command sets and hardware, and OSes. By default this is a
     /// no-op.
     // TODO: Add additional options to trimming. The Linux ioctl interface (or should sysfs be
-    // used?) has four trimming modes, where some zero the bytes as well, for instance.
+    // used?) has four trimming modes, where some zero the bytes in addition to simply TRIMming,
+    // for instance.
     #[allow(unused_variables)]
-    fn discard(&self, offset: u64, bytes: u64) -> Result<(), DeviceError> {
+    fn discard_blocking(&self, offset: u64, bytes: u64) -> Result<(), DeviceError> {
         Ok(())
     }
 }
@@ -337,8 +338,8 @@ mod file_device {
         }
     }
 
-    impl<D: Read + Seek> DeviceRo for BasicDevice<D> {
-        fn read_blocking(&self, offset: u64, buffers: &mut [IoSliceMut]) -> Result<(), DeviceError> {
+    unsafe impl<D: Read + Seek> DeviceRo for BasicDevice<D> {
+        fn read_blocking<I: crate::ioslice::Initialization>(&self, offset: u64, buffers: &mut [IoSliceMut<I>]) -> Result<(), DeviceError> {
             let mut guard = self.device.lock().unwrap();
 
             let _ = guard.seek(io::SeekFrom::Start(offset)).map_err(DeviceError::io_error)?;
@@ -346,7 +347,7 @@ mod file_device {
             for buffer in buffers {
                 // TODO: use read_vectored, even though BasicDevice isn't really supposed to be
                 // used outside of testing
-                guard.read_exact(buffer).map_err(DeviceError::io_error)?;
+                guard.read_exact(buffer.zeroed_by_ref()).map_err(DeviceError::io_error)?;
             }
 
             Ok(())
@@ -379,7 +380,7 @@ mod file_device {
                     return Ok(());
                 }
 
-                match guard.write_vectored(IoSlice::as_std_ioslices(buffers)) {
+                match guard.write_vectored(IoSlice::cast_to_std_ioslices(buffers)) {
                     Ok(0) => return Err(DeviceError::io_error(io::Error::new(io::ErrorKind::UnexpectedEof, "expected device to read all bytes"))),
                     Ok(n) => buffers = IoSlice::advance_within(buffers, n).unwrap(),
                     Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,

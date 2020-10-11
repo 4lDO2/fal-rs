@@ -1,5 +1,6 @@
 use core::{fmt, mem};
 
+use arrayvec::ArrayVec;
 use bitflags::bitflags;
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive as _;
@@ -12,7 +13,7 @@ use crate::{
 };
 
 const SUPERBLOCK_OFFSETS: [u64; 4] = [64 * sizes::K, 64 * sizes::M, 256 * sizes::G, 1 * sizes::P];
-const MAGIC: u64 = 0x4D5F_5366_5248_425F; // ASCII for "_BHRfS_M"
+const MAGIC: u64 = u64::from_le_bytes(*b"_BHRfS_M");
 
 #[derive(Clone, Copy, Debug, AsBytes, FromBytes, Unaligned)]
 #[repr(packed)]
@@ -63,9 +64,6 @@ pub struct Superblock {
     pub system_chunk_array: SystemChunkArray,
     pub root_backups: [RootBackup; 4],
 }
-//#[derive(Debug)]
-//pub struct SystemChunkArray(pub Vec<(DiskKey, ChunkItem)>);
-
 #[repr(packed)]
 pub struct DeviceLabel([u8; 256]);
 impl Clone for DeviceLabel {
@@ -184,27 +182,34 @@ impl ChecksumType {
     }
 }
 
+#[derive(Debug, Error)]
+pub enum LoadError {
+    #[error("superblock parsing error: {0}")]
+    ParseError(#[from] SuperblockParseError),
+}
+
 impl Superblock {
-    pub fn load<D: fal::DeviceRo>(device: &mut D) -> Self {
-        let disk_info = device.disk_info().unwrap();
+    pub const SIZE: u16 = mem::size_of::<Self>() as u16;
+
+    pub fn load<D: fal::DeviceRo>(device: &mut D) -> Result<Box<Self>, LoadError> {
+        let disk_info = device.disk_info_blocking().unwrap();
         let disk_size = disk_info.block_count * u64::from(disk_info.block_size);
         // FIXME
 
-        let mut block = [0u8; 4096];
+        let mut block = fal::ioslice::IoBox::alloc_uninit(Self::SIZE as usize);
 
         SUPERBLOCK_OFFSETS
             .iter()
             .copied()
-            .filter(|offset| offset + 4096 < disk_size)
+            .filter(|offset| offset + u64::from(Superblock::SIZE) < disk_size)
             .map(|offset| {
                 device
-                    .read_blocks(offset / u64::from(disk_info.block_size), &mut block)
-                    .unwrap();
+                    .read_blocking(offset, &mut [block.as_ioslice_mut()])?;
 
-                *Self::parse(&block).unwrap()
+                Self::parse(&block)
             })
             .max_by_key(|sb| sb.generation.get())
-            .unwrap()
+            .expect("iterator should not be empty")
     }
     pub fn parse<'a>(
         block: &'a [u8],
@@ -401,5 +406,14 @@ bitflags! {
         const NO_HOLES = 1 << 9;
         const METADATA_UUID = 1 << 10;
         const RAID1C34 = 1 << 11;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn superblock_struct_size() {
+        assert_eq!(mem::size_of::<Superblock>(), 4096);
     }
 }

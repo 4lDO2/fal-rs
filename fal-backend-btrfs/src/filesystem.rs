@@ -23,34 +23,38 @@ use zerocopy::U64;
 
 pub const FIRST_CHUNK_TREE_OBJECTID: u64 = 256;
 
-pub fn read_node_phys<D: fal::DeviceRo>(
+pub fn read_node_phys<'a, D: fal::DeviceRo>(
     device: &D,
+    buf: fal::IoSliceMut<'a, fal::ioslice::Uninitialized>,
     superblock: &Superblock,
     offset: u64,
-) -> Box<[u8]> {
-    let mut bytes = vec![0u8; superblock.node_size.get() as usize];
+) -> Result<fal::IoSliceMut<'a, fal::ioslice::Initialized>, fal::DeviceError> {
     // FIXME
     debug_assert_eq!(
-        u64::from(superblock.node_size.get()) % u64::from(device.disk_info().unwrap().block_size),
+        u64::from(superblock.node_size.get()) % u64::from(device.disk_info_blocking().unwrap().block_size),
         0
     );
+
     device
-        .read_blocks(
-            offset / u64::from(device.disk_info().unwrap().block_size),
-            &mut bytes,
+        .read_blocking(
+            offset,
+            &mut [buf],
         )
         .unwrap();
-    bytes.into_boxed_slice()
+
+    Ok(unsafe { buf.assume_init() })
 }
 
-pub fn read_node<D: fal::DeviceRo>(
+pub fn read_node<'a, D: fal::DeviceRo>(
     device: &D,
+    buf: fal::IoSliceMut<'a, fal::ioslice::Uninitialized>,
     superblock: &Superblock,
     chunk_map: &ChunkMap,
     offset: u64,
-) -> Box<[u8]> {
+) -> Result<fal::IoSliceMut<'a, fal::ioslice::Initialized>, fal::DeviceError> {
     read_node_phys(
         device,
+        buf,
         superblock,
         chunk_map.get(superblock, offset).unwrap(),
     )
@@ -781,17 +785,7 @@ impl Filetype {
 }
 impl From<Timespec> for fal::Timespec {
     fn from(tm: Timespec) -> Self {
-        let mut sec = tm.sec.get();
-        let nsec = tm.nsec.get();
-        // TODO: Shouldn't fal use unsigned nanoseconds?
-        let nsec = i32::try_from(nsec).unwrap_or_else(|_| {
-            const NSECS_PER_SEC: u32 = 1_000_000_000;
-            sec += i64::from(nsec / NSECS_PER_SEC);
-            let new_nsec = nsec % NSECS_PER_SEC;
-            i32::try_from(new_nsec).unwrap_or(i32::max_value())
-        }); // TODO
-
-        Self { sec, nsec }
+        Self { sec: tm.sec.get(), nsec: tm.nsec.get() }
     }
 }
 
