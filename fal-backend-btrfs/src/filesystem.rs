@@ -280,7 +280,7 @@ impl<D: fal::Device> Filesystem<D> {
             println!("UUID ITEM: {:?}\n", item);
         }
 
-        Self {
+        Ok(Self {
             device,
             superblock,
 
@@ -302,7 +302,7 @@ impl<D: fal::Device> Filesystem<D> {
 
             handles: RwLock::new(BTreeMap::new()),
             next_handle: AtomicU64::new(0),
-        }
+        })
     }
     fn load_tree(
         device: &D,
@@ -357,7 +357,7 @@ impl<D: fal::Device> Filesystem<D> {
         num
     }
     // XXX: Too bad fuse doesn't allow for inode+rdev lookups, instead of just the inode. This
-    // doesn't play that well with submodules; namely, two root directories inside the same
+    // doesn't play that well with subvolumes; namely, two root directories inside the same
     // subvolume with have identical objectids, with the sole difference being the rdev. This is
     // also visible for userspace on Linux: try running stat on two different subvolume roots and
     // notice that their inodes are equivalent (but with different rdevs).
@@ -452,7 +452,7 @@ impl<D: fal::Device> fal::Filesystem<D> for Filesystem<D> {
         _general_options: fal::Options,
         _fs_specific_options: Self::Options,
         _path: &[u8],
-    ) -> Self {
+    ) -> fal::Result<Self> {
         Self::mount(device)
     }
     fn unmount(self) {}

@@ -164,17 +164,32 @@ pub enum InvalidChecksum {
     Mismatch,
 
     #[error("unsupported (disabled at compile-time) checksum: {0:?}. supported checksums: {:?}", Checksum::supported_checksums().collect::<Vec<_>>())]
-    UnsupportedChecksum(ChecksumType),
+    UnsupportedChecksum(#[from] UnsupportedChecksum),
 }
 
+#[derive(Clone, Copy)]
 pub struct UnsupportedChecksum {
-    #[cfg(all(feature = "nightly", feature = "crc32c", feature = "xxhash", feature = "sha256", feature = "blake2"))]
-    _unconstructible: !,
-    #[cfg(all(not(feature = "nightly"), feature = "crc32c", feature = "xxhash", feature = "sha256", feature = "blake2"))]
+    #[cfg(all(feature = "crc32c", feature = "xxhash", feature = "sha256", feature = "blake2"))]
+    // TODO: Use never type.
     _unconstructible: core::convert::Infallible,
 
-    _ignored: (),
+    pub ty: ChecksumType,
 }
+
+impl fmt::Debug for UnsupportedChecksum {
+    #[cold]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "UnsupportedChecksum")
+    }
+}
+impl fmt::Display for UnsupportedChecksum {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "unsupported checksum type: {}", self.ty)
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for UnsupportedChecksum {}
 
 impl Checksum {
     pub const CRC32C_SEED: u32 = 0;
@@ -260,7 +275,11 @@ impl Checksum {
             #[allow(unreachable_patterns)]
             // NOTE: Since all patterns are checked for, we can omit this error type altogether
             // when all checksum algorithms are included, and use the unconstructible never type.
-            _ => Err(UnsupportedChecksum { _ignored: (), }),
+            #[cfg(all(feature = "crc32c", feature = "xxhash", feature = "sha256", feature = "blake2"))]
+            _ => unreachable!(),
+
+            #[cfg(not(all(feature = "crc32c", feature = "xxhash", feature = "sha256", feature = "blake2")))]
+            _ => Err(UnsupportedChecksum { _ignored: (), ty }),
         }
     }
     pub fn ty(&self) -> ChecksumType {

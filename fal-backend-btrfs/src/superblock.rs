@@ -149,6 +149,18 @@ pub enum ChecksumType {
     Sha256 = 2,
     Blake2 = 3,
 }
+
+impl fmt::Display for ChecksumType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Crc32c => write!(f, "CRC-32C"),
+            Self::Xxhash => write!(f, "xxHash"),
+            Self::Sha256 => write!(f, "SHA2-256"),
+            Self::Blake2 => write!(f, "BLAKE2b"),
+        }
+    }
+}
+
 impl ChecksumType {
     pub fn size(self) -> usize {
         match self {
@@ -164,6 +176,12 @@ impl ChecksumType {
 pub enum LoadError {
     #[error("superblock parsing error: {0}")]
     ParseError(#[from] SuperblockParseError),
+
+    #[error("device i/o error: {0}")]
+    DeviceIoError(#[from] fal::DeviceError),
+
+    #[error("memory allocation error: {0}")]
+    AllocError(#[from] fal::ioslice::AllocationError),
 }
 
 impl Superblock {
@@ -174,12 +192,12 @@ impl Superblock {
         let disk_size = disk_info.block_count * u64::from(disk_info.block_size);
         // FIXME
 
-        let mut block = fal::ioslice::IoBox::alloc_uninit(Self::SIZE as usize);
+        let mut block = fal::ioslice::IoBox::try_alloc_uninit(Self::SIZE as usize)?;
 
         SUPERBLOCK_OFFSETS
             .iter()
             .copied()
-            .filter(|offset| offset + u64::from(Superblock::SIZE) < disk_size)
+            .take_while(|offset| offset + u64::from(Superblock::SIZE) < disk_size)
             .map(|offset| {
                 device
                     .read_blocking(offset, &mut [block.as_ioslice_mut()])?;
@@ -206,7 +224,7 @@ impl Superblock {
 
         let stored_checksum = superblock.stored_checksum();
         let calculated_checksum = Checksum::calculate(checksum_ty, &block[32..])
-            .ok_or(InvalidChecksum::UnsupportedChecksum(checksum_ty))?;
+            .map_err(|_| InvalidChecksum::UnsupportedChecksum(checksum_ty))?;
 
         if calculated_checksum == stored_checksum {
             Ok(superblock)
@@ -223,7 +241,7 @@ impl Superblock {
         Checksum::parse(self.checksum_ty(), &self.checksum)
             .expect("expected Checksum::parse to succeed for arrays with a length of 32 bytes")
     }
-    pub fn calculate_checksum(&self) -> Checksum {
+    pub fn calculate_checksum(&self) -> Result<Checksum, crate::UnsupportedChecksum> {
         Checksum::calculate(self.checksum_ty(), self.as_bytes())
     }
     /// Gets the read-only compatible flags. All of these flags have to be supported by this
@@ -254,6 +272,10 @@ impl Superblock {
     }
     pub fn compat_flags(&self) -> CompatFlags {
         CompatFlags
+    }
+    pub fn system_chunk_array_iter(&self) -> impl Iterator<Item = (LayoutVerified<&[u8], DiskKey>, &ChunkItem)> {
+        self.system_chunk_array
+            .iter(self.system_chunk_array_size.get() as usize)
     }
 }
 
@@ -427,9 +449,42 @@ impl fmt::Debug for IncompatFlagsDbg {
     }
 }
 
-impl fmt::Debug for Superblock {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+struct SysChunkArrayItemDbg<'a>(&'a DiskKey, &'a ChunkItem);
+struct SysChunkArrayDbgInner<'a>(&'a Superblock);
+struct SysChunkArrayDbg<'a>(SysChunkArrayDbgInner<'a>);
 
+impl<'a> fmt::Debug for SysChunkArrayItemDbg<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SystemChunkArrayItem")
+            .field("key", &self.0)
+            .field("value", &self.1)
+            .finish()
+    }
+}
+
+impl<'a> fmt::Debug for SysChunkArrayDbgInner<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list()
+            .entries(
+                self.0.system_chunk_array_iter()
+                    .map(|(key_layout_verified, item)| SysChunkArrayItemDbg(&*key_layout_verified, item))
+            )
+            .finish()
+    }
+}
+
+impl<'a> fmt::Debug for SysChunkArrayDbg<'a> {
+    #[cold]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("SystemChunkArray")
+            .field(&self.0)
+            .finish()
+    }
+}
+
+impl fmt::Debug for Superblock {
+    #[cold]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Superblock")
             .field("checksum", &self.stored_checksum())
             .field("calculated_checksum", &self.calculate_checksum())
@@ -461,9 +516,9 @@ impl fmt::Debug for Superblock {
             .field("device_label", &self.device_label)
             .field("cache_generation", &self.cache_generation.get())
             .field("uuid_tree_generation", &self.uuid_tree_generation.get())
-            .field("metadata_uuid", &self.metadata_uuid.get())
+            .field("metadata_uuid", &self.metadata_uuid)
             // NOTE: We currently ignore _rsvd.
-            .field("system_chunk_array")
+            .field("system_chunk_array", &SysChunkArrayDbg(SysChunkArrayDbgInner(self)))
             .field("root_backups", &self.root_backups)
             .finish()
     }

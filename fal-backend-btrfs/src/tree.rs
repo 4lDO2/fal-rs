@@ -43,13 +43,13 @@ impl<'a> OwnedOrBorrowedTree<'a> {
 #[derive(Debug, Error)]
 pub enum LoadError {
     #[error("the node checksum is invalid")]
-    InvalidChecksum,
+    InvalidChecksum(#[from] InvalidChecksum),
 
     #[error("the allocator was unable to allocate necessary memory for storing the node: {0}")]
     AllocError(#[from] fal::ioslice::AllocationError),
 
     #[error("device i/o error: {0}")]
-    DeviceError(fal::DeviceError),
+    DeviceError(#[from] fal::DeviceError),
 }
 
 pub type Path<'a> = Vec<(OwnedOrBorrowedTree<'a>, usize)>;
@@ -74,16 +74,22 @@ impl Header {
     pub fn parse_without_checksum_verif<'a>(bytes: &'a [u8]) -> Option<LayoutVerified<&'a [u8], Self>> {
         LayoutVerified::new_unaligned(&bytes[..mem::size_of::<Header>()])
     }
+    pub fn stored_checksum(&self, checksum_ty: ChecksumType) -> Checksum {
+        Checksum::parse(checksum_ty, &self.checksum)
+            .expect("expected all checksum types to be within 32 bytes of size")
+    }
+    pub fn calculate_checksum(&self, checksum_ty: ChecksumType) -> Result<Checksum, crate::UnsupportedChecksum> {
+        Checksum::calculate(checksum_ty, &self.as_bytes()[32..])
+    }
     pub fn parse<'a>(
         checksum_ty: ChecksumType,
         bytes: &'a [u8],
     ) -> Result<LayoutVerified<&'a [u8], Self>, InvalidChecksum> {
-        let this = Self::parse_without_checksum_verif(bytes).unwrap();
+        let this = Self::parse_without_checksum_verif(bytes)
+            .expect("expected byte slice given to Header::parse to have sufficient size");
 
-        let stored_checksum = Checksum::parse(checksum_ty, &bytes[..32])
-            .ok_or(InvalidChecksum::UnsupportedChecksum(checksum_ty))?;
-        let checksum = Checksum::calculate(checksum_ty, &bytes[32..])
-            .ok_or(InvalidChecksum::UnsupportedChecksum(checksum_ty))?;
+        let stored_checksum = this.stored_checksum(checksum_ty);
+        let checksum = Checksum::calculate(checksum_ty, &bytes[32..])?;
 
         if stored_checksum != checksum {
             return Err(InvalidChecksum::Mismatch);
@@ -611,7 +617,7 @@ impl<'a> Tree<'a> {
     ) -> Result<TreeOwned, LoadError> {
         // FIXME
         let mut buffer = fal::IoBox::try_alloc_uninit(superblock.node_size.get() as usize)?;
-        filesystem::read_node(device, superblock, chunk_map, addr, &mut buffer)?;
+        filesystem::read_node(device, buffer.as_ioslice_mut(), superblock, chunk_map, addr)?;
 
         let block = Arc::from(unsafe { buffer.assume_init() });
         let header = Header::parse(superblock.checksum_ty(), &block)?; // validate checksum
