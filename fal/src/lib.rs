@@ -597,7 +597,7 @@ where
         general_options: Options,
         fs_specific_options: Self::Options,
         path: &[u8],
-    ) -> Self;
+    ) -> Result<Self>;
 
     /// Unmount the filesystem.
     fn unmount(self);
