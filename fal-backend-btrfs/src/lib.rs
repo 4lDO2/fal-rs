@@ -96,7 +96,7 @@ pub struct PackedUuid {
 }
 impl fmt::Debug for PackedUuid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&uuid::Uuid::from_bytes(self.bytes), f)
+        write!(f, "{:?}", uuid::Uuid::from_bytes(self.bytes))
     }
 }
 
@@ -167,6 +167,15 @@ pub enum InvalidChecksum {
     UnsupportedChecksum(ChecksumType),
 }
 
+pub struct UnsupportedChecksum {
+    #[cfg(all(feature = "nightly", feature = "crc32c", feature = "xxhash", feature = "sha256", feature = "blake2"))]
+    _unconstructible: !,
+    #[cfg(all(not(feature = "nightly"), feature = "crc32c", feature = "xxhash", feature = "sha256", feature = "blake2"))]
+    _unconstructible: core::convert::Infallible,
+
+    _ignored: (),
+}
+
 impl Checksum {
     pub const CRC32C_SEED: u32 = 0;
     pub const XXHASH_SEED: u64 = 0;
@@ -211,17 +220,17 @@ impl Checksum {
 
         Some(())
     }
-    pub fn calculate(ty: superblock::ChecksumType, bytes: &[u8]) -> Option<Self> {
+    pub fn calculate(ty: superblock::ChecksumType, bytes: &[u8]) -> Result<Self, UnsupportedChecksum> {
         match ty {
             #[cfg(feature = "crc32c")]
-            ChecksumType::Crc32c => Some({
+            ChecksumType::Crc32c => Ok({
                 let mut hasher =
                     crc32::Digest::new_with_initial(crc32::CASTAGNOLI, Self::CRC32C_SEED);
                 hasher.write(bytes);
                 Checksum::Crc32c(hasher.sum32())
             }),
             #[cfg(feature = "xxhash")]
-            ChecksumType::Xxhash => Some({
+            ChecksumType::Xxhash => Ok({
                 use core::hash::Hasher;
 
                 let mut hasher = twox_hash::XxHash64::with_seed(Self::XXHASH_SEED);
@@ -229,7 +238,7 @@ impl Checksum {
                 Checksum::Xxhash(hasher.finish())
             }),
             #[cfg(feature = "sha256")]
-            ChecksumType::Sha256 => Some({
+            ChecksumType::Sha256 => Ok({
                 use sha2::digest::Digest;
 
                 let mut hasher = sha2::Sha256::default();
@@ -237,7 +246,7 @@ impl Checksum {
                 Checksum::Sha256(hasher.result().into())
             }),
             #[cfg(feature = "blake2")]
-            ChecksumType::Blake2 => Some({
+            ChecksumType::Blake2 => Ok({
                 use blake2::digest::{Input, VariableOutput};
 
                 let mut hasher = blake2::VarBlake2b::new(32).unwrap();
@@ -249,7 +258,9 @@ impl Checksum {
             }),
 
             #[allow(unreachable_patterns)]
-            _ => None,
+            // NOTE: Since all patterns are checked for, we can omit this error type altogether
+            // when all checksum algorithms are included, and use the unconstructible never type.
+            _ => Err(UnsupportedChecksum { _ignored: (), }),
         }
     }
     pub fn ty(&self) -> ChecksumType {

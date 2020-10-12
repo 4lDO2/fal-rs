@@ -86,7 +86,7 @@ pub enum Handle {
 #[derive(Debug)]
 pub struct Filesystem<D: fal::DeviceRo> {
     device: D,
-    pub superblock: Superblock,
+    pub superblock: Box<Superblock>,
 
     handles: RwLock<BTreeMap<u64, Mutex<Handle>>>,
     next_handle: AtomicU64,
@@ -111,8 +111,14 @@ pub struct Filesystem<D: fal::DeviceRo> {
 }
 
 impl<D: fal::Device> Filesystem<D> {
-    pub fn mount(mut device: D) -> Self {
-        let superblock = Superblock::load(&mut device);
+    pub fn mount(mut device: D) -> fal::Result<Self> {
+        let superblock = match Superblock::load(&mut device) {
+            Ok(superblock) => superblock,
+            Err(error) => {
+                log::error!("Failed to read superblock: {}", error);
+                return Err(fal::Error::Io);
+            }
+        };
 
         println!("Superblock: {:?}", superblock);
 

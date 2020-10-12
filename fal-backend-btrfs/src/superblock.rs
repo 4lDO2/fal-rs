@@ -15,7 +15,7 @@ use crate::{
 const SUPERBLOCK_OFFSETS: [u64; 4] = [64 * sizes::K, 64 * sizes::M, 256 * sizes::G, 1 * sizes::P];
 const MAGIC: u64 = u64::from_le_bytes(*b"_BHRfS_M");
 
-#[derive(Clone, Copy, Debug, AsBytes, FromBytes, Unaligned)]
+#[derive(Clone, Copy, AsBytes, FromBytes, Unaligned)]
 #[repr(packed)]
 pub struct Superblock {
     pub checksum: [u8; 32],
@@ -52,7 +52,7 @@ pub struct Superblock {
     pub log_root_level: u8,
 
     pub device_item: DevItem,
-    //pub device_label: [u8; 256],
+    // stores a [u8; 256] internally, but newtyped
     pub device_label: DeviceLabel,
 
     pub cache_generation: u64_le,
@@ -65,18 +65,8 @@ pub struct Superblock {
     pub root_backups: [RootBackup; 4],
 }
 #[repr(packed)]
+#[derive(Clone, Copy)]
 pub struct DeviceLabel([u8; 256]);
-impl Clone for DeviceLabel {
-    fn clone_from(&mut self, source: &Self) {
-        self.0.copy_from_slice(&source.0)
-    }
-    fn clone(&self) -> Self {
-        let mut new = Self([0u8; 256]);
-        new.clone_from(self);
-        new
-    }
-}
-impl Copy for DeviceLabel {}
 
 // XXX: Const generics; for some obscure reason, only arrays with length of up to 32 bytes actually
 // support basic traits.
@@ -116,25 +106,13 @@ impl fmt::Display for DeviceLabel {
 }
 impl fmt::Debug for DeviceLabel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "\"")?;
-        fmt::Display::fmt(self, f)?;
-        write!(f, "\"")
+        write!(f, "\"{}\"", self)
     }
 }
 
 #[repr(packed)]
+#[derive(Clone, Copy)]
 pub struct SystemChunkArray([u8; 2048]);
-impl Clone for SystemChunkArray {
-    fn clone_from(&mut self, source: &Self) {
-        self.0.copy_from_slice(&source.0)
-    }
-    fn clone(&self) -> Self {
-        let mut new = Self([0u8; 2048]);
-        new.clone_from(self);
-        new
-    }
-}
-impl Copy for SystemChunkArray {}
 
 unsafe impl zerocopy::FromBytes for SystemChunkArray {
     fn only_derive_is_allowed_to_implement_this_trait()
@@ -226,7 +204,7 @@ impl Superblock {
             SuperblockParseError::UnrecognizedChecksumTy(superblock.checksum_type.get()),
         )?;
 
-        let stored_checksum = Checksum::parse(checksum_ty, &block[..32]).unwrap();
+        let stored_checksum = superblock.stored_checksum();
         let calculated_checksum = Checksum::calculate(checksum_ty, &block[32..])
             .ok_or(InvalidChecksum::UnsupportedChecksum(checksum_ty))?;
 
@@ -240,6 +218,13 @@ impl Superblock {
     pub fn checksum_ty(&self) -> ChecksumType {
         ChecksumType::from_u16(self.checksum_type.get())
             .expect("checksum_ty has been set to invalid value")
+    }
+    pub fn stored_checksum(&self) -> Checksum {
+        Checksum::parse(self.checksum_ty(), &self.checksum)
+            .expect("expected Checksum::parse to succeed for arrays with a length of 32 bytes")
+    }
+    pub fn calculate_checksum(&self) -> Checksum {
+        Checksum::calculate(self.checksum_ty(), self.as_bytes())
     }
     /// Gets the read-only compatible flags. All of these flags have to be supported by this
     /// implementation to be able to modify the filesystem.
@@ -266,6 +251,9 @@ impl Superblock {
             Some(f) => Ok(f),
             None => Err(flags & !IncompatFlags::all().bits()),
         }
+    }
+    pub fn compat_flags(&self) -> CompatFlags {
+        CompatFlags
     }
 }
 
@@ -415,5 +403,68 @@ mod tests {
 
     fn superblock_struct_size() {
         assert_eq!(mem::size_of::<Superblock>(), 4096);
+    }
+}
+
+struct RoCompatFlagsDbg(Result<RoCompatFlags, (RoCompatFlags, u64)>);
+struct IncompatFlagsDbg(Result<IncompatFlags, u64>);
+
+impl fmt::Debug for RoCompatFlagsDbg {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            Ok(recognized_flags) => write!(f, "[read-only compatible flags {:?}, all recognized]", recognized_flags),
+            Err((recognized_flags, remainder)) => write!(f, "[read-only compatible flags {:?}, some of them were not recognized: {:#0x}, thus the filesystem must be mounted immutably]", recognized_flags, remainder),
+        }
+    }
+}
+impl fmt::Debug for IncompatFlagsDbg {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            Ok(recognized_flags) => write!(f, "[backwards-incompatible flags {:?}, all recognized]", recognized_flags),
+            // TODO: Print the recognized flags too
+            Err(remainder) => write!(f, "[incompatible flags with the mask {:#0x} were detected, some may have been recognized]", remainder),
+        }
+    }
+}
+
+impl fmt::Debug for Superblock {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+
+        f.debug_struct("Superblock")
+            .field("checksum", &self.stored_checksum())
+            .field("calculated_checksum", &self.calculate_checksum())
+            .field("byte_number", &self.byte_number.get())
+            .field("flags", &self.flags.get())
+            .field("magic", &self.magic.get())
+            .field("generation", &self.generation.get())
+            .field("root", &self.root.get())
+            .field("chunk_root", &self.chunk_root.get())
+            .field("log_root", &self.log_root.get())
+            .field("log_root_transid", &self.log_root_transid.get())
+            .field("total_byte_count", &self.total_byte_count.get())
+            .field("total_bytes_used", &self.total_bytes_used.get())
+            .field("root_dir_objectid", &self.root_dir_objectid.get())
+            .field("device_count", &self.device_count.get())
+            .field("sector_size", &self.sector_size.get())
+            .field("node_size", &self.node_size.get())
+            .field("unused_leaf_size", &self.unused_leaf_size.get())
+            .field("stripe_size", &self.stripe_size.get())
+            .field("system_chunk_array_size", &self.system_chunk_array_size.get())
+            .field("chunk_root_gen", &self.chunk_root_gen.get())
+            .field("compat_flags", &self.compat_flags())
+            .field("ro_compat_flags", &RoCompatFlagsDbg(self.ro_compat_flags()))
+            .field("incompat_flags", &IncompatFlagsDbg(self.incompat_flags()))
+            .field("root_level", &self.root_level)
+            .field("chunk_root_level", &self.chunk_root_level)
+            .field("log_root_level", &self.log_root_level)
+            .field("device_item", &self.device_item)
+            .field("device_label", &self.device_label)
+            .field("cache_generation", &self.cache_generation.get())
+            .field("uuid_tree_generation", &self.uuid_tree_generation.get())
+            .field("metadata_uuid", &self.metadata_uuid.get())
+            // NOTE: We currently ignore _rsvd.
+            .field("system_chunk_array")
+            .field("root_backups", &self.root_backups)
+            .finish()
     }
 }
